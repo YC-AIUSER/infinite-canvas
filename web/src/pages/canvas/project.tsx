@@ -43,6 +43,7 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
+import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import {
     CanvasNodeType,
     type CanvasAssistantImage,
@@ -131,7 +132,11 @@ export default function CanvasPage() {
 
     if (!mounted) return <CanvasRefreshShell />;
 
-    return <InfiniteCanvasPage />;
+    return (
+        <Suspense fallback={<CanvasRefreshShell />}>
+            <InfiniteCanvasPage />
+        </Suspense>
+    );
 }
 
 function CanvasRefreshShell() {
@@ -265,6 +270,7 @@ function InfiniteCanvasPage() {
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
+    const isToonflowProject = currentProject?.kind === "toonflow";
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
     const [connections, setConnections] = useState<CanvasConnection[]>([]);
@@ -1251,13 +1257,15 @@ function InfiniteCanvasPage() {
                     setConnecting(null);
                 } else if (dropTarget.isNearNode) {
                     setConnecting(null);
+                } else if (isToonflowProject) {
+                    setConnecting(null);
                 } else {
                     setMouseWorld(screenToCanvas(event.clientX, event.clientY));
                     setPendingConnectionCreate({ connection: currentConnection, position: screenToCanvas(event.clientX, event.clientY) });
                 }
             }
         },
-        [connectNodes, finishNodeDrag, getConnectionDropTarget, screenToCanvas, setConnecting],
+        [connectNodes, finishNodeDrag, getConnectionDropTarget, isToonflowProject, screenToCanvas, setConnecting],
     );
 
     useEffect(() => {
@@ -2590,20 +2598,24 @@ function InfiniteCanvasPage() {
                                     />
                                 )
                             }
-                            renderNodeContent={(contentNode) => (
-                                <CanvasConfigNodePanel
-                                    node={contentNode}
-                                    isRunning={runningNodeId === contentNode.id}
-                                    inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
-                                    onConfigChange={handleConfigNodeChange}
-                                    onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
-                                    onStop={confirmStopGeneration}
-                                    onGenerate={(nodeId) => {
-                                        const target = nodesRef.current.find((item) => item.id === nodeId);
-                                        void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
-                                    }}
-                                />
-                            )}
+                            renderNodeContent={(contentNode) =>
+                                contentNode.metadata?.toonflow ? (
+                                    <ToonflowNodeContent node={contentNode} />
+                                ) : (
+                                    <CanvasConfigNodePanel
+                                        node={contentNode}
+                                        isRunning={runningNodeId === contentNode.id}
+                                        inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
+                                        onConfigChange={handleConfigNodeChange}
+                                        onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
+                                        onStop={confirmStopGeneration}
+                                        onGenerate={(nodeId) => {
+                                            const target = nodesRef.current.find((item) => item.id === nodeId);
+                                            void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
+                                        }}
+                                    />
+                                )
+                            }
                             onMouseDown={handleNodeMouseDown}
                             onHoverStart={(nodeId) => {
                                 if (nodeDraggingRef.current) return;
@@ -2642,7 +2654,7 @@ function InfiniteCanvasPage() {
                             }}
                         />
                     ) : null}
-                    {pendingConnectionCreate ? <ConnectionCreateMenu pending={pendingConnectionCreate} onCreate={(type) => createConnectedNode(type, pendingConnectionCreate)} onClose={cancelPendingConnectionCreate} /> : null}
+                    {!isToonflowProject && pendingConnectionCreate ? <ConnectionCreateMenu pending={pendingConnectionCreate} onCreate={(type) => createConnectedNode(type, pendingConnectionCreate)} onClose={cancelPendingConnectionCreate} /> : null}
                 </InfiniteCanvas>
 
                 <CanvasNodeHoverToolbar
@@ -2678,6 +2690,7 @@ function InfiniteCanvasPage() {
                     canRedo={historyState.canRedo}
                     backgroundMode={backgroundMode}
                     showImageInfo={showImageInfo}
+                    toonflowMode={isToonflowProject}
                     onAddImage={() => createNode(CanvasNodeType.Image)}
                     onAddVideo={() => createNode(CanvasNodeType.Video)}
                     onAddAudio={() => createNode(CanvasNodeType.Audio)}

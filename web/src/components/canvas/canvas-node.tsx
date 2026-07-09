@@ -343,6 +343,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onToggleBatch?.(data.id);
                         return;
                     }
+                    if (data.metadata?.toonflow) return;
                     if (data.type === CanvasNodeType.Image && hasImageContent) {
                         event.stopPropagation();
                         onViewImage?.(data);
@@ -408,6 +409,7 @@ export const CanvasNode = React.memo(function CanvasNode({
 });
 
 function NodeContent(props: NodeContentRendererProps) {
+    if (props.node.metadata?.toonflow && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;

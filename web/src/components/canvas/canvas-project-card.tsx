@@ -48,7 +48,10 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                             open();
                         }}
                     >
-                        <h2 className="truncate text-xl font-semibold">{project.title}</h2>
+                        <div className="flex min-w-0 items-center gap-2">
+                            <h2 className="truncate text-xl font-semibold">{project.title}</h2>
+                            {project.kind === "toonflow" ? <span className="shrink-0 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-300">Toonflow</span> : null}
+                        </div>
                         <p className="mt-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
                             {project.nodes.length} 个节点 · {project.connections.length} 条连线
                         </p>

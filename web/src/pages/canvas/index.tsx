@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { App, Button } from "antd";
-import { Download, FileUp, Plus } from "lucide-react";
+import { Clapperboard, Download, FileUp, Plus } from "lucide-react";
 
 import { readZip } from "@/lib/zip";
 import { setMediaBlob } from "@/services/file-storage";
@@ -22,6 +22,7 @@ export default function CanvasPage() {
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
+    const createToonflowProject = useCanvasStore((state) => state.createToonflowProject);
     const importProject = useCanvasStore((state) => state.importProject);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
@@ -33,6 +34,7 @@ export default function CanvasPage() {
         navigate(`/canvas/${id}${agentQuery}`);
     };
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
+    const createToonflowAndEnter = () => enterProject(createToonflowProject());
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -94,6 +96,9 @@ export default function CanvasPage() {
                         <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
                             导入画布
                         </Button>
+                        <Button disabled={!hydrated} icon={<Clapperboard className="size-4" />} onClick={createToonflowAndEnter}>
+                            Toonflow 生产画布
+                        </Button>
                         <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
                             新建画布
                         </Button>
@@ -112,6 +117,9 @@ export default function CanvasPage() {
                     <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-stone-200 text-center dark:border-stone-800">
                         <h2 className="text-xl font-medium">还没有画布</h2>
                         <p className="mt-3 text-sm text-stone-500">新建一个画布后，就可以独立保存节点、连线和画布外观。</p>
+                        <Button className="mt-6" icon={<Clapperboard className="size-4" />} onClick={createToonflowAndEnter}>
+                            新建 Toonflow 生产画布
+                        </Button>
                         <Button type="primary" className="mt-6" icon={<Plus className="size-4" />} onClick={createAndEnter}>
                             新建画布
                         </Button>

@@ -4,10 +4,12 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
-import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
+import { buildToonflowCanvasTemplate, TOONFLOW_CANVAS_TITLE } from "@/lib/canvas/toonflow-canvas-template";
+import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasProjectKind, ViewportTransform } from "@/types/canvas";
 
 export type CanvasProject = {
     id: string;
+    kind?: CanvasProjectKind;
     title: string;
     createdAt: string;
     updatedAt: string;
@@ -24,6 +26,7 @@ type CanvasStore = {
     hydrated: boolean;
     projects: CanvasProject[];
     createProject: (title?: string) => string;
+    createToonflowProject: () => string;
     importProject: (project: Partial<CanvasProject>) => string;
     openProject: (id: string) => CanvasProject | null;
     renameProject: (id: string, title: string) => void;
@@ -69,6 +72,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 const id = nanoid();
                 const project: CanvasProject = {
                     id,
+                    kind: "standard",
                     title,
                     createdAt: now,
                     updatedAt: now,
@@ -83,10 +87,32 @@ export const useCanvasStore = create<CanvasStore>()(
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return id;
             },
+            createToonflowProject: () => {
+                const now = new Date().toISOString();
+                const id = nanoid();
+                const template = buildToonflowCanvasTemplate();
+                const project: CanvasProject = {
+                    id,
+                    kind: "toonflow",
+                    title: TOONFLOW_CANVAS_TITLE,
+                    createdAt: now,
+                    updatedAt: now,
+                    nodes: template.nodes,
+                    connections: template.connections,
+                    chatSessions: [],
+                    activeChatId: null,
+                    backgroundMode: "lines",
+                    showImageInfo: false,
+                    viewport: template.viewport,
+                };
+                set((state) => ({ projects: [project, ...state.projects] }));
+                return id;
+            },
             importProject: (source) => {
                 const now = new Date().toISOString();
                 const project: CanvasProject = {
                     id: nanoid(),
+                    kind: source.kind || "standard",
                     title: source.title || "导入画布",
                     createdAt: source.createdAt || now,
                     updatedAt: now,

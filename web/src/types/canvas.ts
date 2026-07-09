@@ -18,9 +18,36 @@ export enum CanvasNodeType {
     Group = "group",
 }
 
+export type CanvasProjectKind = "standard" | "toonflow";
 export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
+export type ToonflowNodeKind =
+    | "project"
+    | "script"
+    | "assets"
+    | "space-contract"
+    | "storyboard-table"
+    | "shot-contract"
+    | "action-contract"
+    | "storyboard-page"
+    | "keyframes"
+    | "compliance"
+    | "video-workbench"
+    | "seam-check"
+    | "audio-mix"
+    | "export";
+export type ToonflowNodeStageStatus = "未开始" | "待生成" | "生成中" | "生成失败" | "待验收" | "已通过" | "已跳过";
+
+export type ToonflowNodeMetadata = {
+    kind: ToonflowNodeKind;
+    stage: string;
+    status: ToonflowNodeStageStatus;
+    summary: string;
+    checks: string[];
+    outputs?: string[];
+    accent?: string;
+};
 
 export type CanvasNodeMetadata = {
     content?: string;
@@ -58,6 +85,7 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     groupId?: string;
+    toonflow?: ToonflowNodeMetadata;
 };
 
 export type CanvasNodeData = {
