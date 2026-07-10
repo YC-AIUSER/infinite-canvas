@@ -19,6 +19,7 @@ export default function CanvasPage() {
     const [searchParams] = useSearchParams();
     const inputRef = useRef<HTMLInputElement>(null);
     const autoOpenRef = useRef(false);
+    const skillAutoOpenRef = useRef(false);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
@@ -28,6 +29,7 @@ export default function CanvasPage() {
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
     const mode = searchParams.get("mode");
+    const skillId = searchParams.get("skill");
     const agentMode = mode === "new" || mode === "recent" || mode === "choose";
     const agentQuery = agentMode ? `?${searchParams.toString()}` : "";
     const enterProject = (id: string) => {
@@ -67,7 +69,15 @@ export default function CanvasPage() {
         enterProject(mode === "new" ? createProject(`无限画布 ${projects.length + 1}`) : projects[0]?.id || createProject(`无限画布 ${projects.length + 1}`));
     }, [createProject, hydrated, mode, projects]);
 
-    if (hydrated && (mode === "new" || mode === "recent")) return <main className="flex h-full items-center justify-center bg-background text-sm text-stone-500">正在打开画布...</main>;
+    // skill 参数单独走：不带 mode，避免触发本地 agent 自动连接
+    useEffect(() => {
+        if (!hydrated || skillAutoOpenRef.current || !skillId || agentMode) return;
+        skillAutoOpenRef.current = true;
+        const targetId = projects[0]?.id || createProject(`无限画布 ${projects.length + 1}`);
+        navigate(`/canvas/${targetId}?skill=${encodeURIComponent(skillId)}`);
+    }, [agentMode, createProject, hydrated, navigate, projects, skillId]);
+
+    if (hydrated && (mode === "new" || mode === "recent" || (skillId && !agentMode))) return <main className="flex h-full items-center justify-center bg-background text-sm text-stone-500">正在打开画布...</main>;
 
     return (
         <main className="h-full overflow-auto bg-background text-stone-950 dark:text-stone-100">

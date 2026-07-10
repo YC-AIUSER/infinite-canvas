@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { BookOpen, Bot, Home, ImageIcon, Images, List, Menu, Music2, Plus, Redo2, Settings2, Trash2, Undo2, Upload, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 
+import { skillCards } from "@/app/(user)/skills/skills-data";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
@@ -44,6 +45,8 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
+import { skillCards } from "@/pages/skills/skills-data";
+import { buildSkillFlowOps } from "@/lib/canvas/skill-flow";
 import {
     CanvasNodeType,
     type CanvasAssistantImage,
@@ -326,6 +329,7 @@ function InfiniteCanvasPage() {
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
+    const skillInsertedRef = useRef(false);
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -769,6 +773,34 @@ function InfiniteCanvasPage() {
         setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
         return () => setAgentCanvasContext(null);
     }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps]);
+
+    // 消费 ?skill=<id>：把技能落成提示词节点 + 参考图占位节点 + 生成配置节点连线组
+    useEffect(() => {
+        const skillId = searchParams.get("skill");
+        if (!projectLoaded || !skillId || skillInsertedRef.current) return;
+        skillInsertedRef.current = true;
+        const skill = skillCards.find((card) => card.id === skillId);
+        if (!skill || !skill.flow) {
+            message.error("未找到可在画布中使用的技能");
+            navigate(`/canvas/${projectId}`, { replace: true });
+            return;
+        }
+        const origin = getCanvasCenter();
+        const configMetadata: CanvasNodeMetadata =
+            skill.flow.mode === "text"
+                ? { model: effectiveConfig.model }
+                : { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) };
+        const ops = buildSkillFlowOps(skill, origin, configMetadata);
+        if (!ops.length) {
+            message.error("该技能暂不支持在画布中使用");
+            navigate(`/canvas/${projectId}`, { replace: true });
+            return;
+        }
+        applyAgentOps(ops);
+        message.success(`已插入技能「${skill.name}」，补齐参考图后点配置节点生成`);
+        navigate(`/canvas/${projectId}`, { replace: true });
+    }, [applyAgentOps, effectiveConfig, getCanvasCenter, message, navigate, projectId, projectLoaded, searchParams]);
+
     const createNode = useCallback(
         (type: CanvasNodeType, position?: Position) => {
             const targetPosition = position || getCanvasCenter();
@@ -2001,6 +2033,12 @@ function InfiniteCanvasPage() {
                             ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                             : [];
                     const referenceImages = sourceReference.length ? sourceReference : generationContext.referenceImages;
+                    if (sourceNode?.metadata?.requiresReferenceImage && !referenceImages.length) {
+                        const errorDetails = "缺少参考图，已按生产红线拦截";
+                        message.error("该技能要求至少一张参考图（生产红线）：请先给参考图节点上传图片并保持连线，再触发生成");
+                        if (markSourceStatus) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
+                        return;
+                    }
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
                     const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, count, referenceImages);
                     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : isImageNode ? CanvasNodeType.Image : CanvasNodeType.Text];

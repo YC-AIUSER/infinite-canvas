@@ -86,6 +86,7 @@ export type CanvasNodeMetadata = {
     durationMs?: number;
     groupId?: string;
     toonflow?: ToonflowNodeMetadata;
+    requiresReferenceImage?: boolean; // 技能生产红线：生图时参考图为空禁止生成
 };
 
 export type CanvasNodeData = {
