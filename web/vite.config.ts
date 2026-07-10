@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import { corsRelayPlugin } from "./cors-relay-plugin";
 import { parseChangelog } from "./src/lib/release";
 
 const webDir = dirname(fileURLToPath(import.meta.url));
@@ -12,7 +13,7 @@ const localChangelog = readFileSync(resolve(webDir, "../CHANGELOG.md"), "utf8");
 
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
-    plugins: [react()],
+    plugins: [react(), corsRelayPlugin()],
     resolve: {
         alias: {
             "@": resolve(webDir, "src"),
