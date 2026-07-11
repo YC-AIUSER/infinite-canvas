@@ -5,6 +5,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- Codex App 插件：修复插件通过 `mode=new/recent/choose` 打开画布后未自动连接本地 Agent 的问题，并将端口冲突回退命令从 Next.js 更新为 Vite；需验证新建、最近和选择画布三种模式都能自动连接。
 - 本地 Agent 连接说明：新增提醒说明只有安装 Codex 插件或手动添加 MCP 后才会增加 Codex token 消耗，直接运行 `npx -y @basketikun/canvas-agent` 不会安装 MCP；需验证文案位置清晰。
 - 本地 Agent 连接说明：画布面板和配置页 Codex Tab 改为区分“Codex 插件启动画布”和“直接运行 Agent 后网页连接”两种方式，需验证文案和布局清晰。
 - 全站 Agent：Agent 面板从画布页抽离为全站常驻面板，挂在全局布局右侧，开/关只挤压左侧内容不遮挡；顶栏和画布工具条各有一个开关按钮，需验证在首页、生图、视频、素材、提示词库、画布等页面都能打开面板并保持 SSE 连接不断开。
@@ -25,7 +26,6 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 配置与用户偏好：新增独立顶部导航页面，并在页面和弹窗中复用同一套配置面板；新增 Codex Tab，展示插件安装和本地 Agent 启动步骤，可配置本地 Agent 地址、Connect token 和工具执行确认开关。
 - Codex 全局连接：配置页可直接连接本地 Canvas Agent，连接状态同步到画布和顶部 OpenAI 状态图标，刷新后会按本地保存的地址和 token 自动尝试重连；需验证已连接、连接中、连接失败、断开和刷新自动重连状态。
 - 画布 Agent：Codex 旧 thread 在重启后不可用时会自动新建会话并重试，需验证进入画布直接发送消息不会再出现 `thread not loaded` 或 `no rollout found`。
-- 画布 Agent：切换不同画布时会清空并重新加载当前 canvasId 对应的 Codex 会话，需验证不会继续显示上一个画布的对话。
 - 画布 Agent：右侧 Agent 面板移除网站 / 本机模式切换，固定使用本机 Agent。
 - 配置与用户偏好：每个模型渠道新增 OpenAI / Gemini 调用格式选择，默认 OpenAI，切换默认格式时同步更新默认 Base URL；渠道 Tab 增加紧凑醒目的提醒，说明模型是否可选需要到“模型”Tab 选择。
 - Gemini 调用格式：支持拉取 Gemini 模型列表，并用于文本问答、在线 Agent 工具调用、基础生图和图生图请求。

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
++ [修复] 修复 Codex 插件打开画布后本地 Agent 未自动连接，并同步修正 Vite 启动指引。
++ [修复] 修复画布组节点遗留的多余类型判断导致的 TypeScript 构建报错。
++ [调整] canvas-agent 与 Codex 插件版本升级到 0.2.0，包含 site_navigate 等站点级工具和站点级连续会话。
 + [优化] 本地 Agent 连接说明明确区分插件 / 手动 MCP 才会增加 Codex token 消耗，直接运行 Agent 不受影响。
 + [优化] 优化本地 Agent 连接说明，区分 Codex 插件启动和直接运行 Agent 两种方式。
 + [新增] Agent 对话消息改用 streamdown 流式渲染，提升长回复与 Markdown 内容展示效果。
