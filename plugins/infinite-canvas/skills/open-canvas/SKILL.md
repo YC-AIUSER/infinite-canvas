@@ -19,12 +19,12 @@ description: 打开 Infinite Canvas 网页画布并自动连接本地 Canvas Age
 
 1. 如果当前仓库是 Infinite Canvas 项目，优先使用当前仓库的 `web/` 前端。
 2. 先检查本地端口归属：如果 `3000`、`3001` 等端口已被占用，必须用 `lsof`/`ps` 或服务输出确认监听进程的工作目录属于当前仓库的 `web/`，不能只因为端口存在就当成本地画布。
-3. 如果已有当前仓库的 Next dev 服务，复用它并记录真实画布地址，例如 `http://localhost:3001`。
-4. 如果没有当前仓库的服务，启动本地画布开发服务，默认在 `web/` 下运行 `bun run dev`；若默认端口被其他项目占用，改用空闲端口启动，例如 `bunx next dev --webpack -H 0.0.0.0 -p <空闲端口>`。不要执行构建或测试。
+3. 如果已有当前仓库的 Vite dev 服务，复用它并记录真实画布地址，例如 `http://localhost:3001`。
+4. 如果没有当前仓库的服务，启动本地画布开发服务，默认在 `web/` 下运行 `bun run dev`；若默认端口被其他项目占用，改用空闲端口启动，例如 `bunx vite --host 0.0.0.0 --port <空闲端口>`。不要执行构建或测试。
 5. 启动本地 Canvas Agent，必须带上第 3/4 步得到的真实画布地址：`CANVAS_URL=<真实画布地址> npx -y @basketikun/canvas-agent`。如果 Agent 已经在运行，则读取 `~/.infinite-canvas/canvas-agent.json` 或 `/config` 获取 `Local URL` 和 token。
 6. 读取 Agent 输出或配置中的 `Local URL` 和 `Connect token`，不要让用户手动复制。
 7. 不走本地 Agent 的 `/open` 跳转；直接构造并打开最终 URL：`<真实画布地址>/canvas?mode=new&agentUrl=<Local URL>&agentToken=<Connect token>`。
-8. 画布网页会自动新建具体画布、打开本机 Agent 面板并连接本地 Agent；不要用浏览器点击新建画布。
+8. 画布网页会自动新建具体画布并连接本地 Agent；不要用浏览器点击新建画布，也不需要手动点击连接。
 9. 打开后再使用 `canvas_get_state` 检查画布是否已经连接；如果尚未连接，等待片刻再检查，不要改用线上站点，除非用户明确要求。
 
 ## 用户只安装插件时

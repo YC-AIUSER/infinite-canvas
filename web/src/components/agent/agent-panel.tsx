@@ -1,4 +1,5 @@
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Bot, PanelRightClose } from "lucide-react";
 import { Button, Switch, Tooltip } from "antd";
 import { motion } from "motion/react";
@@ -12,6 +13,8 @@ const PANEL_MOTION_SECONDS = CANVAS_AGENT_PANEL_MOTION_MS / 1000;
 
 export function AgentPanel() {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const [searchParams] = useSearchParams();
+    const autoConnect = ["new", "recent", "choose"].includes(searchParams.get("mode") || "");
     const width = useAgentStore((state) => state.width);
     const [resizing, setResizing] = useState(false);
     const panelMounted = useAgentStore((state) => state.panelMounted);
@@ -80,7 +83,7 @@ export function AgentPanel() {
                         </Tooltip>
                     </div>
                 </header>
-                <CanvasLocalAgentPanel embedded />
+                <CanvasLocalAgentPanel embedded autoConnect={autoConnect} />
             </motion.aside>
         </motion.div>
     );
