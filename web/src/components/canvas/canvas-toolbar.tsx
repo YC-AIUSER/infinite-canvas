@@ -13,7 +13,6 @@ export function CanvasToolbar({
     canRedo,
     backgroundMode,
     showImageInfo,
-    toonflowMode = false,
     onAddImage,
     onAddVideo,
     onAddAudio,
@@ -35,7 +34,6 @@ export function CanvasToolbar({
     canRedo: boolean;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
-    toonflowMode?: boolean;
     onAddImage: () => void;
     onAddVideo: () => void;
     onAddAudio: () => void;
@@ -78,36 +76,32 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-redo" label="重做" disabled={!canRedo} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onRedo}>
                     <Redo2 className="size-4.5" />
                 </ToolbarButton>
-                {!toonflowMode ? (
-                    <>
-                        <Divider theme={theme} />
-                        <ToolbarButton id="tool-text" label="文本" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddText}>
-                            <Type className="size-4.5" />
-                        </ToolbarButton>
-                        <ToolbarButton id="tool-image" label="图片" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddImage}>
-                            <ImageIcon className="size-4.5" />
-                        </ToolbarButton>
-                        <ToolbarButton id="tool-video" label="视频" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddVideo}>
-                            <Video className="size-4.5" />
-                        </ToolbarButton>
-                        <ToolbarButton id="tool-audio" label="音频" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddAudio}>
-                            <Music2 className="size-4.5" />
-                        </ToolbarButton>
-                        <ToolbarButton id="tool-config" label="生成配置" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
-                            <Settings2 className="size-4.5" />
-                        </ToolbarButton>
-                        <ToolbarButton id="tool-group" label="组" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
-                            <Group className="size-4.5" />
-                        </ToolbarButton>
-                        <ToolbarButton id="tool-upload" label="上传素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
-                            <Upload className="size-4.5" />
-                        </ToolbarButton>
-                        <Divider theme={theme} />
-                        <ToolbarButton id="tool-assets" label="我的素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenMyAssets}>
-                            <FolderOpen className="size-4.5" />
-                        </ToolbarButton>
-                    </>
-                ) : null}
+                <Divider theme={theme} />
+                <ToolbarButton id="tool-text" label="文本" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddText}>
+                    <Type className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-image" label="图片" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddImage}>
+                    <ImageIcon className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-video" label="视频" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddVideo}>
+                    <Video className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-audio" label="音频" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddAudio}>
+                    <Music2 className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-config" label="生成配置" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
+                    <Settings2 className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-group" label="组" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
+                    <Group className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-upload" label="上传素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
+                    <Upload className="size-4.5" />
+                </ToolbarButton>
+                <Divider theme={theme} />
+                <ToolbarButton id="tool-assets" label="我的素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenMyAssets}>
+                    <FolderOpen className="size-4.5" />
+                </ToolbarButton>
                 <ToolbarButton
                     id="tool-style"
                     label="画布外观"
