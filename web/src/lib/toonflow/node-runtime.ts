@@ -409,6 +409,15 @@ export function approveChain(nodes: CanvasNodeData[], connections: CanvasConnect
     return { nodes: next, approvedCount };
 }
 
+/**
+ * 文本级联子图。Toonflow 模板是一条线性链,文本节点之间夹着非文本节点
+ * (如 剧本→资产库(图像)→空间合同):直接丢弃非文本节点会把链剪断,
+ * 因此过滤时必须**桥接**——从每个文本节点向下穿过任意非文本节点,
+ * 直到抵达下一个文本节点,补一条 from→to 的直连边。
+ *
+ *   script ─→ [assets] ─→ space ─→ table        原图
+ *   script ────────────→ space ─→ table         桥接后
+ */
 export function buildTextCascadeGraph(nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     const textNodes = nodes.filter((node) => {
         const kind = node.metadata?.toonflow?.kind;
@@ -420,9 +429,28 @@ export function buildTextCascadeGraph(nodes: CanvasNodeData[], connections: Canv
         kinds[node.id] = node.metadata!.toonflow!.kind;
     }
 
-    return {
-        nodes: graphNodes(textNodes),
-        edges: graphEdges(connections).filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to)),
-        kinds,
-    };
+    const childrenByNodeId = new Map<string, string[]>();
+    for (const connection of connections) {
+        const children = childrenByNodeId.get(connection.fromNodeId);
+        if (children) children.push(connection.toNodeId);
+        else childrenByNodeId.set(connection.fromNodeId, [connection.toNodeId]);
+    }
+
+    const edges: Array<{ from: string; to: string }> = [];
+    for (const textNode of textNodes) {
+        const visited = new Set<string>([textNode.id]);
+        const queue = [...(childrenByNodeId.get(textNode.id) ?? [])];
+        for (let index = 0; index < queue.length; index += 1) {
+            const currentId = queue[index];
+            if (visited.has(currentId)) continue;
+            visited.add(currentId);
+            if (nodeIds.has(currentId)) {
+                edges.push({ from: textNode.id, to: currentId });
+                continue; // 抵达下一个文本节点即停,不穿透它继续(它自己会桥接自己的下游)
+            }
+            queue.push(...(childrenByNodeId.get(currentId) ?? []));
+        }
+    }
+
+    return { nodes: graphNodes(textNodes), edges, kinds };
 }

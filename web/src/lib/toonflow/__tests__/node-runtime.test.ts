@@ -343,4 +343,14 @@ describe("文本支配度闭环", () => {
         ]);
         expect(graph.kinds).toEqual({ script: "script", space: "space-contract", storyboard: "storyboard-table", shots: "shot-contract", actions: "action-contract" });
     });
+
+    it("buildTextCascadeGraph 桥接被剔除的非文本节点(Toonflow 模板线性链场景)", () => {
+        // 复刻真实模板顺序:剧本→资产库(图像)→空间合同,直接过滤会剪断链
+        const nodes = [node("script", "script"), node("assets", "assets"), node("space", "space-contract"), node("storyboard", "storyboard-table")];
+        const graph = buildTextCascadeGraph(nodes, [connection("script", "assets"), connection("assets", "space"), connection("space", "storyboard")]);
+        expect(graph.edges).toEqual([
+            { from: "script", to: "space" },
+            { from: "space", to: "storyboard" },
+        ]);
+    });
 });
