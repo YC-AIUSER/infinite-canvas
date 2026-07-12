@@ -1,3 +1,5 @@
+import type { NodeOutput, NodeStatus } from "@/lib/toonflow/schema";
+
 export type Position = {
     x: number;
     y: number;
@@ -37,7 +39,7 @@ export type ToonflowNodeKind =
     | "seam-check"
     | "audio-mix"
     | "export";
-export type ToonflowNodeStageStatus = "未开始" | "待生成" | "生成中" | "生成失败" | "待验收" | "已通过" | "已跳过";
+export type ToonflowNodeStageStatus = NodeStatus;
 
 export type ToonflowNodeMetadata = {
     kind: ToonflowNodeKind;
@@ -47,6 +49,12 @@ export type ToonflowNodeMetadata = {
     checks: string[];
     outputs?: string[];
     accent?: string;
+    output?: NodeOutput;
+    history?: NodeOutput[];
+    washReport?: {
+        hits: Array<{ term: string; replacement: string }>;
+        at: string;
+    };
 };
 
 export type CanvasNodeMetadata = {

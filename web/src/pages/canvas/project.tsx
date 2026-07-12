@@ -44,6 +44,7 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
+import { applyApprove, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
 import { skillCards } from "@/pages/skills/skills-data";
 import { buildSkillFlowOps } from "@/lib/canvas/skill-flow";
 import {
@@ -413,7 +414,8 @@ function InfiniteCanvasPage() {
         }
 
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
             setNodes(restoredNodes);
             setConnections(project.connections);
@@ -2419,6 +2421,78 @@ function InfiniteCanvasPage() {
         generateNodeRef.current = handleGenerateNode;
     }, [handleGenerateNode]);
 
+    const handleToonflowGenerate = useCallback(
+        async (nodeId: string) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            if (!sourceNode?.metadata?.toonflow) return;
+            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, "text");
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            const { finalPrompt, washHits } = buildToonflowGeneration(nodesRef.current, connectionsRef.current, nodeId);
+            if (washHits.length) message.warning(`已自动软化 ${washHits.length} 个避雷词`);
+
+            const washReport = { hits: washHits, at: new Date().toISOString() };
+            const preparedNodes = applyRegenerate(nodesRef.current, connectionsRef.current, nodeId).map<CanvasNodeData>((node) => {
+                if (node.id === nodeId) {
+                    return { ...node, metadata: { ...node.metadata, prompt: finalPrompt, model: generationConfig.model } };
+                }
+                if (node.metadata?.toonflow?.kind === "compliance") {
+                    return { ...node, metadata: { ...node.metadata, toonflow: { ...node.metadata.toonflow, washReport } } };
+                }
+                return node;
+            });
+            nodesRef.current = preparedNodes;
+            setNodes(preparedNodes);
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
+
+            try {
+                const upstreamVersions = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
+                let resultNode = preparedNode;
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: finalPrompt }], () => {}, { signal: controller.signal });
+                    resultNode = applyGenerationSuccess(preparedNode, rawText, washHits, upstreamVersions);
+                    const shouldRetryStoryboard = resultNode.metadata?.toonflow?.kind === "storyboard-table" && resultNode.metadata.toonflow.status === "failed" && attempt === 0;
+                    if (!shouldRetryStoryboard) break;
+                }
+                const generationFailed = resultNode.metadata?.toonflow?.status === "failed";
+                setNodes((prev) => {
+                    let next = prev.map((node) => (node.id === nodeId ? resultNode : node));
+                    if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                    nodesRef.current = next;
+                    return next;
+                });
+                const error = resultNode.metadata?.toonflow?.status === "failed" ? resultNode.metadata.toonflow.output?.error : undefined;
+                if (error) message.error(error);
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : "生成失败";
+                message.error(errorDetails);
+                setNodes((prev) => {
+                    const next = prev.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                    nodesRef.current = next;
+                    return next;
+                });
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
+    const handleToonflowApprove = useCallback((nodeId: string) => {
+        setNodes((prev) => {
+            const next = applyApprove(prev, connectionsRef.current, nodeId);
+            nodesRef.current = next;
+            return next;
+        });
+    }, []);
+
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
@@ -2777,7 +2851,7 @@ function InfiniteCanvasPage() {
                             }
                             renderNodeContent={(contentNode) =>
                                 contentNode.metadata?.toonflow ? (
-                                    <ToonflowNodeContent node={contentNode} />
+                                    <ToonflowNodeContent node={contentNode} onGenerate={(nodeId) => void handleToonflowGenerate(nodeId)} onApprove={handleToonflowApprove} />
                                 ) : (
                                     <CanvasConfigNodePanel
                                         node={contentNode}

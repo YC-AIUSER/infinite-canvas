@@ -191,7 +191,7 @@ export function buildToonflowCanvasTemplate() {
                 toonflow: {
                     kind: item.kind,
                     stage: item.stage,
-                    status: index === 0 ? "待生成" : "未开始",
+                    status: "empty",
                     summary: item.summary,
                     checks: item.checks,
                     outputs: item.outputs,
