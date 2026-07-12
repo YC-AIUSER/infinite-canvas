@@ -93,7 +93,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                   summary[card.cardType] += 1;
                   return summary;
               },
-              { character: 0, scene: 0, prop: 0 },
+              { character: 0, scene: 0, prop: 0, action: 0, expression: 0 },
           )
         : null;
 
@@ -145,6 +145,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
             {assetCardSummary ? (
                 <p className="mt-1 truncate text-xs font-medium opacity-60">
                     {assetCards?.length ?? 0} 张卡：角色{assetCardSummary.character} · 场景{assetCardSummary.scene} · 道具{assetCardSummary.prop}
+                    {assetCardSummary.action + assetCardSummary.expression > 0 ? ` · 衍生${assetCardSummary.action + assetCardSummary.expression}` : ""}
                 </p>
             ) : null}
 

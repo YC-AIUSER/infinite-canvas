@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { App, Button, Empty, Input, Modal, Popconfirm, Select, Tag, Upload, theme } from "antd";
+import { App, Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Tag, Upload, theme } from "antd";
 import { ImageIcon, ImagePlus, Pencil, Plus, Trash2, UploadIcon } from "lucide-react";
 import { nanoid } from "nanoid";
 
 import { parseEntityHints } from "@/lib/toonflow/node-runtime";
-import type { AssetCard } from "@/lib/toonflow/schema";
+import { validateAssetCards, type AssetCard } from "@/lib/toonflow/schema";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import type { CanvasNodeData } from "@/types/canvas";
 
@@ -12,12 +12,16 @@ const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     character: "角色",
     scene: "场景",
     prop: "道具",
+    action: "动作",
+    expression: "表情",
 };
 
 const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
     character: "blue",
     scene: "green",
     prop: "orange",
+    action: "purple",
+    expression: "cyan",
 };
 
 type ToonflowAssetCardModalProps = {
@@ -25,7 +29,7 @@ type ToonflowAssetCardModalProps = {
     node: CanvasNodeData | null;
     scriptText: string;
     onSave: (nodeId: string, cards: AssetCard[]) => void;
-    onGenerateCard: (nodeId: string, card: AssetCard) => Promise<string | undefined>;
+    onGenerateCard: (nodeId: string, card: AssetCard, allCards: AssetCard[]) => Promise<string | undefined>;
     onCancel: () => void;
 };
 
@@ -94,13 +98,21 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
         setUploadingCardIds(new Set());
     }, [open, node?.id]);
 
-    const startNewCard = (preset?: Pick<AssetCard, "cardType" | "name" | "anchor">) => {
+    const parentCards = cards.filter((card) => card.cardType === "character");
+    const parentNameById = new Map(cards.map((card) => [card.cardId, card.name]));
+    const cardGroups = [
+        { key: "base", label: "基础卡", cards: cards.filter((card) => card.cardType !== "action" && card.cardType !== "expression") },
+        { key: "derived", label: "衍生卡", cards: cards.filter((card) => card.cardType === "action" || card.cardType === "expression") },
+    ].filter((group) => group.cards.length);
+
+    const startNewCard = (preset?: Partial<Pick<AssetCard, "cardType" | "name" | "anchor" | "parentCardId">>) => {
         setEditingCardId(null);
         setDraft({
             cardId: nanoid(),
             cardType: preset?.cardType ?? "character",
             name: preset?.name ?? "",
             anchor: preset?.anchor ?? "",
+            parentCardId: preset?.parentCardId,
         });
     };
 
@@ -112,6 +124,10 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     const saveDraft = () => {
         if (!draft?.name.trim() || !draft.anchor.trim()) {
             message.warning("请填写名称和锚点文字");
+            return;
+        }
+        if ((draft.cardType === "action" || draft.cardType === "expression") && !draft.parentCardId) {
+            message.warning("请选择父角色卡");
             return;
         }
         const normalized = { ...draft, name: draft.name.trim(), anchor: draft.anchor.trim() };
@@ -146,7 +162,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
         if (!node) return;
         setGeneratingCardIds((current) => new Set(current).add(card.cardId));
         try {
-            const storageKey = await onGenerateCard(node.id, card);
+            const storageKey = await onGenerateCard(node.id, card, cards);
             if (storageKey) {
                 updateCardStorageKey(card.cardId, storageKey);
                 message.success("锚点图已生成");
@@ -162,6 +178,16 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
         }
     };
 
+    const handleSaveCards = () => {
+        if (!node) return;
+        const issues = validateAssetCards(cards);
+        if (issues.length) {
+            message.error(issues[0]);
+            return;
+        }
+        onSave(node.id, cards);
+    };
+
     return (
         <Modal
             title={`资产卡池${node?.title ? `：${node.title}` : ""}`}
@@ -172,7 +198,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
             footer={
                 <div className="flex justify-end gap-2">
                     <Button onClick={onCancel}>取消</Button>
-                    <Button type="primary" onClick={() => node && onSave(node.id, cards)}>
+                    <Button type="primary" onClick={handleSaveCards}>
                         保存卡池
                     </Button>
                 </div>
@@ -184,7 +210,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                         <div>
                             <h3 className="text-sm font-semibold">锚点卡</h3>
                             <p className="mt-0.5 text-xs" style={{ color: token.colorTextSecondary }}>
-                                角色、场景和道具的固定参考集中在这里，下游会逐字复用锚点文字。
+                                角色、场景、道具及角色衍生动作与表情集中在这里，下游会逐字复用锚点文字。
                             </p>
                         </div>
                         <Button icon={<Plus className="size-4" />} onClick={() => startNewCard()}>
@@ -193,58 +219,94 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                     </div>
 
                     {cards.length ? (
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                            {cards.map((card) => {
-                                const generating = generatingCardIds.has(card.cardId);
-                                const uploading = uploadingCardIds.has(card.cardId);
-                                return (
-                                    <article key={card.cardId} className="overflow-hidden rounded-xl border" style={{ borderColor: token.colorBorderSecondary, background: token.colorBgContainer }}>
-                                        <div className="aspect-[4/3]" style={{ background: token.colorFillAlter }}>
-                                            <AssetCardImage storageKey={card.storageKey} name={card.name} />
-                                        </div>
-                                        <div className="space-y-2.5 p-3">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <h4 className="truncate text-sm font-semibold" title={card.name}>
-                                                    {card.name}
-                                                </h4>
-                                                <Tag color={CARD_TYPE_COLORS[card.cardType]} className="!mr-0 shrink-0">
-                                                    {CARD_TYPE_LABELS[card.cardType]}
-                                                </Tag>
-                                            </div>
-                                            <p className="line-clamp-2 min-h-10 text-xs leading-5" style={{ color: token.colorTextSecondary }} title={card.anchor}>
-                                                {card.anchor}
-                                            </p>
-                                            <div className="flex flex-wrap gap-1.5">
-                                                <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => startEditCard(card)}>
-                                                    编辑
-                                                </Button>
-                                                <Popconfirm title="删除这张资产卡？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => setCards((current) => current.filter((item) => item.cardId !== card.cardId))}>
-                                                    <Button size="small" danger icon={<Trash2 className="size-3.5" />}>
-                                                        删除
-                                                    </Button>
-                                                </Popconfirm>
-                                                <Upload
-                                                    accept="image/*"
-                                                    showUploadList={false}
-                                                    beforeUpload={(file) => {
-                                                        void handleUpload(card.cardId, file);
-                                                        return false;
-                                                    }}
-                                                >
-                                                    <Button size="small" loading={uploading} disabled={generating} icon={<UploadIcon className="size-3.5" />}>
-                                                        上传图
-                                                    </Button>
-                                                </Upload>
-                                                <Popconfirm title="将调用 1 次图像生成" description={card.storageKey ? "当前锚点图会作为参考图参与生成。" : "将根据锚点文字从零生成。"} okText="确认生成" cancelText="取消" onConfirm={() => handleGenerate(card)}>
-                                                    <Button size="small" loading={generating} disabled={uploading} icon={<ImagePlus className="size-3.5" />}>
-                                                        生成锚点图
-                                                    </Button>
-                                                </Popconfirm>
-                                            </div>
-                                        </div>
-                                    </article>
-                                );
-                            })}
+                        <div className="space-y-4">
+                            {cardGroups.map((group) => (
+                                <div key={group.key}>
+                                    <h4 className="mb-2 text-xs font-medium" style={{ color: token.colorTextSecondary }}>
+                                        {group.label}
+                                    </h4>
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                        {group.cards.map((card) => {
+                                            const generating = generatingCardIds.has(card.cardId);
+                                            const uploading = uploadingCardIds.has(card.cardId);
+                                            const parentName = card.parentCardId ? parentNameById.get(card.parentCardId) : undefined;
+                                            return (
+                                                <article key={card.cardId} className="overflow-hidden rounded-xl border" style={{ borderColor: token.colorBorderSecondary, background: token.colorBgContainer }}>
+                                                    <div className="aspect-[4/3]" style={{ background: token.colorFillAlter }}>
+                                                        <AssetCardImage storageKey={card.storageKey} name={card.name} />
+                                                    </div>
+                                                    <div className="space-y-2.5 p-3">
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <h4 className="truncate text-sm font-semibold" title={card.name}>
+                                                                {card.name}
+                                                            </h4>
+                                                            <span className="flex shrink-0 flex-wrap justify-end gap-1">
+                                                                <Tag color={CARD_TYPE_COLORS[card.cardType]} className="!mr-0">
+                                                                    {CARD_TYPE_LABELS[card.cardType]}
+                                                                </Tag>
+                                                                {parentName ? <Tag className="!mr-0">衍生自 {parentName}</Tag> : null}
+                                                            </span>
+                                                        </div>
+                                                        <p className="line-clamp-2 min-h-10 text-xs leading-5" style={{ color: token.colorTextSecondary }} title={card.anchor}>
+                                                            {card.anchor}
+                                                        </p>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => startEditCard(card)}>
+                                                                编辑
+                                                            </Button>
+                                                            {card.cardType === "character" ? (
+                                                                <Dropdown
+                                                                    trigger={["click"]}
+                                                                    menu={{
+                                                                        items: [
+                                                                            { key: "action", label: "衍生动作" },
+                                                                            { key: "expression", label: "衍生表情" },
+                                                                        ],
+                                                                        onClick: ({ key }) => startNewCard({ cardType: key as "action" | "expression", parentCardId: card.cardId, name: `${card.name}·` }),
+                                                                    }}
+                                                                >
+                                                                    <Button size="small" icon={<Plus className="size-3.5" />}>
+                                                                        衍生
+                                                                    </Button>
+                                                                </Dropdown>
+                                                            ) : null}
+                                                            <Popconfirm
+                                                                title={card.cardType === "character" ? "删除这张角色卡？" : "删除这张资产卡？"}
+                                                                description={card.cardType === "character" ? "其衍生卡将一并删除。" : undefined}
+                                                                okText="删除"
+                                                                cancelText="取消"
+                                                                okButtonProps={{ danger: true }}
+                                                                onConfirm={() => setCards((current) => current.filter((item) => item.cardId !== card.cardId && item.parentCardId !== card.cardId))}
+                                                            >
+                                                                <Button size="small" danger icon={<Trash2 className="size-3.5" />}>
+                                                                    删除
+                                                                </Button>
+                                                            </Popconfirm>
+                                                            <Upload
+                                                                accept="image/*"
+                                                                showUploadList={false}
+                                                                beforeUpload={(file) => {
+                                                                    void handleUpload(card.cardId, file);
+                                                                    return false;
+                                                                }}
+                                                            >
+                                                                <Button size="small" loading={uploading} disabled={generating} icon={<UploadIcon className="size-3.5" />}>
+                                                                    上传图
+                                                                </Button>
+                                                            </Upload>
+                                                            <Popconfirm title="将调用 1 次图像生成" description={card.storageKey ? "当前锚点图会作为参考图参与生成。" : "将根据锚点文字从零生成。"} okText="确认生成" cancelText="取消" onConfirm={() => handleGenerate(card)}>
+                                                                <Button size="small" loading={generating} disabled={uploading} icon={<ImagePlus className="size-3.5" />}>
+                                                                    生成锚点图
+                                                                </Button>
+                                                            </Popconfirm>
+                                                        </div>
+                                                    </div>
+                                                </article>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     ) : (
                         <div className="rounded-xl border py-6" style={{ borderColor: token.colorBorderSecondary }}>
@@ -262,13 +324,30 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                             </Button>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
-                            <Select
+                            <Select<AssetCard["cardType"]>
                                 value={draft.cardType}
-                                options={Object.entries(CARD_TYPE_LABELS).map(([value, label]) => ({ value, label }))}
-                                onChange={(cardType) => setDraft((current) => (current ? { ...current, cardType } : current))}
+                                options={Object.entries(CARD_TYPE_LABELS).map(([value, label]) => ({ value: value as AssetCard["cardType"], label }))}
+                                onChange={(cardType) =>
+                                    setDraft((current) => {
+                                        if (!current) return current;
+                                        if (cardType === "action" || cardType === "expression") return { ...current, cardType };
+                                        const next = { ...current, cardType };
+                                        delete next.parentCardId;
+                                        return next;
+                                    })
+                                }
                             />
                             <Input value={draft.name} placeholder="名称" onChange={(event) => setDraft((current) => (current ? { ...current, name: event.target.value } : current))} />
                         </div>
+                        {draft.cardType === "action" || draft.cardType === "expression" ? (
+                            <Select
+                                className="mt-3 w-full"
+                                value={draft.parentCardId}
+                                placeholder="选择父角色卡"
+                                options={parentCards.map((card) => ({ value: card.cardId, label: card.name }))}
+                                onChange={(parentCardId) => setDraft((current) => (current ? { ...current, parentCardId } : current))}
+                            />
+                        ) : null}
                         <Input.TextArea className="mt-3" value={draft.anchor} autoSize={{ minRows: 3, maxRows: 7 }} placeholder="外貌、外形或场景锚点文字；保存后下游逐字复用" onChange={(event) => setDraft((current) => (current ? { ...current, anchor: event.target.value } : current))} />
                         <div className="mt-3 flex justify-end gap-2">
                             <Button onClick={() => setDraft(null)}>取消</Button>

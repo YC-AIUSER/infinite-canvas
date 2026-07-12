@@ -108,14 +108,27 @@ export function buildActionContractPrompt(context: string) {
 仅输出 JSON 数组。每项格式（键名必须逐字使用英文，含义：cause=起因、process=过程、consequence=物理后果、endState=结束状态）：{"shotId":"","cause":"","process":"","consequence":"","endState":""}。`, context);
 }
 
-// 资产锚点卡，方法论源 ai-short-drama S4/pitfalls；卡片体系参考 manga-drama asset-card。
-export function buildAssetCardPrompt(card: { cardType: "character" | "scene" | "prop"; name: string; anchor: string }): string {
+// 资产锚点卡与派生资产，方法论源 manga-drama asset-card / ai-short-drama S4。
+export function buildAssetCardPrompt(
+    card: { cardType: "character" | "scene" | "prop" | "action" | "expression"; name: string; anchor: string },
+    parent?: { name: string; anchor: string },
+): string {
     const subject = card.name.trim() || "未命名主体";
     if (card.cardType === "character") {
         return `生成一张角色全身立绘锚点卡，只画“${subject}”这一个主体。正面全身，自然站姿，服装完整可见，干净纯色浅底，构图简洁。外貌与服装锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo、水印或边框。单图输出。`;
     }
     if (card.cardType === "prop") {
         return `生成一张道具锚点卡，只画“${subject}”这一个主体。白底单道具居中，无手持、无人物，形态与细节清晰，构图简洁。外形锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
+    }
+    if (card.cardType === "action") {
+        return parent
+            ? `以参考图中的角色为唯一主体，让“${parent.name}”执行该动作：${card.anchor}。全身入画、动作姿态清晰、干净纯色浅底；外貌与服装必须与参考图和以下锚点完全一致，逐字遵守：${parent.anchor}；只改动作，不改外观，禁止改变发型、服装、体型；画面禁止任何文字、logo或水印；单图输出。`
+            : `生成一张衍生动作锚点卡，只画“${subject}”这一个主体。动作描述：${card.anchor}。全身入画、动作姿态清晰、干净纯色浅底；外观与参考图一致，只改动作，不改外观，禁止改变发型、服装、体型；画面禁止任何文字、logo或水印；单图输出。`;
+    }
+    if (card.cardType === "expression") {
+        return parent
+            ? `以参考图中的角色为唯一主体，“${parent.name}”的表情特写（胸像以上）：${card.anchor}。外貌锚点逐字遵守：${parent.anchor}；只改表情不改外观；干净浅底；画面禁止任何文字或水印；单图输出。`
+            : `生成一张衍生表情锚点卡，只画“${subject}”这一个主体。表情特写（胸像以上）：${card.anchor}。外观与参考图一致，只改表情不改外观；干净浅底；画面禁止任何文字或水印；单图输出。`;
     }
     return `生成一张场景锚点图，只画“${subject}”这一个场景。空场景、无人物，固定机位单视角，光线与地标清晰，构图简洁。场景锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
 }

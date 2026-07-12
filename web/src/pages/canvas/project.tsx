@@ -2676,7 +2676,7 @@ function InfiniteCanvasPage() {
     }, []);
 
     const handleToonflowAssetCardGenerate = useCallback(
-        async (nodeId: string, card: AssetCard) => {
+        async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             if (sourceNode?.metadata?.toonflow?.kind !== "assets") throw new Error("未找到资产库节点");
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "image"), count: "1" };
@@ -2685,13 +2685,20 @@ function InfiniteCanvasPage() {
                 return undefined;
             }
 
-            const { washed, hits } = washPrompt(buildAssetCardPrompt(card));
+            const savedCards = sourceNode.metadata.toonflow.output?.payload.cards ?? [];
+            const parentCard = card.parentCardId
+                ? allCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character") ?? savedCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character")
+                : undefined;
+            const isDerived = card.cardType === "action" || card.cardType === "expression";
+            if (isDerived && !parentCard?.storageKey) message.warning("父卡没有锚点图，衍生一致性可能漂移");
+            const referenceCard = isDerived ? (parentCard?.storageKey ? parentCard : card.storageKey ? card : undefined) : card.storageKey ? card : undefined;
+            const { washed, hits } = washPrompt(buildAssetCardPrompt(card, parentCard ? { name: parentCard.name, anchor: parentCard.anchor } : undefined));
             if (hits.length) message.warning(`已自动软化 ${hits.length} 个避雷词`);
-            const image = card.storageKey
-                ? await imageToDataUrl({ storageKey: card.storageKey }).then(async (dataUrl) => {
+            const image = referenceCard?.storageKey
+                ? await imageToDataUrl({ storageKey: referenceCard.storageKey }).then(async (dataUrl) => {
                       if (!dataUrl) throw new Error("锚点参考图读取失败");
                       const type = dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png";
-                      return requestEdit(generationConfig, washed, [{ id: card.cardId, name: `${card.name}.png`, type, dataUrl, storageKey: card.storageKey }], undefined).then((items) => items[0]);
+                      return requestEdit(generationConfig, washed, [{ id: referenceCard.cardId, name: `${referenceCard.name}.png`, type, dataUrl, storageKey: referenceCard.storageKey }], undefined).then((items) => items[0]);
                   })
                 : await requestGeneration(generationConfig, washed).then((items) => items[0]);
             if (!image?.dataUrl) throw new Error("图像接口没有返回锚点图");

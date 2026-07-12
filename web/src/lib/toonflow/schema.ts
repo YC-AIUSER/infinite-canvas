@@ -117,13 +117,33 @@ export type AudioLine = z.infer<typeof AudioLineSchema>;
 
 export const AssetCardSchema = z.object({
     cardId: z.string(),
-    cardType: z.enum(["character", "scene", "prop"]),
+    cardType: z.enum(["character", "scene", "prop", "action", "expression"]),
     name: z.string(),
     anchor: z.string(),
+    parentCardId: z.string().optional(),
     storageKey: z.string().optional(),
 });
 
 export type AssetCard = z.infer<typeof AssetCardSchema>;
+
+export function validateAssetCards(cards: AssetCard[]): string[] {
+    const cardById = new Map(cards.map((card) => [card.cardId, card]));
+    const issues: string[] = [];
+    for (const card of cards) {
+        if (card.cardType !== "action" && card.cardType !== "expression") continue;
+        if (!card.parentCardId) {
+            issues.push(`衍生卡“${card.name}”缺少父卡`);
+            continue;
+        }
+        const parent = cardById.get(card.parentCardId);
+        if (!parent) {
+            issues.push(`衍生卡“${card.name}”指向不存在的父卡`);
+        } else if (parent.cardType !== "character") {
+            issues.push(`衍生卡“${card.name}”的父卡不是角色卡`);
+        }
+    }
+    return issues;
+}
 
 export const MediaKeySchema = z.string().refine((value) => !value.startsWith("data:"), {
     message: "历史记录禁止保存 dataUrl，请使用媒体存储键",

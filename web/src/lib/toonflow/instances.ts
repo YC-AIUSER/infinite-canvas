@@ -145,7 +145,7 @@ export function applyInstanceSync(
     const staleIds = new Set(plan.toStale);
     const archiveIds = new Set(plan.toArchive);
     const reindexById = new Map(plan.reindex.map((item) => [item.nodeId, item.segmentIndex]));
-    let nextNodes = nodes.map((node) => {
+    let nextNodes = nodes.map<CanvasNodeData>((node) => {
         const toonflow = node.metadata?.toonflow;
         if (!toonflow) return node;
         if (archiveIds.has(node.id)) {
@@ -191,7 +191,7 @@ export function applyInstanceSync(
         }
     }
 
-    nextNodes = nextNodes.map((node) => {
+    nextNodes = nextNodes.map<CanvasNodeData>((node) => {
         const rootKind = node.metadata?.toonflow?.kind;
         if (!rootKind || !isInstanceKind(rootKind) || roots.get(rootKind)?.id !== node.id) return node;
         const children = instances

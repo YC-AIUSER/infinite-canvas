@@ -54,12 +54,23 @@ const ASSET_CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     character: "角色",
     scene: "场景",
     prop: "道具",
+    action: "动作",
+    expression: "表情",
 };
+
+function formatAssetCard(card: AssetCard, parentNameById: Map<string, string>) {
+    const parentName = card.parentCardId ? parentNameById.get(card.parentCardId) : undefined;
+    const derivedFrom = (card.cardType === "action" || card.cardType === "expression") && parentName ? `（衍生自${parentName}）` : "";
+    return `【${ASSET_CARD_TYPE_LABELS[card.cardType]}】${card.name}${derivedFrom}：${card.anchor}`;
+}
 
 export function readNodeInput(node: CanvasNodeData) {
     const payload = node.metadata?.toonflow?.output?.payload;
     if (payload?.text) return payload.text;
-    if (payload?.cards) return payload.cards.map((card) => `【${ASSET_CARD_TYPE_LABELS[card.cardType]}】${card.name}：${card.anchor}`).join("\n");
+    if (payload?.cards) {
+        const parentNameById = new Map(payload.cards.map((card) => [card.cardId, card.name]));
+        return payload.cards.map((card) => formatAssetCard(card, parentNameById)).join("\n");
+    }
     if (payload?.table) return JSON.stringify(payload.table, null, 2);
     return node.metadata?.content?.trim() || node.metadata?.prompt?.trim() || "";
 }
@@ -128,11 +139,15 @@ export type ToonflowImageGeneration = {
     warnings: string[];
 };
 
-const ASSET_CARD_ORDER: Record<AssetCard["cardType"], number> = {
-    character: 0,
-    scene: 1,
-    prop: 2,
-};
+function assetCardSortKey(card: AssetCard, characterOrder: Map<string, number>): [number, number, number] {
+    if (card.cardType === "character") return [0, characterOrder.get(card.cardId) ?? 0, 0];
+    if (card.cardType === "action" || card.cardType === "expression") {
+        const parentOrder = card.parentCardId ? characterOrder.get(card.parentCardId) : undefined;
+        if (parentOrder !== undefined) return [0, parentOrder, card.cardType === "action" ? 1 : 2];
+        return [1, 0, card.cardType === "action" ? 0 : 1];
+    }
+    return [card.cardType === "scene" ? 2 : 3, 0, 0];
+}
 
 function segmentContracts<T extends ShotContract | ActionContract>(
     nodes: CanvasNodeData[],
@@ -172,9 +187,16 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
     const shotContracts = segmentContracts<ShotContract>(nodes, "shot-contract", ShotContractSchema, shotIds, warnings);
     const actionContracts = segmentContracts<ActionContract>(nodes, "action-contract", ActionContractSchema, shotIds, warnings);
     const spaceRules = nodes.find((node) => node.metadata?.toonflow?.kind === "space-contract")?.metadata?.toonflow?.output?.payload.text;
-    const cards = (nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [])
+    const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
+    const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
+    const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
+    const cards = allAssetCards
         .filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey))
-        .sort((left, right) => ASSET_CARD_ORDER[left.cardType] - ASSET_CARD_ORDER[right.cardType]);
+        .sort((left, right) => {
+            const leftKey = assetCardSortKey(left, characterOrder);
+            const rightKey = assetCardSortKey(right, characterOrder);
+            return leftKey[0] - rightKey[0] || leftKey[1] - rightKey[1] || leftKey[2] - rightKey[2];
+        });
     const assetKeys = cards.map((card) => card.storageKey);
 
     let prompt: string;
@@ -193,7 +215,7 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
                 !node.metadata.toonflow.archived,
         )?.metadata?.toonflow?.output?.payload.imageKeys?.[0];
         if (!storyboardKey) throw new Error("请先生成该段故事板页");
-        prompt = buildKeyframesPrompt({ rows, anchors: cards.map((card) => `${card.name}：${card.anchor}`), note });
+        prompt = buildKeyframesPrompt({ rows, anchors: cards.map((card) => formatAssetCard(card, parentNameById)), note });
         referenceKeys = [storyboardKey, ...assetKeys];
     }
 
