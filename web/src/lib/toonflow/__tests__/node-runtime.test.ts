@@ -132,6 +132,19 @@ describe("applyGenerationSuccess", () => {
         expect(result.metadata?.toonflow?.output?.error).toContain("shotNo");
     });
 
+    it("模型输出全局连续 shotNo 时按段自动归一化(不再指望模型服从)", () => {
+        const raw = JSON.stringify([
+            storyboardRow({ segmentId: "seg-a", shotId: "s1", shotNo: 1, durationSec: 6 }),
+            storyboardRow({ segmentId: "seg-a", shotId: "s2", shotNo: 2, durationSec: 6 }),
+            storyboardRow({ segmentId: "seg-b", shotId: "s3", shotNo: 3, durationSec: 7 }),
+            storyboardRow({ segmentId: "seg-b", shotId: "s4", shotNo: 4, durationSec: 7 }),
+        ]);
+        const target = node("storyboard", "storyboard-table", "", "generating");
+        const result = applyGenerationSuccess(target, raw, []);
+        expect(result.metadata?.toonflow?.status).toBe("review");
+        expect(result.metadata?.toonflow?.output?.payload.table?.map((row) => row.shotNo)).toEqual([1, 2, 1, 2]);
+    });
+
     it("合法分镜为空 ID 分配稳定格式 ID", () => {
         const target = node("storyboard", "storyboard-table", "", "generating");
         const raw = JSON.stringify([storyboardRow({ segmentId: "", shotId: "" })]);

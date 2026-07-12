@@ -149,6 +149,20 @@ export function computeUpstreamVersions(nodes: CanvasNodeData[], connections: Ca
     return snapshot;
 }
 
+/**
+ * shotNo 归一化:模型经常无视"段内从 1 编号"的指令(实测两轮均全局连续编号)。
+ * 编号是确定性工作,不赌模型服从——解析后按段内出现顺序重写 1..N;
+ * 校验里的 shotNo 规则保留,作为本函数之后的不变量守卫。
+ */
+function normalizeShotNumbers(rows: StoryboardRow[]): StoryboardRow[] {
+    const counters = new Map<string, number>();
+    return rows.map((row) => {
+        const nextNo = (counters.get(row.segmentId) ?? 0) + 1;
+        counters.set(row.segmentId, nextNo);
+        return row.shotNo === nextNo ? row : { ...row, shotNo: nextNo };
+    });
+}
+
 export function applyGenerationSuccess(node: CanvasNodeData, rawText: string, washHits: WashHit[], upstreamVersions?: Record<string, number>): CanvasNodeData {
     const toonflow = node.metadata?.toonflow;
     if (!toonflow || !isGeneratableKind(toonflow.kind)) return node;
@@ -158,6 +172,7 @@ export function applyGenerationSuccess(node: CanvasNodeData, rawText: string, wa
         const parsed = parseModelJson(z.array(StoryboardRowSchema), rawText);
         if (!parsed.ok) return failedGenerationNode(node, parsed.error, washHits);
         const assigned = assignIds(parsed.data);
+        assigned.rows = normalizeShotNumbers(assigned.rows);
         const errors = validateSegmentRows(assigned.rows).filter((issue) => !issue.warning);
         if (errors.length) return failedGenerationNode(node, errors.map((issue) => issue.message).join("；"), washHits);
         payload = { table: assigned.rows };
@@ -290,12 +305,15 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
     return nodes.map((node) => {
         const toonflow = node.metadata?.toonflow;
         if (!toonflow) return node;
-        const status = hydratedStatus(toonflow.status);
+        // 页面刷新/崩溃时 generating 无法恢复(文本生成无 provider taskId),降级为 failed 可重试。
+        const migrated = hydratedStatus(toonflow.status);
+        const status = migrated === "generating" ? "failed" : migrated;
         if (status === toonflow.status) return node;
         return {
             ...node,
             metadata: {
                 ...node.metadata,
+                errorDetails: status === "failed" && migrated === "generating" ? "生成被中断(页面已刷新),请重试" : node.metadata?.errorDetails,
                 toonflow: { ...toonflow, status },
             },
         };
