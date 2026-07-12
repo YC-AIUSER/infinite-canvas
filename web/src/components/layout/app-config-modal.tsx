@@ -47,7 +47,7 @@ const webdavDomainLabels: Record<AppSyncDomainKey, string> = {
 };
 const codexSetupSteps = [
     { title: "方式一：在 Codex 中使用插件", text: "先在 Codex App 安装 Infinite Canvas 插件，再通过插件启动画布，插件会自动启动本地 Canvas Agent 并带上连接信息。" },
-    { title: "方式二：直接运行 Agent", text: "不使用 Codex 插件时，在终端运行下面命令，再回到网页里连接或手动填入 Local URL 和 Connect token。", command: "npx -y @basketikun/canvas-agent" },
+    { title: "方式二：直接运行 Agent", text: "不使用 Codex 插件时，在终端运行下面命令，再回到网页里连接或手动填入 Local URL 和 Connect token。", command: "npx -y @yinchenhuang/canvas-agent" },
 ];
 const codexPluginRemoveCommand = "codex plugin remove infinite-canvas";
 const codexMcpRemoveCommand = "codex mcp remove infinite-canvas";
@@ -452,7 +452,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
                                     <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
                                         <div className="font-semibold">Codex 插件提醒</div>
-                                        <div className="mt-1">只有安装 Codex 插件或手动添加 MCP 后，工具列表才会进入 Codex 上下文并增加 token 消耗；仅运行 `npx -y @basketikun/canvas-agent` 启动本地 Agent 不会安装 MCP。</div>
+                                        <div className="mt-1">只有安装 Codex 插件或手动添加 MCP 后，工具列表才会进入 Codex 上下文并增加 token 消耗；仅运行 `npx -y @yinchenhuang/canvas-agent` 启动本地 Agent 不会安装 MCP。</div>
                                         <code className="mt-2 block overflow-x-auto rounded bg-white/70 px-2 py-1.5 text-[11px] text-amber-900 dark:bg-black/20 dark:text-amber-100">移除插件：{codexPluginRemoveCommand}</code>
                                         <code className="mt-1 block overflow-x-auto rounded bg-white/70 px-2 py-1.5 text-[11px] text-amber-900 dark:bg-black/20 dark:text-amber-100">移除手动 MCP：{codexMcpRemoveCommand}</code>
                                     </div>
