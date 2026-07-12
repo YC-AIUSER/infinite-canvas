@@ -13,7 +13,7 @@ import {
 } from "./prompts";
 import { NODE_STATUSES, StoryboardRowSchema, VERSION_LIMIT_TEXT, migrateToonflowStatus, parseModelJson, type NodeOutput, type NodeStatus } from "./schema";
 import { assignIds, validateSegmentRows } from "./segments";
-import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, type GraphNode } from "./state-machine";
+import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, rollbackToVersion, saveEditedNode, type GraphNode } from "./state-machine";
 
 type GeneratableToonflowKind = "script" | "space-contract" | "storyboard-table" | "shot-contract" | "action-contract";
 type WashHit = { term: string; replacement: string };
@@ -300,4 +300,129 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
             },
         };
     });
+}
+
+function appendTextHistory(history: NodeOutput[] | undefined, output: NodeOutput) {
+    return [...(history ?? []), output].slice(-VERSION_LIMIT_TEXT);
+}
+
+function payloadContent(payload: NodeOutput["payload"]) {
+    if (typeof payload.text === "string") return payload.text;
+    if (payload.table) return JSON.stringify(payload.table, null, 2);
+    return "";
+}
+
+export function applyEditSave(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, newText: string): CanvasNodeData[] {
+    const target = nodes.find((node) => node.id === nodeId);
+    const toonflow = target?.metadata?.toonflow;
+    const currentOutput = toonflow?.output;
+    if (!target || !toonflow || toonflow.kind === "storyboard-table" || toonflow.status !== "approved" || currentOutput?.status !== "approved" || typeof currentOutput.payload.text !== "string") return nodes;
+
+    const edited = saveEditedNode(currentOutput).next;
+    const output: NodeOutput = {
+        ...edited,
+        payload: { ...edited.payload, text: newText },
+        upstreamVersions: computeUpstreamVersions(nodes, connections, nodeId),
+        generatedAt: new Date().toISOString(),
+    };
+    const next = nodes.map<CanvasNodeData>((node) =>
+        node.id === nodeId
+            ? {
+                  ...node,
+                  metadata: {
+                      ...node.metadata,
+                      content: newText,
+                      status: "success",
+                      errorDetails: undefined,
+                      toonflow: { ...toonflow, status: output.status, output, history: appendTextHistory(toonflow.history, currentOutput) },
+                  },
+              }
+            : node,
+    );
+    return propagateAfterNewVersion(next, connections, nodeId);
+}
+
+export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, targetVersion: number): CanvasNodeData[] {
+    const target = nodes.find((node) => node.id === nodeId);
+    const toonflow = target?.metadata?.toonflow;
+    const currentOutput = toonflow?.output;
+    const historical = toonflow?.history?.find((output) => output.version === targetVersion);
+    if (!target || !toonflow || !currentOutput || !historical) return nodes;
+
+    const output: NodeOutput = { ...rollbackToVersion(currentOutput, historical).next, generatedAt: new Date().toISOString() };
+    const next = nodes.map<CanvasNodeData>((node) =>
+        node.id === nodeId
+            ? {
+                  ...node,
+                  metadata: {
+                      ...node.metadata,
+                      content: payloadContent(output.payload),
+                      status: "success",
+                      errorDetails: undefined,
+                      toonflow: { ...toonflow, status: output.status, output, history: appendTextHistory(toonflow.history, currentOutput) },
+                  },
+              }
+            : node,
+    );
+    return propagateAfterNewVersion(next, connections, nodeId);
+}
+
+export function applyAdoptStale(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string): CanvasNodeData[] {
+    const target = nodes.find((node) => node.id === nodeId);
+    const toonflow = target?.metadata?.toonflow;
+    const currentOutput = toonflow?.output;
+    if (!target || !toonflow || toonflow.status !== "stale" || currentOutput?.status !== "stale") return nodes;
+
+    const output: NodeOutput = {
+        ...currentOutput,
+        status: "approved",
+        upstreamVersions: computeUpstreamVersions(nodes, connections, nodeId),
+    };
+    return nodes.map<CanvasNodeData>((node) =>
+        node.id === nodeId
+            ? {
+                  ...node,
+                  metadata: {
+                      ...node.metadata,
+                      status: "success",
+                      errorDetails: undefined,
+                      toonflow: { ...toonflow, status: "approved", output },
+                  },
+              }
+            : node,
+    );
+}
+
+export function approveChain(nodes: CanvasNodeData[], connections: CanvasConnection[], rootIds?: string | string[]) {
+    const selectedIds = rootIds === undefined ? null : new Set(Array.isArray(rootIds) ? rootIds : [rootIds]);
+    let next = nodes;
+    let approvedCount = 0;
+
+    for (const node of nodes) {
+        const toonflow = node.metadata?.toonflow;
+        if (selectedIds && !selectedIds.has(node.id)) continue;
+        if (!toonflow || !isGeneratableKind(toonflow.kind) || toonflow.status !== "review" || toonflow.output?.status !== "review") continue;
+        next = applyApprove(next, connections, node.id);
+        approvedCount += 1;
+    }
+
+    return { nodes: next, approvedCount };
+}
+
+export function buildTextCascadeGraph(nodes: CanvasNodeData[], connections: CanvasConnection[]) {
+    const textNodes = nodes.filter((node) => {
+        const kind = node.metadata?.toonflow?.kind;
+        return kind ? isGeneratableKind(kind) : false;
+    });
+    const nodeIds = new Set(textNodes.map((node) => node.id));
+    const kinds: Record<string, ToonflowNodeKind> = {};
+    for (const node of textNodes) {
+        kinds[node.id] = node.metadata!.toonflow!.kind;
+    }
+
+    return {
+        nodes: graphNodes(textNodes),
+        edges: graphEdges(connections).filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to)),
+        kinds,
+    };
 }

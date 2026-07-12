@@ -27,7 +27,19 @@ const statusLabel: Record<ToonflowNodeStageStatus, string> = {
 
 const actionableKinds = new Set(["script", "space-contract", "storyboard-table", "shot-contract", "action-contract"]);
 
-export function ToonflowNodeContent({ node, onGenerate, onApprove }: { node: CanvasNodeData; onGenerate?: (nodeId: string) => void; onApprove?: (nodeId: string) => void }) {
+type ToonflowNodeContentProps = {
+    node: CanvasNodeData;
+    cascadeLocked?: boolean;
+    onGenerate?: (nodeId: string) => void;
+    onRegenerate?: (nodeId: string) => void;
+    onApprove?: (nodeId: string) => void;
+    onEdit?: (nodeId: string) => void;
+    onCascade?: (nodeId: string) => void;
+    onHistory?: (nodeId: string) => void;
+    onAdopt?: (nodeId: string) => void;
+};
+
+export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onAdopt }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const toonflow = node.metadata?.toonflow;
@@ -110,11 +122,49 @@ export function ToonflowNodeContent({ node, onGenerate, onApprove }: { node: Can
                 </div>
             ) : null}
 
-            {isActionable && ["empty", "failed", "stale", "review", "generating"].includes(toonflow.status) ? (
-                <div className="mt-2 flex justify-end gap-2" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+            {isActionable ? (
+                <div className="mt-2 flex flex-wrap justify-end gap-2" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                    {toonflow.status === "approved" && toonflow.kind !== "storyboard-table" ? (
+                        <Button
+                            size="small"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onEdit?.(node.id);
+                            }}
+                        >
+                            编辑
+                        </Button>
+                    ) : null}
+                    {toonflow.status === "approved" ? (
+                        <Button
+                            size="small"
+                            type="primary"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onCascade?.(node.id);
+                            }}
+                        >
+                            向下重生成
+                        </Button>
+                    ) : null}
+                    {toonflow.status === "approved" && toonflow.history?.length ? (
+                        <Button
+                            size="small"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onHistory?.(node.id);
+                            }}
+                        >
+                            历史
+                        </Button>
+                    ) : null}
                     {toonflow.status === "review" ? (
                         <Button
                             size="small"
+                            disabled={cascadeLocked}
                             onClick={(event) => {
                                 event.stopPropagation();
                                 onApprove?.(node.id);
@@ -126,18 +176,45 @@ export function ToonflowNodeContent({ node, onGenerate, onApprove }: { node: Can
                     {toonflow.status === "review" ? (
                         <Button
                             size="small"
+                            disabled={cascadeLocked}
                             onClick={(event) => {
                                 event.stopPropagation();
-                                onGenerate?.(node.id);
+                                (onRegenerate ?? onGenerate)?.(node.id);
                             }}
                         >
                             重生成
                         </Button>
                     ) : null}
-                    {["empty", "failed", "stale"].includes(toonflow.status) ? (
+                    {toonflow.status === "stale" ? (
                         <Button
                             size="small"
                             type="primary"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                (onRegenerate ?? onGenerate)?.(node.id);
+                            }}
+                        >
+                            重生成
+                        </Button>
+                    ) : null}
+                    {toonflow.status === "stale" ? (
+                        <Button
+                            size="small"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onAdopt?.(node.id);
+                            }}
+                        >
+                            沿用
+                        </Button>
+                    ) : null}
+                    {["empty", "failed"].includes(toonflow.status) ? (
+                        <Button
+                            size="small"
+                            type="primary"
+                            disabled={cascadeLocked}
                             onClick={(event) => {
                                 event.stopPropagation();
                                 onGenerate?.(node.id);

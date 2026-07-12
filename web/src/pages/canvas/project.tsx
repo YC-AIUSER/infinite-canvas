@@ -43,8 +43,12 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
+import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
+import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
-import { applyApprove, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
+import { runCascade } from "@/lib/toonflow/cascade";
+import { cascadeOrder } from "@/lib/toonflow/state-machine";
 import { skillCards } from "@/pages/skills/skills-data";
 import { buildSkillFlowOps } from "@/lib/canvas/skill-flow";
 import {
@@ -91,6 +95,15 @@ type CanvasGenerationRequest = {
     originNodeId: string;
     runningNodeId: string;
     controller: AbortController;
+};
+
+type ToonflowCascadeProgress = {
+    phase: "running" | "review";
+    current: number;
+    total: number;
+    nodeIds: string[];
+    reviewNodeIds: string[];
+    cancelling: boolean;
 };
 
 const VIDEO_NODE_MAX_WIDTH = 420;
@@ -324,6 +337,10 @@ function InfiniteCanvasPage() {
     const [superResolveNodeId, setSuperResolveNodeId] = useState<string | null>(null);
     const [angleNodeId, setAngleNodeId] = useState<string | null>(null);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
+    const [toonflowEditNodeId, setToonflowEditNodeId] = useState<string | null>(null);
+    const [toonflowHistoryNodeId, setToonflowHistoryNodeId] = useState<string | null>(null);
+    const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
+    const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
@@ -344,6 +361,8 @@ function InfiniteCanvasPage() {
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
     const skillInsertedRef = useRef(false);
+    const cascadeCancelledRef = useRef(false);
+    const cascadeRunningRef = useRef(false);
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -676,6 +695,8 @@ function InfiniteCanvasPage() {
     const superResolveNode = superResolveNodeId ? nodeById.get(superResolveNodeId) || null : null;
     const angleNode = angleNodeId ? nodeById.get(angleNodeId) || null : null;
     const previewNode = previewNodeId ? nodeById.get(previewNodeId) || null : null;
+    const toonflowEditNode = toonflowEditNodeId ? nodeById.get(toonflowEditNodeId) || null : null;
+    const toonflowHistoryNode = toonflowHistoryNodeId ? nodeById.get(toonflowHistoryNodeId) || null : null;
     const hasMultipleSelectedNodes = selectedNodeIds.size > 1;
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
     const batchChildCountById = useMemo(() => {
@@ -2421,14 +2442,14 @@ function InfiniteCanvasPage() {
         generateNodeRef.current = handleGenerateNode;
     }, [handleGenerateNode]);
 
-    const handleToonflowGenerate = useCallback(
-        async (nodeId: string) => {
+    const runToonflowNodeGeneration = useCallback(
+        async (nodeId: string): Promise<{ ok: boolean; error?: string }> => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-            if (!sourceNode?.metadata?.toonflow) return;
+            if (!sourceNode?.metadata?.toonflow) return { ok: false, error: "未找到 Toonflow 节点" };
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, "text");
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
-                return;
+                return { ok: false, error: "请先完成 AI 配置" };
             }
 
             const { finalPrompt, washHits } = buildToonflowGeneration(nodesRef.current, connectionsRef.current, nodeId);
@@ -2468,8 +2489,9 @@ function InfiniteCanvasPage() {
                 });
                 const error = resultNode.metadata?.toonflow?.status === "failed" ? resultNode.metadata.toonflow.output?.error : undefined;
                 if (error) message.error(error);
+                return error ? { ok: false, error } : { ok: true };
             } catch (error) {
-                if (isGenerationCanceled(error)) return;
+                if (isGenerationCanceled(error)) return { ok: false, error: "生成已取消" };
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
                 setNodes((prev) => {
@@ -2477,12 +2499,20 @@ function InfiniteCanvasPage() {
                     nodesRef.current = next;
                     return next;
                 });
+                return { ok: false, error: errorDetails };
             } finally {
                 finishGenerationRequest(nodeId, controller);
                 setRunningNodeId(null);
             }
         },
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
+    const handleToonflowGenerate = useCallback(
+        async (nodeId: string) => {
+            await runToonflowNodeGeneration(nodeId);
+        },
+        [runToonflowNodeGeneration],
     );
 
     const handleToonflowApprove = useCallback((nodeId: string) => {
@@ -2492,6 +2522,115 @@ function InfiniteCanvasPage() {
             return next;
         });
     }, []);
+
+    const handleToonflowEditSave = useCallback((nodeId: string, text: string) => {
+        setNodes((prev) => {
+            const next = applyEditSave(prev, connectionsRef.current, nodeId, text);
+            nodesRef.current = next;
+            return next;
+        });
+        setToonflowEditNodeId(null);
+    }, []);
+
+    const handleToonflowRollback = useCallback((nodeId: string, version: number) => {
+        setNodes((prev) => {
+            const next = applyRollback(prev, connectionsRef.current, nodeId, version);
+            nodesRef.current = next;
+            return next;
+        });
+        setToonflowHistoryNodeId(null);
+    }, []);
+
+    const handleToonflowAdopt = useCallback((nodeId: string) => {
+        setNodes((prev) => {
+            const next = applyAdoptStale(prev, connectionsRef.current, nodeId);
+            nodesRef.current = next;
+            return next;
+        });
+    }, []);
+
+    const handleCancelToonflowCascade = useCallback(() => {
+        cascadeCancelledRef.current = true;
+        setToonflowCascadeProgress((current) => (current?.phase === "running" ? { ...current, cancelling: true } : current));
+    }, []);
+
+    const handleToonflowCascade = useCallback(
+        async (nodeId: string) => {
+            if (cascadeRunningRef.current) return;
+            const graph = buildTextCascadeGraph(nodesRef.current, connectionsRef.current);
+            let orderedIds: string[];
+            try {
+                orderedIds = cascadeOrder(graph.nodes, graph.edges, nodeId);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "级联拓扑计算失败");
+                return;
+            }
+            // 根节点本体不重生成——"向下重生成"的核心场景是用户刚编辑/验收完根节点让下游跟上;
+            // 若把根也重跑,用户的手工修改会被 AI 覆盖。
+            const nodeIds = orderedIds.filter((id) => id !== nodeId);
+            if (!nodeIds.length) {
+                message.info("该节点没有可级联的下游文本节点");
+                return;
+            }
+
+            cascadeRunningRef.current = true;
+            cascadeCancelledRef.current = false;
+            setCascadeLockedNodeIds(new Set(orderedIds));
+            setToonflowCascadeProgress({ phase: "running", current: 1, total: nodeIds.length, nodeIds, reviewNodeIds: [], cancelling: false });
+
+            try {
+                const result = await runCascade({
+                    ...graph,
+                    rootId: nodeId,
+                    executor: async (currentNodeId) => (currentNodeId === nodeId ? { ok: true } : runToonflowNodeGeneration(currentNodeId)),
+                    isCancelled: () => cascadeCancelledRef.current,
+                    confirmCostGate: async () => true,
+                    onNodeStart: (currentNodeId) => {
+                        if (currentNodeId === nodeId) return;
+                        const current = nodeIds.indexOf(currentNodeId) + 1;
+                        setToonflowCascadeProgress((progress) => (progress?.phase === "running" ? { ...progress, current } : progress));
+                    },
+                });
+
+                const completedCount = result.completed.filter((id) => id !== nodeId).length;
+                if (result.cancelled) {
+                    setToonflowCascadeProgress(null);
+                    message.info(`级联已取消，已完成 ${completedCount} 个节点`);
+                    return;
+                }
+
+                const reviewNodeIds = nodeIds.filter((currentNodeId) => nodesRef.current.find((node) => node.id === currentNodeId)?.metadata?.toonflow?.status === "review");
+                if (reviewNodeIds.length >= 2) {
+                    setToonflowCascadeProgress({ phase: "review", current: nodeIds.length, total: nodeIds.length, nodeIds, reviewNodeIds, cancelling: false });
+                } else {
+                    setToonflowCascadeProgress(null);
+                }
+
+                if (result.failed.length) {
+                    message.warning(`级联完成：${completedCount} 个成功，${result.failed.length} 个失败`);
+                } else {
+                    message.success(`级联重生成完成，共 ${completedCount} 个节点`);
+                }
+            } catch (error) {
+                setToonflowCascadeProgress(null);
+                message.error(error instanceof Error ? error.message : "级联重生成失败");
+            } finally {
+                cascadeRunningRef.current = false;
+                cascadeCancelledRef.current = false;
+                setCascadeLockedNodeIds(new Set());
+            }
+        },
+        [message, runToonflowNodeGeneration],
+    );
+
+    const handleApproveToonflowChain = useCallback(() => {
+        const reviewNodeIds = toonflowCascadeProgress?.phase === "review" ? toonflowCascadeProgress.reviewNodeIds : [];
+        const result = approveChain(nodesRef.current, connectionsRef.current, reviewNodeIds);
+        nodesRef.current = result.nodes;
+        setNodes(result.nodes);
+        setToonflowCascadeProgress(null);
+        message.success(`已通过 ${result.approvedCount} 个节点`);
+    }, [message, toonflowCascadeProgress]);
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
