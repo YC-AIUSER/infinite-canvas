@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toonflow 生产画布 · 全流程方法论生成能力 — Design Doc</title>
+<style>
+:root{--ivory:#FAF9F5;--slate:#141413;--clay:#D97757;--oat:#E3DACC;--olive:#788C5D;--rust:#B04A3F;--white:#FFF;--gray-100:#F0EEE6;--gray-300:#D1CFC5;--gray-500:#87867F;--gray-700:#3D3D3A;--warning:#C78E3F;--danger:#B04A4A;--info:#5C7CA3;--serif:ui-serif,Georgia,"Noto Serif SC","Source Han Serif SC",serif;--sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--radius:12px;--border:1.5px solid var(--gray-300)}
+*{box-sizing:border-box}
+body{margin:0;padding:56px 32px 120px;background:var(--ivory);color:var(--gray-700);font-family:var(--sans);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.page{max-width:1000px;margin:0 auto}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gray-500);margin-bottom:12px}
+h1{font-family:var(--serif);font-weight:500;font-size:34px;line-height:1.15;color:var(--slate);letter-spacing:-.01em;margin:0 0 16px}
+.lede{font-size:17px;color:var(--gray-500);max-width:760px;margin:0 0 40px}
+.prompt-box{background:var(--gray-100);border:var(--border);border-radius:var(--radius);padding:16px 20px;font-size:14px;color:var(--gray-700);margin-bottom:40px}
+.prompt-box .label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-500);display:block;margin-bottom:6px}
+.summary-band{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:48px}
+@media(max-width:720px){.summary-band{grid-template-columns:repeat(2,1fr)}}
+.stat-card{background:var(--white);border:var(--border);border-radius:var(--radius);padding:20px 22px 18px}
+.stat-card.warn{border-left:4px solid var(--clay);padding-left:19px}
+.stat-num{font-family:var(--serif);font-size:40px;font-weight:500;line-height:1;color:var(--slate);margin-bottom:8px}
+.stat-label{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-500)}
+section{margin-bottom:52px}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+.sec-head .num{font-family:var(--mono);font-size:12px;background:var(--oat);color:var(--slate);padding:3px 9px;border-radius:8px}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:24px;color:var(--slate);letter-spacing:-.01em;margin:0}
+.sec-intro{font-size:14px;color:var(--gray-500);max-width:760px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--white);border:var(--border);border-radius:var(--radius);padding:20px 22px;box-shadow:0 1px 2px rgba(20,20,19,.06)}
+.card.chosen{border:2px solid var(--olive)}
+.card .role{font-size:12px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--clay);margin-bottom:4px}
+.card h3{font-size:17px;font-weight:500;margin:0 0 8px;color:var(--slate)}
+.card p{margin:0 0 8px;font-size:13.5px;color:var(--gray-700)}
+table.data{width:100%;border-collapse:separate;border-spacing:0;background:var(--white);border:var(--border);border-radius:var(--radius);overflow:hidden}
+table.data thead th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-500);background:var(--gray-100);padding:11px 12px;border-bottom:1px solid var(--gray-300)}
+table.data tbody td{padding:11px 12px;border-bottom:1px solid var(--gray-100);font-size:13.5px;color:var(--gray-700);vertical-align:top}
+table.data tbody tr:last-child td{border-bottom:none}
+.table-wrap{overflow-x:auto}
+.tag{display:inline-block;font-family:var(--mono);font-size:11px;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;color:var(--gray-700)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;color:var(--white)}
+.badge.green{background:var(--olive)}.badge.orange{background:var(--warning)}.badge.red{background:var(--danger)}.badge.blue{background:var(--info)}.badge.gray{background:var(--gray-500)}
+.pill{font-family:var(--mono);font-size:12px;color:var(--clay);background:var(--oat);padding:2px 8px;border-radius:4px}
+.milestones{display:flex;flex-direction:column}
+.milestone{display:grid;grid-template-columns:96px 28px 1fr;gap:0 18px}
+.milestone .when{text-align:right;font-family:var(--mono);font-size:12px;color:var(--gray-500);padding-top:4px}
+.milestone .dot-col{display:flex;flex-direction:column;align-items:center}
+.milestone .dot{width:14px;height:14px;border-radius:50%;background:var(--white);border:3px solid var(--clay);margin-top:4px;flex-shrink:0}
+.milestone .line{width:2px;flex:1;background:var(--gray-300);margin:4px 0}
+.milestone:last-child .line{display:none}
+.milestone .body{padding-bottom:28px}
+.milestone .body h3{font-family:var(--serif);font-weight:500;font-size:18px;color:var(--slate);margin:0 0 4px}
+.milestone .body p{font-size:14px;color:var(--gray-500);margin:0 0 10px;max-width:680px}
+.highlights{list-style:none;margin:0;padding:0}
+.highlights li{position:relative;padding:0 0 13px 26px;font-size:14.5px;color:var(--gray-700)}
+.highlights li::before{content:"";position:absolute;left:6px;top:8px;width:7px;height:7px;border-radius:2px;background:var(--clay)}
+.highlights li strong{color:var(--slate);font-weight:600}
+details{background:var(--white);border:var(--border);border-radius:var(--radius);margin-bottom:10px;overflow:hidden}
+details summary{padding:14px 20px;font-weight:500;font-size:15px;color:var(--slate);cursor:pointer;list-style:none}
+details summary::before{content:"\25B6";font-size:10px;color:var(--clay);margin-right:10px;display:inline-block;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+details .detail-body{padding:0 20px 16px;font-size:14px;color:var(--gray-700)}
+pre{background:var(--gray-100);border:1px solid var(--gray-300);border-radius:8px;padding:16px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--slate)}
+code{font-family:var(--mono);font-size:13px;color:var(--clay);background:var(--oat);padding:1px 6px;border-radius:4px}
+pre code{background:none;padding:0;color:inherit}
+blockquote{margin:0;padding:16px 20px;background:var(--oat);border-left:4px solid var(--clay);border-radius:0 var(--radius) var(--radius) 0;font-size:15px;color:var(--slate)}
+footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--gray-300);font-size:13px;color:var(--gray-500)}
+@media(max-width:640px){body{padding:32px 16px 64px}h1{font-size:26px}.summary-band{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Design Doc · infinite-canvas / Toonflow · /office-hours · 2026-07-12</div>
+  <h1>Toonflow 生产画布 — 全流程方法论生成能力</h1>
+  <p class="lede">把一键生成背后的黑盒摊开成 14 个方法论节点,逐节点生成、七态流转、任意层修改后向下重生成。产品命题:<strong style="color:var(--slate)">从模板复读机到自己的片子</strong>——用户不是获得控制权,是获得一个不让他犯错的流程。</p>
+
+  <div class="prompt-box">
+    <span class="label">Status</span>
+    DRAFT · Mode: Startup(B 路线,工具即商品) · 方案 B(创始人拍板) · 经 3 轮对抗审查(5→6.5→8/10,27 项问题修复) · Codex 冷读交叉检验 · canonical 文件:<code>~/.gstack/projects/basketikun-infinite-canvas/Administrator-main-design-20260712-103217.md</code>
+  </div>
+
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">14</div><div class="stat-label">节点全接生成</div></div>
+    <div class="stat-card"><div class="stat-num">5</div><div class="stat-label">实施阶段(1/1.5/2/3/4)</div></div>
+    <div class="stat-card"><div class="stat-num">8/10</div><div class="stat-label">对抗评审终分</div></div>
+    <div class="stat-card warn"><div class="stat-num">14d</div><div class="stat-label">P4 后置验证时限</div></div>
+  </div>
+
+  <section>
+    <div class="sec-head"><span class="num">01</span><h2>问题与证据</h2></div>
+    <ul class="highlights">
+      <li><strong>真问题 = 支配度</strong> — 粗版一键生成的片子能发能卖,但客户"只能生成跟我模板类似的东西,无法根据自己的想法来做细微调整"(创始人转述客户原话,全场最锋利的一句)。</li>
+      <li><strong>付费证据</strong> — 有具体的人愿付费买培训/代运营(服务证据,非工具订阅证据;工具本身零直接付费验证,见 P4)。</li>
+      <li><strong>外部佐证</strong> — 全网对一键生成的一致抱怨:角色漂移/崩脸/每镜重摇 15-20 次;行业共识"瓶颈是控制不是生成"。</li>
+      <li><strong>竞争现实</strong> — 节点画布已是拥挤品类(PixVerse Canvas、Flora、Opone、火山剧创 99 元/年);功能对齐必输,方法论编码是唯一胜负手。</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">02</span><h2>四条前提(已确认)</h2></div>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th style="width:90px">前提</th><th>内容</th><th style="width:120px">状态</th></tr></thead>
+      <tbody>
+        <tr><td><strong>P1 问题</strong></td><td>客户被模板锁死,要的是各层可细微调整且质量不崩</td><td><span class="badge green">已同意</span></td></tr>
+        <tr><td><strong>P2 差异化</strong></td><td>壁垒是把导演纪律(合同/九宫格 1:1/洗词)做成产品默认值,不是画布本身</td><td><span class="badge green">已同意</span></td></tr>
+        <tr><td><strong>P3 工程</strong></td><td>全复用现有管线;视频=故事板格子图第一参考+资产卡锚点+prompt 1:1;不做首尾帧</td><td><span class="badge orange">Codex 挑战被否决,保持原样</span></td></tr>
+        <tr><td><strong>P4 验证</strong></td><td>后置门槛带时限:阶段 4 验收后 14 天内,内测网页可自助访问 + 3 个真实创作者不帮忙跑通;失败则回退"工具+陪跑"</td><td><span class="badge green">已同意(修订版)</span></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">03</span><h2>14 节点规格</h2></div>
+    <p class="sec-intro">生成模板均从 ai-short-drama skill 抽取(唯一方法论事实源);#3 锚点卡模板本期新写。阶段列对应第 05 节。</p>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>#</th><th>节点</th><th>产出</th><th>生成方式</th><th>阶段</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>项目/剧集</td><td>生产上下文</td><td>表单(结构化节点)</td><td>1</td></tr>
+        <tr><td>2</td><td>剧本</td><td>分镜级剧本(按戏剧节拍切分)</td><td>文本生成 · S1 模板</td><td>1</td></tr>
+        <tr><td>3</td><td>资产库</td><td>角色/场景/道具锚点卡池</td><td>img2img+上传;模板本期新写</td><td>2</td></tr>
+        <tr><td>4</td><td>空间合同</td><td>空间规则+每镜 IN/OUT 清单</td><td>文本生成(点位图交互后置 Q6)</td><td>1</td></tr>
+        <tr><td>5</td><td>分镜表</td><td>镜头清单 <strong>+ 段划分(稳定 segmentId)</strong></td><td>文本生成 · 三层分镜法</td><td>1</td></tr>
+        <tr><td>6</td><td>镜头合同</td><td>每镜 6 字段(含落点)</td><td>文本生成</td><td>1</td></tr>
+        <tr><td>7</td><td>动作合同</td><td>每镜动作链(起因→后果→结束状态)</td><td>文本生成</td><td>1</td></tr>
+        <tr><td>8</td><td>故事板页</td><td>该段 N 格黑白故事板(格子=镜头)· <strong>每段一实例</strong></td><td>img2img 多参考,单行 prompt</td><td>2</td></tr>
+        <tr><td>9</td><td>分镜图/首帧</td><td>该段彩色首帧组 · <strong>每段一实例</strong></td><td>img2img"只上色不改构图"+定点修</td><td>2</td></tr>
+        <tr><td>10</td><td>过审</td><td>洗词报告+词表面板</td><td><strong>洗词=所有生成节点的内联前置步骤</strong>;#10 为报告面板,不在数据流上</td><td>1</td></tr>
+        <tr><td>11</td><td>视频工作台</td><td>段视频(12-15s)多版本 · <strong>每段一实例</strong></td><td>现有 video.ts 管线,九宫格直出;<strong>单镜修改 v1=改格后整段重生成</strong></td><td>3</td></tr>
+        <tr><td>12</td><td>接缝检查</td><td>前后段连播+问题勾选</td><td>播放器(结构化节点)</td><td>3</td></tr>
+        <tr><td>13</td><td>音频混音</td><td>逐句配音试听(<strong>本期不混轨</strong>)</td><td>现有音频生成通道</td><td>4</td></tr>
+        <tr><td>14</td><td>成片/导出</td><td>顺序连播预览+逐段打包下载(<strong>本期不拼接</strong>)</td><td>播放器+zip(结构化节点)</td><td>4</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">04</span><h2>核心机制</h2></div>
+    <details open>
+      <summary>七态状态机(继承现有七态改造)</summary>
+      <div class="detail-body">
+        <pre>empty → generating → review → approved
+          ↓ 失败        ↑ 重生成/编辑退回      ↓ 直接或间接上游出新版本
+        failed(重试)                        stale
+skipped:用户显式跳过,下游视为透明;可取消回 empty</pre>
+        <ul class="highlights">
+          <li><strong>approved 后编辑</strong>:保存即 version+1、保持 approved(编辑者即验收者),触发传播。</li>
+          <li><strong>失效传播</strong>:触发事件=新版本产生(生成完成/编辑保存),每版本传播一次;<strong>验收(review→approved)不触发</strong>;BFS 每跳带版本守卫(快照已含该版本者跳过)。</li>
+          <li><strong>级联重生成</strong>:拓扑序逐节点,中间节点自动进 review 并作为下游输入,链尾「全链通过」批量验收。</li>
+          <li><strong>结构化节点</strong>(#1/#12/#14):empty→review(编辑)→approved(保存,触发传播);改 #1 全图 stale 是预期行为,可逐个"沿用旧产出"豁免。</li>
+        </ul>
+      </div>
+    </details>
+    <details>
+      <summary>段建模与生命周期</summary>
+      <div class="detail-body">
+        <p>60s≈4 段,分段决策落在分镜表(#5,按换场景/换时间自动划段,review 可调)。#8/#9/#11 每段一实例,复用现有 batch 子节点机制。段以<strong>稳定 segmentId</strong> 为键防重排错绑;#5 新版本 approved 时:存活段标 stale、新段建 empty 实例、消失段<strong>归档</strong>(保留产物,用户确认后删)。</p>
+      </div>
+    </details>
+    <details>
+      <summary>nodeOutput schema(阶段 1 首个交付物)</summary>
+      <div class="detail-body">
+        <pre>type NodeOutput = {
+  nodeId, kind, version,            // 版本历史保留
+  status: empty|generating|review|approved|failed|stale|skipped,
+  segmentIndex?,                    // 段实例节点必填
+  payload: { text? table? imageKeys? videoKeys? audioKeys? },
+  upstreamVersions: Record&lt;nodeId, version&gt;,   // stale 判定快照
+  error?, generatedAt }</pre>
+        <p>媒体走现有 file-storage(多版本=多 storageKey);文本历史以 NodeOutput[] 存节点 metadata。</p>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">05</span><h2>实施阶段(方案 B,支配度闭环提前至 1.5)</h2></div>
+    <div class="milestones">
+      <div class="milestone"><div class="when">阶段 1</div><div class="dot-col"><div class="dot"></div><div class="line"></div></div><div class="body"><h3>文本生成骨架</h3><p>七态状态机 + schema + 失效传播 + 级联语义;剧本/空间合同/分镜表(含分段)/镜头合同/动作合同接生成;洗词内联+#10 面板。</p><div class="tags"><span class="tag">#2 #4 #5 #6 #7 #10</span></div></div></div>
+      <div class="milestone"><div class="when">阶段 1.5</div><div class="dot-col"><div class="dot" style="border-color:var(--olive)"></div><div class="line"></div></div><div class="body"><h3>支配度闭环(文本层)★ 第一个可演示 wedge</h3><p>approved 节点修改 → 下游 stale → 一键向下重生成;版本历史与对比回退 UI。P1 的最早兑现点。</p></div></div>
+      <div class="milestone"><div class="when">阶段 2</div><div class="dot-col"><div class="dot"></div><div class="line"></div></div><div class="body"><h3>视觉层</h3><p>资产库锚点卡池;故事板页多格图;首帧"只上色不改构图"+定点修+版本对比。</p><div class="tags"><span class="tag">#3 #8 #9</span></div></div></div>
+      <div class="milestone"><div class="when">阶段 3</div><div class="dot-col"><div class="dot"></div><div class="line"></div></div><div class="body"><h3>视频层(进入前必须关闭 Open Q1)</h3><p>九宫格直出+prompt 与格子 1:1+洗词前置;单镜修改=改格后整段重生成(段为原子产物,repair-tail 随拼接后置二期);接缝连播。</p><div class="tags"><span class="tag">#11 #12</span></div></div></div>
+      <div class="milestone"><div class="when">阶段 4</div><div class="dot-col"><div class="dot"></div></div><div class="body"><h3>收尾与 Agent 注入</h3><p>配音生成(降级)、成片预览与打包(降级);canvas-agent 注入方法论(含禁止建议首尾帧)。验收后 14 天内完成 P4 验证。</p><div class="tags"><span class="tag">#13 #14 agent</span></div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">06</span><h2>方案对比</h2></div>
+    <div class="grid">
+      <div class="card"><div class="role">Approach A</div><h3>单镜精修环</h3><p>四节点最小闭环,直击支配度付费动机。</p><span class="tag">Effort S</span> <span class="tag">Risk 低</span> <span class="badge gray">备选</span></div>
+      <div class="card chosen"><div class="role">Approach B</div><h3>全流程方法论画布</h3><p>14 节点全接生成,方法论完整编码,验证后移。</p><span class="tag">Effort XL · CC 2-4 周</span> <span class="tag">Risk 高</span> <span class="badge green">创始人拍板</span></div>
+      <div class="card"><div class="role">Approach C</div><h3>一键→画布连续体</h3><p>一键产出展开进画布,现有客户变首批用户。(Claude 原推荐)</p><span class="tag">Effort M</span> <span class="tag">Risk 中</span> <span class="badge gray">演化路径</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">07</span><h2>风险与悬置问题</h2></div>
+    <ul class="highlights">
+      <li><strong>P3 无退路(风险接受,无缓解)</strong> — Codex 的可证伪指标(修改成功率≥70%/单镜重摇≤3)与升级路径被创始人否决;若合同层控制不足以支撑"改动作落点"类需求,将在阶段 3 撞墙。由创始人明示承担。</li>
+      <li><strong>验证后移</strong> — 2-4 周无外部反馈;缓解:The Assignment 先行 + P4 的 14 天时限与回退路径。</li>
+      <li><strong>付费证据与产品形态错位</strong> — 付费意向在服务,产品是工具;P4 验证失败即回退"工具+陪跑"。</li>
+      <li><strong>Open Q1(阶段 3 前必须关闭)</strong> — 部署平台 + 外部用户 key 方案(自带 or 代理计费;代理有滥用/成本失控风险);<strong>CORS 转发不可复用</strong>(现有 /relay/ 是 Vite dev 插件),需新建 serverless/edge 函数。</li>
+      <li><strong>其余悬置</strong> — 成本模型(Q2)、粗版对接(Q3,C 期)、词表维护(Q4,二期)、拼接导出(Q5,二期)、点位图交互(Q6,后置)。</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">08</span><h2>The Assignment(本周,不写代码)</h2></div>
+    <blockquote>把画布静态版拿给三个人看——想付费买培训的那位客户 + 两位粗版一键生成的客户,只问一个问题:<br><br><strong>"你上次用一键生成,想改但改不了的,是哪一层——剧情/剧本?分镜/镜头顺序?画面/首帧?还是视频动作?"</strong><br><br>三个答案原话记下来,直接决定节点接生成的先后顺序。如果三个人都说"没想改过什么"——P1 需要重审,先别开工。</blockquote>
+  </section>
+
+  <footer>Generated by Claude · /office-hours · 2026-07-12 · canonical: ~/.gstack/projects/basketikun-infinite-canvas/Administrator-main-design-20260712-103217.md · 下游:/plan-ceo-review → /plan-eng-review → codex 派工</footer>
+
+</div>
+</body>
+</html>
