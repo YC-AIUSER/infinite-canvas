@@ -11,7 +11,7 @@ import {
     buildStoryboardTablePrompt,
     washPrompt,
 } from "./prompts";
-import { NODE_STATUSES, StoryboardRowSchema, VERSION_LIMIT_TEXT, migrateToonflowStatus, parseModelJson, type NodeOutput, type NodeStatus } from "./schema";
+import { NODE_STATUSES, StoryboardRowSchema, VERSION_LIMIT_TEXT, migrateToonflowStatus, parseModelJson, type NodeOutput, type NodeStatus, type StoryboardRow } from "./schema";
 import { assignIds, validateSegmentRows } from "./segments";
 import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, rollbackToVersion, saveEditedNode, type GraphNode } from "./state-machine";
 

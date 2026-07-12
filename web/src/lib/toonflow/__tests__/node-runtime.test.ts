@@ -124,12 +124,12 @@ describe("applyGenerationSuccess", () => {
         expect(result.metadata?.toonflow?.output?.error).toContain("JSON 解析失败");
     });
 
-    it("分镜校验出现 error 级问题时进入 failed", () => {
+    it("分镜校验出现 error 级问题时进入 failed(跨段重复 shotId)", () => {
         const target = node("storyboard", "storyboard-table", "", "generating");
-        const raw = JSON.stringify([storyboardRow({ shotNo: 2 })]);
+        const raw = JSON.stringify([storyboardRow({ segmentId: "seg-a", shotId: "dup" }), storyboardRow({ segmentId: "seg-b", shotId: "dup" })]);
         const result = applyGenerationSuccess(target, raw, []);
         expect(result.metadata?.toonflow?.status).toBe("failed");
-        expect(result.metadata?.toonflow?.output?.error).toContain("shotNo");
+        expect(result.metadata?.toonflow?.output?.error).toContain("重复");
     });
 
     it("模型输出全局连续 shotNo 时按段自动归一化(不再指望模型服从)", () => {
