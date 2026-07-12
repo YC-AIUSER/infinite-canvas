@@ -2481,12 +2481,13 @@ function InfiniteCanvasPage() {
                     if (!shouldRetryStoryboard) break;
                 }
                 const generationFailed = resultNode.metadata?.toonflow?.status === "failed";
-                setNodes((prev) => {
-                    let next = prev.map((node) => (node.id === nodeId ? resultNode : node));
-                    if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
-                    nodesRef.current = next;
-                    return next;
-                });
+                // 权威 ref+快照写入:级联串行背靠背调用时,函数式 setNodes 的 updater
+                // 可能尚未被 React 执行,下一节点基于 nodesRef 的准备快照会把本次结果覆盖
+                // (实测:级联中空间合同的"待验收"被分镜表的准备快照冲回"生成中")。
+                let next = nodesRef.current.map((node) => (node.id === nodeId ? resultNode : node));
+                if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                nodesRef.current = next;
+                setNodes(next);
                 const error = resultNode.metadata?.toonflow?.status === "failed" ? resultNode.metadata.toonflow.output?.error : undefined;
                 if (error) message.error(error);
                 return error ? { ok: false, error } : { ok: true };
@@ -2494,11 +2495,9 @@ function InfiniteCanvasPage() {
                 if (isGenerationCanceled(error)) return { ok: false, error: "生成已取消" };
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
-                setNodes((prev) => {
-                    const next = prev.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
-                    nodesRef.current = next;
-                    return next;
-                });
+                const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                nodesRef.current = next;
+                setNodes(next);
                 return { ok: false, error: errorDetails };
             } finally {
                 finishGenerationRequest(nodeId, controller);
@@ -2990,7 +2989,16 @@ function InfiniteCanvasPage() {
                             }
                             renderNodeContent={(contentNode) =>
                                 contentNode.metadata?.toonflow ? (
-                                    <ToonflowNodeContent node={contentNode} onGenerate={(nodeId) => void handleToonflowGenerate(nodeId)} onApprove={handleToonflowApprove} />
+                                    <ToonflowNodeContent
+                                        node={contentNode}
+                                        cascadeLocked={cascadeLockedNodeIds.has(contentNode.id)}
+                                        onGenerate={(nodeId) => void handleToonflowGenerate(nodeId)}
+                                        onApprove={handleToonflowApprove}
+                                        onEdit={setToonflowEditNodeId}
+                                        onCascade={(nodeId) => void handleToonflowCascade(nodeId)}
+                                        onHistory={setToonflowHistoryNodeId}
+                                        onAdopt={handleToonflowAdopt}
+                                    />
                                 ) : (
                                     <CanvasConfigNodePanel
                                         node={contentNode}
@@ -3126,6 +3134,35 @@ function InfiniteCanvasPage() {
                 <input ref={imageInputRef} type="file" accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
+
+                <ToonflowEditModal open={Boolean(toonflowEditNode)} node={toonflowEditNode} onSave={handleToonflowEditSave} onCancel={() => setToonflowEditNodeId(null)} />
+
+                <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
+
+                {toonflowCascadeProgress ? (
+                    <div className="fixed left-1/2 top-16 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-black/10 bg-white px-4 py-2 shadow-lg dark:border-white/15 dark:bg-neutral-900">
+                        {toonflowCascadeProgress.phase === "running" ? (
+                            <>
+                                <span className="text-sm">
+                                    级联重生成中(第 {toonflowCascadeProgress.current}/{toonflowCascadeProgress.total} 个)…
+                                </span>
+                                <Button size="small" danger disabled={toonflowCascadeProgress.cancelling} onClick={handleCancelToonflowCascade}>
+                                    {toonflowCascadeProgress.cancelling ? "取消中…" : "取消级联"}
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <span className="text-sm">级联完成,{toonflowCascadeProgress.reviewNodeIds.length} 个节点待验收</span>
+                                <Button size="small" type="primary" onClick={handleApproveToonflowChain}>
+                                    全链通过
+                                </Button>
+                                <Button size="small" onClick={() => setToonflowCascadeProgress(null)}>
+                                    稍后逐个验收
+                                </Button>
+                            </>
+                        )}
+                    </div>
+                ) : null}
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode!, crop)} /> : null}
 
