@@ -221,6 +221,19 @@ describe("状态动作与 hydrate", () => {
         expect(twice).toEqual(once);
         expect(twice[0]).toBe(once[0]);
     });
+
+    it("hydrate 同时迁移 output 与 history 内嵌的旧中文状态", () => {
+        const target = node("script", "script", "", "review");
+        Object.assign(target.metadata!.toonflow!, { status: "待验收" });
+        target.metadata!.toonflow!.output = { ...output(target.id, "script", 3, "review"), status: "待验收" as NodeStatus };
+        target.metadata!.toonflow!.history = [{ ...output(target.id, "script", 2, "approved"), status: "已通过" as NodeStatus }];
+        const result = hydrateToonflowProject([target]);
+        expect(result[0].metadata?.toonflow?.output?.status).toBe("review");
+        expect(result[0].metadata?.toonflow?.history?.[0].status).toBe("approved");
+        // 迁移后 output.status=review,approveNode(review -> approved) 不应再因中文非法状态报错
+        expect(() => applyApprove(result, [], target.id)).not.toThrow();
+        expect(applyApprove(result, [], target.id)[0].metadata?.toonflow?.status).toBe("approved");
+    });
 });
 
 describe("文本支配度闭环", () => {

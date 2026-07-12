@@ -9,8 +9,8 @@ import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audi
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
-import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { collectImageStorageKeys, deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
+import { collectMediaStorageKeys, deleteStoredMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -2557,7 +2557,8 @@ function InfiniteCanvasPage() {
             setNodes(preparedNodes);
             setRunningNodeId(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
-            const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
+            // C1: 上游版本快照必须在异步生成开始前捕获——生成期间上游若变化,晚捕获会把过期产物记成"基于新版本",绕过 stale 守卫。
+            const upstreamSnapshot = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
 
             try {
                 const resolvedReferences = await Promise.all(
@@ -2578,6 +2579,11 @@ function InfiniteCanvasPage() {
                     }),
                 );
                 const references = resolvedReferences.filter((reference): reference is ReferenceImage => Boolean(reference));
+                // C3: 构图锁等强制参考图任一读取失败必须中止,不得降级为文生图或仅凭资产卡(首帧只上色不改构图)。
+                const resolvedKeys = new Set(references.map((reference) => reference.storageKey));
+                if (generation.mandatoryKeys.some((key) => !resolvedKeys.has(key))) {
+                    throw new Error("构图锁参考图读取失败，已中止生成（首帧必须基于故事板页线稿）");
+                }
                 const failedReferenceCount = generation.referenceKeys.length - references.length;
                 if (failedReferenceCount) message.warning(`${failedReferenceCount} 张参考图读取失败`);
 
@@ -2586,15 +2592,26 @@ function InfiniteCanvasPage() {
                     : await requestGeneration(generationConfig, generation.finalPrompt, { signal: controller.signal }).then((items) => items[0]);
                 if (!image?.dataUrl) throw new Error("图像接口没有返回图片");
                 const uploaded = await uploadImage(image.dataUrl);
-                const upstreamVersions = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
-                const result = applyImageGenerationSuccess(preparedNode, [uploaded.storageKey], generation.washHits, upstreamVersions);
+
+                // C2: 生成期间该实例可能被归档/删除/重排/被新一轮生成接管,晚到结果不能整体覆盖当前节点(否则产生无根僵尸实例、丢失归档标记与新序号)。
+                const currentNode = nodesRef.current.find((node) => node.id === nodeId);
+                const currentToonflow = currentNode?.metadata?.toonflow;
+                if (!currentNode || currentToonflow?.archived || currentToonflow?.status !== "generating") {
+                    void deleteStoredImages([uploaded.storageKey]);
+                    message.warning("该实例在生成期间已变化，本次结果已丢弃");
+                    return;
+                }
+
+                const result = applyImageGenerationSuccess(currentNode, [uploaded.storageKey], generation.washHits, upstreamSnapshot);
                 const generationFailed = result.node.metadata?.toonflow?.status === "failed";
                 let next = nodesRef.current.map((node) => (node.id === nodeId ? result.node : node));
                 if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
                 nodesRef.current = next;
                 setNodes(next);
 
-                const orphaned = splitMediaKeysByStore(result.orphanedKeys);
+                // C4: 删除被裁历史的图前,排除仍被其他节点/副本引用的键(复制节点共享 storageKey,误删会让副本白屏)。
+                const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                const orphaned = splitMediaKeysByStore(result.orphanedKeys.filter((key) => !referencedKeys.has(key)));
                 try {
                     await Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]);
                 } catch {
@@ -2690,8 +2707,12 @@ function InfiniteCanvasPage() {
             const parentCard = isDerived && card.parentCardId
                 ? allCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character") ?? savedCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character")
                 : undefined;
-            if (isDerived && !parentCard?.storageKey) message.warning("父卡没有锚点图，衍生一致性可能漂移");
-            const referenceCard = card.cardType === "form" ? (card.storageKey ? card : undefined) : isDerived ? (parentCard?.storageKey ? parentCard : card.storageKey ? card : undefined) : card.storageKey ? card : undefined;
+            // M4: 衍生卡必须以父角色卡图为参考(创始人规则)——缺父图直接拦截,不降级为无参考生成(会漂移)。form 形态卡不受此限。
+            if (isDerived && !parentCard?.storageKey) {
+                message.warning(`请先为父角色卡${parentCard ? `「${parentCard.name}」` : ""}生成锚点图，衍生卡才能以它为参考`);
+                return undefined;
+            }
+            const referenceCard = card.cardType === "form" ? (card.storageKey ? card : undefined) : isDerived ? parentCard : card.storageKey ? card : undefined;
             const prompt = card.cardType === "form" ? buildAssetCardPrompt(card) : buildAssetCardPrompt(card, parentCard ? { name: parentCard.name, anchor: parentCard.anchor } : undefined);
             const { washed, hits } = washPrompt(prompt);
             if (hits.length) message.warning(`已自动软化 ${hits.length} 个避雷词`);
@@ -2727,7 +2748,9 @@ function InfiniteCanvasPage() {
         connectionsRef.current = next.connections;
         setNodes(next.nodes);
         setConnections(next.connections);
-        const mediaKeys = splitMediaKeysByStore(next.mediaKeys);
+        // C4: 排除删除后仍被其他节点/副本引用的键,避免误删共享 Blob。
+        const referencedKeys = new Set<string>([...collectImageStorageKeys(next.nodes), ...collectMediaStorageKeys(next.nodes)]);
+        const mediaKeys = splitMediaKeysByStore(next.mediaKeys.filter((key) => !referencedKeys.has(key)));
         await Promise.all([deleteStoredImages(mediaKeys.imageKeys), deleteStoredMedia(mediaKeys.mediaKeys)]);
     }, []);
 
@@ -3352,7 +3375,7 @@ function InfiniteCanvasPage() {
                 <Modal
                     title="定点修"
                     open={Boolean(toonflowRepairNodeId)}
-                    okText="开始生成"
+                    okText="确认生成（将调用 1 次图像生成）"
                     cancelText="取消"
                     onOk={() => {
                         const nodeId = toonflowRepairNodeId;

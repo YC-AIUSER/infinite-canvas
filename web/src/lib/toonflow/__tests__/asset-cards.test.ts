@@ -137,6 +137,11 @@ describe("AssetCardSchema", () => {
         expect(AssetCardSchema.safeParse({ cardId: "form-1", cardType: "form", name: "青龙形态", anchor: "青色龙鳞覆盖全身" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "bad", cardType: "vehicle", name: "车", anchor: "红色" }).success).toBe(false);
     });
+
+    it("拒绝把 dataUrl 写入资产卡 storageKey", () => {
+        expect(AssetCardSchema.safeParse({ ...cards[0], storageKey: "data:image/png;base64,AAAA" }).success).toBe(false);
+        expect(AssetCardSchema.safeParse({ ...cards[0], storageKey: "image:ok" }).success).toBe(true);
+    });
 });
 
 describe("validateAssetCards", () => {

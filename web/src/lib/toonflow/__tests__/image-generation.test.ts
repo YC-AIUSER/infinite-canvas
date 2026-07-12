@@ -157,6 +157,15 @@ describe("buildToonflowImageGeneration", () => {
         expect(result.finalPrompt).toContain("只改以下这一处：只改灯光");
     });
 
+    it("首帧把故事板页线稿标为强制参考,故事板页自身无强制参考", () => {
+        const keyframeNodes = baseNodes("keyframes");
+        keyframeNodes.push(node("storyboard-page", "storyboard-page", { imageKeys: ["image:storyboard"] }, "seg-a"));
+        // 首帧构图锁=故事板页线稿,必须进 mandatoryKeys(读取失败要中止,不能降级)
+        expect(buildToonflowImageGeneration(keyframeNodes, [], "target").mandatoryKeys).toEqual(["image:storyboard"]);
+        // 故事板页的资产卡只是可选锚点,不强制
+        expect(buildToonflowImageGeneration(baseNodes("storyboard-page"), [], "target").mandatoryKeys).toEqual([]);
+    });
+
     it("首帧缺少同段故事板页图时抛错", () => {
         expect(() => buildToonflowImageGeneration(baseNodes("keyframes"), [], "target")).toThrow("请先生成该段故事板页");
     });

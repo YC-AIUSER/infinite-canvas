@@ -139,6 +139,8 @@ export type ToonflowImageGeneration = {
     finalPrompt: string;
     washHits: Array<{ term: string; replacement: string }>;
     referenceKeys: string[];
+    /** 构图锁等硬约束参考图:任一读取失败必须中止生成,不得降级(首帧只上色不改构图)。 */
+    mandatoryKeys: string[];
     warnings: string[];
 };
 
@@ -206,6 +208,7 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
 
     let prompt: string;
     let referenceKeys: string[];
+    let mandatoryKeys: string[] = [];
     if (targetToonflow.kind === "storyboard-page") {
         if (!cards.length) warnings.push("无资产卡锚点,画面一致性可能漂移");
         prompt = buildStoryboardPagePrompt({ rows, shotContracts, actionContracts, spaceRules });
@@ -222,10 +225,12 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
         if (!storyboardKey) throw new Error("请先生成该段故事板页");
         prompt = buildKeyframesPrompt({ rows, anchors: cards.map((card) => formatAssetCard(card, parentNameById)), note });
         referenceKeys = [storyboardKey, ...assetKeys];
+        // 故事板页线稿是首帧的构图锁,读取失败必须中止:只上色不改构图,不能退化为文生图或仅凭资产卡。
+        mandatoryKeys = [storyboardKey];
     }
 
     const { washed, hits } = washPrompt(prompt);
-    return { finalPrompt: washed, washHits: hits, referenceKeys, warnings };
+    return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings };
 }
 
 function generationMeta(node: CanvasNodeData, _washHits: WashHit[]) {
@@ -481,6 +486,12 @@ function hydratedStatus(status: unknown): NodeStatus {
     return migrateToonflowStatus(typeof status === "string" ? status : "");
 }
 
+/** 迁移 output/history 内嵌的旧中文状态——否则 approveNode 等迁移守卫会在旧数据上收到非法状态报错。 */
+function migrateOutputStatus(output: NodeOutput): NodeOutput {
+    const migrated = hydratedStatus(output.status);
+    return migrated === output.status ? output : { ...output, status: migrated };
+}
+
 export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
     return nodes.map((node) => {
         const toonflow = node.metadata?.toonflow;
@@ -488,20 +499,27 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
         // 页面刷新/崩溃时 generating 无法恢复(文本生成无 provider taskId),降级为 failed 可重试。
         const migrated = hydratedStatus(toonflow.status);
         const status = migrated === "generating" ? "failed" : migrated;
-        if (status === toonflow.status) return node;
+        const output = toonflow.output ? migrateOutputStatus(toonflow.output) : toonflow.output;
+        const migratedHistory = toonflow.history?.map(migrateOutputStatus);
+        const historyChanged = Boolean(migratedHistory?.some((item, index) => item !== toonflow.history?.[index]));
+        if (status === toonflow.status && output === toonflow.output && !historyChanged) return node;
         return {
             ...node,
             metadata: {
                 ...node.metadata,
                 errorDetails: status === "failed" && migrated === "generating" ? "生成被中断(页面已刷新),请重试" : node.metadata?.errorDetails,
-                toonflow: { ...toonflow, status },
+                toonflow: { ...toonflow, status, output, history: historyChanged ? migratedHistory : toonflow.history },
             },
         };
     });
 }
 
-function appendTextHistory(history: NodeOutput[] | undefined, output: NodeOutput) {
-    return [...(history ?? []), output].slice(-VERSION_LIMIT_TEXT);
+const IMAGE_HISTORY_KINDS: ReadonlySet<ToonflowNodeKind> = new Set(["storyboard-page", "keyframes"]);
+
+/** 图像类节点历史上限 5、文本类 10——回退等路径复用此函数,避免图像误用文本上限累积超额版本。 */
+function appendHistory(history: NodeOutput[] | undefined, output: NodeOutput, kind: ToonflowNodeKind) {
+    const limit = IMAGE_HISTORY_KINDS.has(kind) ? VERSION_LIMIT_IMAGE : VERSION_LIMIT_TEXT;
+    return [...(history ?? []), output].slice(-limit);
 }
 
 export function applyAssetCardsSave(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, cards: AssetCard[]): CanvasNodeData[] {
@@ -528,7 +546,7 @@ export function applyAssetCardsSave(nodes: CanvasNodeData[], connections: Canvas
                       ...node.metadata,
                       status: "success",
                       errorDetails: undefined,
-                      toonflow: { ...toonflow, status, output, history: previous ? appendTextHistory(toonflow.history, previous) : toonflow.history },
+                      toonflow: { ...toonflow, status, output, history: previous ? appendHistory(toonflow.history, previous, toonflow.kind) : toonflow.history },
                   },
               }
             : node,
@@ -599,7 +617,7 @@ export function applyEditSave(nodes: CanvasNodeData[], connections: CanvasConnec
                       content: newText,
                       status: "success",
                       errorDetails: undefined,
-                      toonflow: { ...toonflow, status: output.status, output, history: appendTextHistory(toonflow.history, currentOutput) },
+                      toonflow: { ...toonflow, status: output.status, output, history: appendHistory(toonflow.history, currentOutput, toonflow.kind) },
                   },
               }
             : node,
@@ -624,7 +642,7 @@ export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnec
                       content: payloadContent(output.payload),
                       status: "success",
                       errorDetails: undefined,
-                      toonflow: { ...toonflow, status: output.status, output, history: appendTextHistory(toonflow.history, currentOutput) },
+                      toonflow: { ...toonflow, status: output.status, output, history: appendHistory(toonflow.history, currentOutput, toonflow.kind) },
                   },
               }
             : node,

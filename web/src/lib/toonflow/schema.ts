@@ -121,7 +121,11 @@ export const AssetCardSchema = z.object({
     name: z.string(),
     anchor: z.string(),
     parentCardId: z.string().optional(),
-    storageKey: z.string().optional(),
+    // 资产卡图片一律存储键,禁止 dataUrl 写入(与媒体键同规则,防导入数据把整图塞进画布持久化)。
+    storageKey: z
+        .string()
+        .refine((value) => !value.startsWith("data:"), { message: "资产卡图片必须使用存储键，禁止 dataUrl" })
+        .optional(),
 });
 
 export type AssetCard = z.infer<typeof AssetCardSchema>;
