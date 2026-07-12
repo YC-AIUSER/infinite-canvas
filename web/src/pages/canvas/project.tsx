@@ -9,7 +9,7 @@ import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audi
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
+import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
@@ -19,7 +19,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
-import { App, Button, Dropdown, Modal } from "antd";
+import { App, Button, Dropdown, Input, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
@@ -48,7 +48,7 @@ import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
-import { applyAdoptStale, applyApprove, applyAssetCardsSave, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore } from "@/lib/toonflow/node-runtime";
 import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
 import type { AssetCard } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
@@ -345,6 +345,8 @@ function InfiniteCanvasPage() {
     const [toonflowEditNodeId, setToonflowEditNodeId] = useState<string | null>(null);
     const [toonflowAssetCardsNodeId, setToonflowAssetCardsNodeId] = useState<string | null>(null);
     const [toonflowHistoryNodeId, setToonflowHistoryNodeId] = useState<string | null>(null);
+    const [toonflowRepairNodeId, setToonflowRepairNodeId] = useState<string | null>(null);
+    const [toonflowRepairNote, setToonflowRepairNote] = useState("");
     const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
     const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
     const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
@@ -2520,11 +2522,109 @@ function InfiniteCanvasPage() {
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
 
+    const runToonflowInstanceGeneration = useCallback(
+        async (nodeId: string, note?: string) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            if (!sourceNode?.metadata?.toonflow) return;
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "image"), count: "1" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            let generation: ReturnType<typeof buildToonflowImageGeneration>;
+            try {
+                generation = buildToonflowImageGeneration(nodesRef.current, connectionsRef.current, nodeId, note);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "图像生成准备失败");
+                return;
+            }
+
+            generation.warnings.forEach((warning) => message.warning(warning));
+            if (generation.washHits.length) message.warning(`已自动软化 ${generation.washHits.length} 个避雷词`);
+
+            const washReport = { hits: generation.washHits, at: new Date().toISOString() };
+            const preparedNodes = applyRegenerate(nodesRef.current, connectionsRef.current, nodeId).map<CanvasNodeData>((node) => {
+                if (node.id === nodeId) {
+                    return { ...node, metadata: { ...node.metadata, prompt: generation.finalPrompt, model: generationConfig.model } };
+                }
+                if (node.metadata?.toonflow?.kind === "compliance") {
+                    return { ...node, metadata: { ...node.metadata, toonflow: { ...node.metadata.toonflow, washReport } } };
+                }
+                return node;
+            });
+            nodesRef.current = preparedNodes;
+            setNodes(preparedNodes);
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
+
+            try {
+                const resolvedReferences = await Promise.all(
+                    generation.referenceKeys.map(async (storageKey, index): Promise<ReferenceImage | null> => {
+                        try {
+                            const dataUrl = await imageToDataUrl({ storageKey });
+                            if (!dataUrl) return null;
+                            return {
+                                id: storageKey,
+                                name: `参考图-${index + 1}.png`,
+                                type: dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png",
+                                dataUrl,
+                                storageKey,
+                            };
+                        } catch {
+                            return null;
+                        }
+                    }),
+                );
+                const references = resolvedReferences.filter((reference): reference is ReferenceImage => Boolean(reference));
+                const failedReferenceCount = generation.referenceKeys.length - references.length;
+                if (failedReferenceCount) message.warning(`${failedReferenceCount} 张参考图读取失败`);
+
+                const image = references.length
+                    ? await requestEdit(generationConfig, generation.finalPrompt, references, undefined, { signal: controller.signal }).then((items) => items[0])
+                    : await requestGeneration(generationConfig, generation.finalPrompt, { signal: controller.signal }).then((items) => items[0]);
+                if (!image?.dataUrl) throw new Error("图像接口没有返回图片");
+                const uploaded = await uploadImage(image.dataUrl);
+                const upstreamVersions = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
+                const result = applyImageGenerationSuccess(preparedNode, [uploaded.storageKey], generation.washHits, upstreamVersions);
+                const generationFailed = result.node.metadata?.toonflow?.status === "failed";
+                let next = nodesRef.current.map((node) => (node.id === nodeId ? result.node : node));
+                if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                nodesRef.current = next;
+                setNodes(next);
+
+                const orphaned = splitMediaKeysByStore(result.orphanedKeys);
+                try {
+                    await Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]);
+                } catch {
+                    message.warning("历史图像清理失败");
+                }
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : "生成失败";
+                message.error(errorDetails);
+                const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                nodesRef.current = next;
+                setNodes(next);
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
     const handleToonflowGenerate = useCallback(
         async (nodeId: string) => {
+            const toonflow = nodesRef.current.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.segmentId && (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes")) {
+                await runToonflowInstanceGeneration(nodeId);
+                return;
+            }
             await runToonflowNodeGeneration(nodeId);
         },
-        [runToonflowNodeGeneration],
+        [runToonflowInstanceGeneration, runToonflowNodeGeneration],
     );
 
     const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
@@ -2619,7 +2719,8 @@ function InfiniteCanvasPage() {
         connectionsRef.current = next.connections;
         setNodes(next.nodes);
         setConnections(next.connections);
-        await deleteStoredMedia(next.mediaKeys);
+        const mediaKeys = splitMediaKeysByStore(next.mediaKeys);
+        await Promise.all([deleteStoredImages(mediaKeys.imageKeys), deleteStoredMedia(mediaKeys.mediaKeys)]);
     }, []);
 
     const handleToonflowAdopt = useCallback((nodeId: string) => {
@@ -3085,6 +3186,7 @@ function InfiniteCanvasPage() {
                                         onEdit={setToonflowEditNodeId}
                                         onCascade={(nodeId) => void handleToonflowCascade(nodeId)}
                                         onHistory={setToonflowHistoryNodeId}
+                                        onRepair={setToonflowRepairNodeId}
                                         onOpenAssetCards={setToonflowAssetCardsNodeId}
                                         onAdopt={handleToonflowAdopt}
                                         onDeleteArchived={(nodeId) => void handleDeleteArchivedInstance(nodeId)}
@@ -3238,6 +3340,27 @@ function InfiniteCanvasPage() {
                 />
 
                 <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
+
+                <Modal
+                    title="定点修"
+                    open={Boolean(toonflowRepairNodeId)}
+                    okText="开始生成"
+                    cancelText="取消"
+                    onOk={() => {
+                        const nodeId = toonflowRepairNodeId;
+                        const note = toonflowRepairNote.trim();
+                        setToonflowRepairNodeId(null);
+                        setToonflowRepairNote("");
+                        if (nodeId) void runToonflowInstanceGeneration(nodeId, note);
+                    }}
+                    onCancel={() => {
+                        setToonflowRepairNodeId(null);
+                        setToonflowRepairNote("");
+                    }}
+                >
+                    <p className="mb-3 text-sm opacity-65">只描述要改的这一处，其余画面保持不变</p>
+                    <Input.TextArea value={toonflowRepairNote} autoSize={{ minRows: 3, maxRows: 7 }} placeholder="例如：只调整第 2 帧人物手势，其余构图、角色和光线不变" onChange={(event) => setToonflowRepairNote(event.target.value)} />
+                </Modal>
 
                 <ToonflowSegmentSyncModal
                     open={Boolean(toonflowSegmentSyncPlan)}
