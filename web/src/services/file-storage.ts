@@ -61,7 +61,15 @@ export async function cleanupUnusedMedia(usedData: unknown) {
 export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()) {
     if (!value || typeof value !== "object") return keys;
     if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.includes(":")) keys.add(value.storageKey);
-    Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectMediaStorageKeys(child, keys)) : collectMediaStorageKeys(item, keys)));
+    Object.entries(value).forEach(([name, item]) => {
+        if (["imageKeys", "videoKeys", "audioKeys"].includes(name) && Array.isArray(item)) {
+            item.forEach((key) => {
+                if (typeof key === "string" && key.includes(":")) keys.add(key);
+            });
+        }
+        if (Array.isArray(item)) item.forEach((child) => collectMediaStorageKeys(child, keys));
+        else collectMediaStorageKeys(item, keys);
+    });
     return keys;
 }
 

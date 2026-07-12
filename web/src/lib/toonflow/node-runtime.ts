@@ -4,14 +4,31 @@ import type { CanvasConnection, CanvasNodeData, ToonflowNodeKind } from "../../t
 
 import {
     buildActionContractPrompt,
+    buildKeyframesPrompt,
     buildNodeContext,
     buildScriptPrompt,
     buildShotContractPrompt,
     buildSpaceContractPrompt,
+    buildStoryboardPagePrompt,
     buildStoryboardTablePrompt,
     washPrompt,
 } from "./prompts";
-import { NODE_STATUSES, StoryboardRowSchema, VERSION_LIMIT_TEXT, migrateToonflowStatus, parseModelJson, type AssetCard, type NodeOutput, type NodeStatus, type StoryboardRow } from "./schema";
+import {
+    ActionContractSchema,
+    NODE_STATUSES,
+    ShotContractSchema,
+    StoryboardRowSchema,
+    VERSION_LIMIT_IMAGE,
+    VERSION_LIMIT_TEXT,
+    migrateToonflowStatus,
+    parseModelJson,
+    type ActionContract,
+    type AssetCard,
+    type NodeOutput,
+    type NodeStatus,
+    type ShotContract,
+    type StoryboardRow,
+} from "./schema";
 import { assignIds, validateSegmentRows } from "./segments";
 import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, rollbackToVersion, saveEditedNode, type GraphNode } from "./state-machine";
 
@@ -102,6 +119,86 @@ export function buildToonflowGeneration(nodes: CanvasNodeData[], connections: Ca
     const prompt = PROMPT_BUILDERS[kind](buildNodeContext(kind, inputs));
     const { washed, hits } = washPrompt(prompt);
     return { finalPrompt: washed, washHits: hits };
+}
+
+export type ToonflowImageGeneration = {
+    finalPrompt: string;
+    washHits: Array<{ term: string; replacement: string }>;
+    referenceKeys: string[];
+    warnings: string[];
+};
+
+const ASSET_CARD_ORDER: Record<AssetCard["cardType"], number> = {
+    character: 0,
+    scene: 1,
+    prop: 2,
+};
+
+function segmentContracts<T extends ShotContract | ActionContract>(
+    nodes: CanvasNodeData[],
+    kind: "shot-contract" | "action-contract",
+    schema: typeof ShotContractSchema | typeof ActionContractSchema,
+    shotIds: Set<string>,
+    warnings: string[],
+): T[] {
+    const label = kind === "shot-contract" ? "镜头合同" : "动作合同";
+    const rawText = nodes.find((node) => node.metadata?.toonflow?.kind === kind)?.metadata?.toonflow?.output?.payload.text;
+    if (!rawText?.trim()) {
+        warnings.push(`${label}缺少产出，已按空合同处理`);
+        return [];
+    }
+    const parsed = parseModelJson(z.array(schema), rawText);
+    if (!parsed.ok) {
+        warnings.push(`${label}解析失败：${parsed.error}`);
+        return [];
+    }
+    return parsed.data.filter((contract) => shotIds.has(contract.shotId)) as T[];
+}
+
+export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, note?: string): ToonflowImageGeneration {
+    void connections;
+    const target = nodes.find((node) => node.id === nodeId);
+    const targetToonflow = target?.metadata?.toonflow;
+    if (!target || !targetToonflow?.segmentId || (targetToonflow.kind !== "storyboard-page" && targetToonflow.kind !== "keyframes")) {
+        throw new Error("当前节点不支持 Toonflow 图像生成");
+    }
+
+    const table = nodes.find((node) => node.metadata?.toonflow?.kind === "storyboard-table")?.metadata?.toonflow?.output?.payload.table;
+    const rows = (table ?? []).filter((row) => row.segmentId === targetToonflow.segmentId).sort((left, right) => left.shotNo - right.shotNo);
+    if (!rows.length) throw new Error("分镜表中找不到该段镜头");
+
+    const warnings: string[] = [];
+    const shotIds = new Set(rows.map((row) => row.shotId));
+    const shotContracts = segmentContracts<ShotContract>(nodes, "shot-contract", ShotContractSchema, shotIds, warnings);
+    const actionContracts = segmentContracts<ActionContract>(nodes, "action-contract", ActionContractSchema, shotIds, warnings);
+    const spaceRules = nodes.find((node) => node.metadata?.toonflow?.kind === "space-contract")?.metadata?.toonflow?.output?.payload.text;
+    const cards = (nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [])
+        .filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey))
+        .sort((left, right) => ASSET_CARD_ORDER[left.cardType] - ASSET_CARD_ORDER[right.cardType]);
+    const assetKeys = cards.map((card) => card.storageKey);
+
+    let prompt: string;
+    let referenceKeys: string[];
+    if (targetToonflow.kind === "storyboard-page") {
+        if (!cards.length) warnings.push("无资产卡锚点,画面一致性可能漂移");
+        prompt = buildStoryboardPagePrompt({ rows, shotContracts, actionContracts, spaceRules });
+        referenceKeys = assetKeys;
+    } else {
+        // 必须排除已归档实例:分镜表回退使旧段重现时,同 segmentId 会同时存在归档与活跃两个实例,
+        // 命中归档节点会拿到过期线稿、掩盖"请先生成该段故事板页"的报错。
+        const storyboardKey = nodes.find(
+            (node) =>
+                node.metadata?.toonflow?.kind === "storyboard-page" &&
+                node.metadata.toonflow.segmentId === targetToonflow.segmentId &&
+                !node.metadata.toonflow.archived,
+        )?.metadata?.toonflow?.output?.payload.imageKeys?.[0];
+        if (!storyboardKey) throw new Error("请先生成该段故事板页");
+        prompt = buildKeyframesPrompt({ rows, anchors: cards.map((card) => `${card.name}：${card.anchor}`), note });
+        referenceKeys = [storyboardKey, ...assetKeys];
+    }
+
+    const { washed, hits } = washPrompt(prompt);
+    return { finalPrompt: washed, washHits: hits, referenceKeys, warnings };
 }
 
 function generationMeta(node: CanvasNodeData, _washHits: WashHit[]) {
@@ -207,6 +304,55 @@ export function applyGenerationSuccess(node: CanvasNodeData, rawText: string, wa
             errorDetails: undefined,
             toonflow: { ...toonflow, status: output.status, output, history },
         },
+    };
+}
+
+export function applyImageGenerationSuccess(
+    node: CanvasNodeData,
+    storageKeys: string[],
+    washHits: Array<{ term: string; replacement: string }>,
+    upstreamVersions?: Record<string, number>,
+): { node: CanvasNodeData; orphanedKeys: string[] } {
+    const toonflow = node.metadata?.toonflow;
+    if (!toonflow?.segmentId || (toonflow.kind !== "storyboard-page" && toonflow.kind !== "keyframes")) {
+        return { node, orphanedKeys: [] };
+    }
+
+    const previous = toonflow.output;
+    const allHistory = previous ? [...(toonflow.history ?? []), previous] : [...(toonflow.history ?? [])];
+    const history = allHistory.slice(-VERSION_LIMIT_IMAGE);
+    const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - VERSION_LIMIT_IMAGE));
+    const referencedKeys = new Set([...storageKeys, ...history.flatMap((output) => output.payload.imageKeys ?? [])]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((output) => output.payload.imageKeys ?? []))).filter((key) => !referencedKeys.has(key));
+    const output: NodeOutput = {
+        nodeId: node.id,
+        kind: toonflow.kind,
+        version: (previous?.version ?? 0) + 1,
+        status: onGenerateSuccess(toonflow.status),
+        payload: { imageKeys: [...storageKeys] },
+        upstreamVersions: upstreamVersions ?? previous?.upstreamVersions ?? {},
+        generationMeta: generationMeta(node, washHits),
+        generatedAt: new Date().toISOString(),
+    };
+
+    return {
+        node: {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                status: "success",
+                errorDetails: undefined,
+                toonflow: { ...toonflow, status: output.status, output, history },
+            },
+        },
+        orphanedKeys,
+    };
+}
+
+export function splitMediaKeysByStore(keys: string[]): { imageKeys: string[]; mediaKeys: string[] } {
+    return {
+        imageKeys: keys.filter((key) => key.startsWith("image:")),
+        mediaKeys: keys.filter((key) => !key.startsWith("image:")),
     };
 }
 

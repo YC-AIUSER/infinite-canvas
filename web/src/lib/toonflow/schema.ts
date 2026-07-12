@@ -156,6 +156,7 @@ export const NodeOutputSchema = z.object({
 export type NodeOutput = z.infer<typeof NodeOutputSchema>;
 
 export const VERSION_LIMIT_TEXT = 10;
+export const VERSION_LIMIT_IMAGE = 5;
 export const VERSION_LIMIT_VIDEO = 3;
 
 function extractJsonText(rawText: string): string {

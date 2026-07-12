@@ -6,6 +6,8 @@
 
 import forbiddenTerms from "./seedance-forbidden-terms.json";
 
+import type { ActionContract, ShotContract, StoryboardRow } from "./schema";
+
 type PromptNodeKind = "script" | "space-contract" | "storyboard-table" | "shot-contract" | "action-contract";
 type ContextInputs = Record<string, string | null | undefined>;
 
@@ -116,6 +118,64 @@ export function buildAssetCardPrompt(card: { cardType: "character" | "scene" | "
         return `生成一张道具锚点卡，只画“${subject}”这一个主体。白底单道具居中，无手持、无人物，形态与细节清晰，构图简洁。外形锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
     }
     return `生成一张场景锚点图，只画“${subject}”这一个场景。空场景、无人物，固定机位单视角，光线与地标清晰，构图简洁。场景锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
+}
+
+// 故事板页，方法论源 ai-short-drama S2/S3：格子与镜头 1:1，并把轴线锁落实到每格构图。
+export function buildStoryboardPagePrompt(input: {
+    rows: StoryboardRow[];
+    shotContracts: ShotContract[];
+    actionContracts: ActionContract[];
+    spaceRules?: string;
+}): string {
+    const shotContractById = new Map(input.shotContracts.map((contract) => [contract.shotId, contract]));
+    const actionContractById = new Map(input.actionContracts.map((contract) => [contract.shotId, contract]));
+    const rows = [...input.rows].sort((left, right) => left.shotNo - right.shotNo);
+    const panels = rows.map((row, index) => {
+        const shotContract = shotContractById.get(row.shotId);
+        const actionContract = actionContractById.get(row.shotId);
+        const details = [
+            `第${index + 1}格（shotNo ${row.shotNo}）`,
+            `景别：${row.scale}`,
+            `机位角度：${row.angle}`,
+            `动作：${row.action}${actionContract ? `；关键瞬间：${actionContract.process}` : ""}`,
+        ];
+        if (shotContract) {
+            details.push(`落点构图：${shotContract.endpoint}`);
+            if (shotContract.inOut.include.length) details.push(`必须入画：${shotContract.inOut.include.join("、")}`);
+            if (shotContract.inOut.exclude.length) details.push(`必须排除：${shotContract.inOut.exclude.join("、")}`);
+        }
+        return details.join("\n");
+    });
+    const spaceRules = input.spaceRules?.trim();
+
+    return `生成该段故事板页：共 ${rows.length} 格、格子=镜头、按 shotNo 顺序排布。每格只画对应镜头，不合并格子，不新增镜头，不编造机位。
+
+【逐格画面】
+${panels.join("\n\n")}
+
+【空间与轴线规则】
+${spaceRules || "同一角色在所有格中保持同一屏幕侧，摄影机不得跨越 180°轴线。"}
+
+全局画面规则：monochrome rough storyboard，黑白粗线稿，干净构图；同一角色跨格保持外观与屏幕侧一致。默认避免双人并排构图，优先 POV、过肩或单人构图。每格可带小号格号，但画面禁止台词文字、字幕、水印和 logo。`;
+}
+
+// 首帧，方法论源 ai-short-drama S4：线稿是构图锁，定点修只改一处。
+export function buildKeyframesPrompt(input: { rows: StoryboardRow[]; anchors: string[]; note?: string }): string {
+    const rows = [...input.rows].sort((left, right) => left.shotNo - right.shotNo);
+    const shotOrder = rows.map((row, index) => `第${index + 1}格=shotNo ${row.shotNo}`).join("；");
+    const anchors = input.anchors.length ? input.anchors.map((anchor) => `- ${anchor}`).join("\n") : "（无资产锚点）";
+    const correction = input.note
+        ? `\n\n【定点修指令】\n只改以下这一处：${input.note}\n除这一处外，其余内容必须与参考图完全一致。`
+        : "";
+
+    return `以输入的该段故事板页线稿为唯一构图锁，只上色不改构图。共 ${rows.length} 格，保持原格数与以下顺序：${shotOrder}。
+
+禁止改变机位、景别、裁切和主体位置；禁止增删、合并或重排格子；禁止新增、删除或移动人物、道具与背景元素。
+
+【资产上色锚点（逐字遵守）】
+${anchors}
+
+角色外观与配色、场景光线、道具形态必须按锚点上色。画面禁止台词文字、字幕、水印和 logo。${correction}`;
 }
 
 /*

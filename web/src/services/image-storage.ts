@@ -76,7 +76,15 @@ export async function cleanupUnusedImages(usedData: unknown) {
 export function collectImageStorageKeys(value: unknown, keys = new Set<string>()) {
     if (!value || typeof value !== "object") return keys;
     if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.startsWith("image:")) keys.add(value.storageKey);
-    Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectImageStorageKeys(child, keys)) : collectImageStorageKeys(item, keys)));
+    Object.entries(value).forEach(([name, item]) => {
+        if (["imageKeys", "videoKeys", "audioKeys"].includes(name) && Array.isArray(item)) {
+            item.forEach((key) => {
+                if (typeof key === "string" && key.startsWith("image:")) keys.add(key);
+            });
+        }
+        if (Array.isArray(item)) item.forEach((child) => collectImageStorageKeys(child, keys));
+        else collectImageStorageKeys(item, keys);
+    });
     return keys;
 }
 
