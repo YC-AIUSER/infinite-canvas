@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toonflow 生成能力 · 阶段 1+1.5 交付报告 — infinite-canvas</title>
+<style>
+:root{--ivory:#FAF9F5;--slate:#141413;--clay:#D97757;--oat:#E3DACC;--olive:#788C5D;--rust:#B04A3F;--white:#FFF;--gray-100:#F0EEE6;--gray-300:#D1CFC5;--gray-500:#87867F;--gray-700:#3D3D3A;--warning:#C78E3F;--danger:#B04A4A;--info:#5C7CA3;--serif:ui-serif,Georgia,"Noto Serif SC","Source Han Serif SC",serif;--sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--radius:12px;--border:1.5px solid var(--gray-300)}
+*{box-sizing:border-box}
+body{margin:0;padding:56px 32px 120px;background:var(--ivory);color:var(--gray-700);font-family:var(--sans);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.page{max-width:1000px;margin:0 auto}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gray-500);margin-bottom:12px}
+h1{font-family:var(--serif);font-weight:500;font-size:34px;line-height:1.15;color:var(--slate);letter-spacing:-.01em;margin:0 0 16px}
+.lede{font-size:17px;color:var(--gray-500);max-width:760px;margin:0 0 40px}
+.summary-band{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:48px}
+@media(max-width:720px){.summary-band{grid-template-columns:repeat(2,1fr)}}
+.stat-card{background:var(--white);border:var(--border);border-radius:var(--radius);padding:20px 22px 18px}
+.stat-card.warn{border-left:4px solid var(--clay);padding-left:19px}
+.stat-num{font-family:var(--serif);font-size:40px;font-weight:500;line-height:1;color:var(--slate);margin-bottom:8px}
+.stat-label{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-500)}
+section{margin-bottom:52px}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+.sec-head .num{font-family:var(--mono);font-size:12px;background:var(--oat);color:var(--slate);padding:3px 9px;border-radius:8px}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:24px;color:var(--slate);letter-spacing:-.01em;margin:0}
+.sec-intro{font-size:14px;color:var(--gray-500);max-width:760px;margin-bottom:20px}
+table.data{width:100%;border-collapse:separate;border-spacing:0;background:var(--white);border:var(--border);border-radius:var(--radius);overflow:hidden}
+table.data thead th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-500);background:var(--gray-100);padding:11px 14px;border-bottom:1px solid var(--gray-300)}
+table.data tbody td{padding:11px 14px;border-bottom:1px solid var(--gray-100);font-size:13.5px;color:var(--gray-700);vertical-align:top}
+table.data tbody tr:last-child td{border-bottom:none}
+.table-wrap{overflow-x:auto}
+.tag{display:inline-block;font-family:var(--mono);font-size:11px;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;color:var(--gray-700)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;color:var(--white)}
+.badge.green{background:var(--olive)}.badge.orange{background:var(--warning)}.badge.red{background:var(--danger)}.badge.blue{background:var(--info)}.badge.gray{background:var(--gray-500)}
+.milestones{display:flex;flex-direction:column}
+.milestone{display:grid;grid-template-columns:110px 28px 1fr;gap:0 18px}
+.milestone .when{text-align:right;font-family:var(--mono);font-size:12px;color:var(--gray-500);padding-top:4px}
+.milestone .dot-col{display:flex;flex-direction:column;align-items:center}
+.milestone .dot{width:14px;height:14px;border-radius:50%;background:var(--white);border:3px solid var(--olive);margin-top:4px;flex-shrink:0}
+.milestone .dot.done{background:var(--olive)}
+.milestone .line{width:2px;flex:1;background:var(--gray-300);margin:4px 0}
+.milestone:last-child .line{display:none}
+.milestone .body{padding-bottom:26px}
+.milestone .body h3{font-family:var(--serif);font-weight:500;font-size:18px;color:var(--slate);margin:0 0 4px}
+.milestone .body p{font-size:14px;color:var(--gray-500);margin:0 0 8px;max-width:700px}
+.highlights{list-style:none;margin:0;padding:0}
+.highlights li{position:relative;padding:0 0 13px 26px;font-size:14.5px;color:var(--gray-700)}
+.highlights li::before{content:"";position:absolute;left:6px;top:8px;width:7px;height:7px;border-radius:2px;background:var(--clay)}
+.highlights li strong{color:var(--slate);font-weight:600}
+details{background:var(--white);border:var(--border);border-radius:var(--radius);margin-bottom:10px;overflow:hidden}
+details summary{padding:14px 20px;font-weight:500;font-size:15px;color:var(--slate);cursor:pointer;list-style:none}
+details summary::before{content:"\25B6";font-size:10px;color:var(--clay);margin-right:10px;display:inline-block;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+details .detail-body{padding:0 20px 16px;font-size:14px;color:var(--gray-700)}
+pre{background:var(--gray-100);border:1px solid var(--gray-300);border-radius:8px;padding:14px 18px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--slate)}
+code{font-family:var(--mono);font-size:13px;color:var(--clay);background:var(--oat);padding:1px 6px;border-radius:4px}
+blockquote{margin:0 0 14px;padding:16px 20px;background:var(--oat);border-left:4px solid var(--clay);border-radius:0 var(--radius) var(--radius) 0;font-size:15px;color:var(--slate)}
+footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--gray-300);font-size:13px;color:var(--gray-500)}
+@media(max-width:640px){body{padding:32px 16px 64px}h1{font-size:26px}.summary-band{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">交付报告 · infinite-canvas / Toonflow · 2026-07-12</div>
+  <h1>Toonflow 生成能力 — 阶段 1 + 1.5 交付</h1>
+  <p class="lede">从"方法论澄清"到"支配度闭环真机跑通",一天完成:design doc(APPROVED)→ 工程审查(CLEARED)→ 引擎五模块 + 画布接线 + 支配度闭环,全部经对抗审查、单元测试与浏览器实测三重验收。产品命题——<strong style="color:var(--slate)">从模板复读机到自己的片子</strong>——的第一个可演示 wedge 已经存在于你的画布里。</p>
+
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">8/13</div><div class="stat-label">工程任务完成(T1-T8)</div></div>
+    <div class="stat-card"><div class="stat-num">99</div><div class="stat-label">vitest 用例全绿</div></div>
+    <div class="stat-card"><div class="stat-num">14</div><div class="stat-label">main 提交(3caea85→1d3b88d)</div></div>
+    <div class="stat-card"><div class="stat-num">✓</div><div class="stat-label">wedge 浏览器全流程实测</div></div>
+  </div>
+
+  <section>
+    <div class="sec-head"><span class="num">01</span><h2>今天的完整链路</h2></div>
+    <div class="milestones">
+      <div class="milestone"><div class="when">上午</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>方法论澄清</h3><p>确认画布方法论源=ai-short-drama skill(九宫格直出,明确反对首尾帧);Agent 上次建议首尾帧的根因=注入层为空。</p></div></div>
+      <div class="milestone"><div class="when">上午</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>/office-hours → Design Doc APPROVED</h3><p>定位裁决:B 路线(工具即商品)、真问题=支配度("客户只能生成跟我模板类似的东西");方案 B 全量 14 节点;Codex 冷读交叉检验;3 轮对抗审查 5→6.5→8 分修 27 项。</p></div></div>
+      <div class="milestone"><div class="when">中午</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>/plan-eng-review → ENG CLEARED</h3><p>7 项审查发现全采纳(模块化/JSON+zod/锁链/迁移回归/vitest/存储上限);Codex 外部声音 30 条采纳 22;13 任务车道图;估时修正 4-6 周。</p></div></div>
+      <div class="milestone"><div class="when">下午</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>T1-T6:引擎层 + 测试设施</h3><p>五模块(prompts/schema/state-machine/segments/cascade)并行派工 Codex,逐一对抗验收;vitest 落地;顺手排掉 win32 四件套环境雷并复活 dev server。</p></div></div>
+      <div class="milestone"><div class="when">傍晚</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>T7:画布接线</h3><p>五文本节点接真实生成、七态挂载、洗词内联;浏览器实测:未开始→生成中→待验收 v1→已通过。</p></div></div>
+      <div class="milestone"><div class="when">晚间</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>T8:支配度闭环(wedge)</h3><p>编辑/历史回退/沿用/级联/全链通过,浏览器全流程实测通过(详见 03)。</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">02</span><h2>交付物清单</h2></div>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>类别</th><th>内容</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>引擎</td><td><code>web/src/lib/toonflow/</code> 五模块:方法论模板+洗词词表 / 七态 schema+迁移+容错解析 / 状态机(传播·版本守卫·回退·失败策略) / 段身份匹配 / 级联调度+双费用门</td><td><span class="badge green">已验收</span></td></tr>
+        <tr><td>接线</td><td>project.tsx 接线 + node-runtime 胶水层:五文本节点生成、洗词内联、#10 洗词报告面板、失效传播、任务准备/成功/失败状态流</td><td><span class="badge green">已验收</span></td></tr>
+        <tr><td>支配度 UI</td><td>编辑 Modal、历史/回退 Modal、stale「重生成/沿用」、级联横条(进度/取消/锁链)、「全链通过」</td><td><span class="badge green">已验收</span></td></tr>
+        <tr><td>测试</td><td>vitest 设施 + 99 用例(含 CRITICAL 旧数据迁移回归、传播五分支、段匹配、级联语义、shotNo 归一化)</td><td><span class="badge green">全绿</span></td></tr>
+        <tr><td>文档</td><td>Design doc(APPROVED,含 20 条工程审查决议+GSTACK 报告)、13 任务 JSONL、测试计划工件、TODOS.md(7 项二期)</td><td><span class="badge green">落盘</span></td></tr>
+        <tr><td>演示数据</td><td>测试画布(Toonflow 生产画布,最新创建的那个):剧本 v2 + 空间合同/分镜表/镜头合同/动作合同完整文本层产出</td><td><span class="badge blue">可演示</span></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">03</span><h2>Wedge 实测记录(真实环境,真实生成 API)</h2></div>
+    <blockquote><strong>一句话:</strong>在剧本里改一句话,四个下游立刻告诉你"我过时了",一键让它们全部跟上,再一键全部验收——这就是卖给客户的"支配度"。</blockquote>
+    <ul class="highlights">
+      <li><strong>改</strong> — 剧本「编辑」→ 插入"主角改名阿测"→ 保存 → 剧本 v2 已通过,「历史」按钮出现(v1 可一键回退)</li>
+      <li><strong>失效可见</strong> — 空间合同/分镜表/镜头合同/动作合同同步变黄「已失效」,各带"上游已更新"提示与「重生成」「沿用」双选项;资产库(非文本层)被正确穿透不误标</li>
+      <li><strong>一键跟上</strong> — 「向下重生成」:横条逐节点推进(1/4→4/4)、可取消、链上按钮锁定;洗词自动软化避雷词并弹提示,报告落在过审节点</li>
+      <li><strong>批量验收</strong> — 级联完成 → 「全链通过」→ 待验收节点一键全绿</li>
+      <li><strong>失败也体面</strong> — 分镜表两轮输出违规(一镜一段/全局编号)被校验拦截,红色失败态附完整可读原因,下游自动断支不烧钱;根治后(编号归一化+模板硬规则)第三轮一次通过</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">04</span><h2>验收账本 — Codex 产出 × Claude 抓修</h2></div>
+    <p class="sec-intro">每个任务都走了"对抗审查 diff → 亲跑验证 → 冒烟/浏览器实测"。以下是被验收环节拦下的问题(全部已修复并有测试锁定):</p>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>#</th><th>问题</th><th>危害</th><th>抓获方式</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>T1/T2 JSON 键名契约不一致(中文 vs 英文)</td><td>解析 100% 失败</td><td>读码对照(根因=派工规格打架,已记教训)</td></tr>
+        <tr><td>2</td><td>回退未定义落态</td><td>回退后节点仍挂失效标</td><td>读码</td></tr>
+        <tr><td>3</td><td>传播时机在"点击时"而非"新版本产生后"</td><td>生成失败也会误标下游</td><td>读码对照 T6 测试契约</td></tr>
+        <tr><td>4</td><td>upstreamVersions 从不记录</td><td>版本守卫形同虚设</td><td>读码</td></tr>
+        <tr><td>5</td><td>T8 JSX 层整体缺失(props/横条/双 Modal)</td><td>按钮点击无声无息</td><td>浏览器实测</td></tr>
+        <tr><td>6</td><td>级联把根节点也重生成</td><td>用户手工编辑被 AI 覆盖(wedge 自杀)</td><td>读码</td></tr>
+        <tr><td>7</td><td>文本级联子图剪断链(模板中间夹资产库)</td><td>级联永远算出空集</td><td>浏览器实测</td></tr>
+        <tr><td>8</td><td>级联状态覆盖竞态(React 批处理 vs ref 快照)</td><td>前一节点成果被冲掉</td><td>浏览器实测(空间合同待验收被冲回生成中)</td></tr>
+        <tr><td>9</td><td>模型顽固使用全局 shotNo(两轮不服从指令)</td><td>分镜表反复失败</td><td>浏览器实测 → 编号收回代码侧归一化</td></tr>
+        <tr><td>10</td><td>刷新后 generating 永久卡死</td><td>节点无法再操作</td><td>实测推演 → hydrate 降级 failed 可重试</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">05</span><h2>已知观察与风险</h2></div>
+    <ul class="highlights">
+      <li><strong>渲染冻结(需优先处理)</strong> — 生成写盘时页面偶发 5-30 秒无响应:工程审查预言的"单 blob 全量序列化"兑现。建议把 T13(版本裁剪+存储纪律)提到 T9 之前或并行。</li>
+      <li><strong>模型分段质量</strong> — 编号问题已根治,但"段=连续场景"的划分质量仍依赖模板迭代(二期 eval TODO 已立)。</li>
+      <li><strong>P3 风险记录在案</strong> — 九宫格直出无退路(创始人裁决);阶段 3 视频层是它的检验场。</li>
+      <li><strong>流程沉淀</strong> — 插件包装代理"派完即睡/单次调用 10 分钟超时",已换 sonnet+自挂进程监控的组合;win32 四件套环境雷已写入记忆(装新依赖后必须重补)。</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="num">06</span><h2>下一步</h2></div>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>事项</th><th>谁</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>客户作业</td><td><span class="badge orange">你</span></td><td>问 3 位客户:"想改但改不了的,是剧本/分镜/首帧/视频哪一层?"——答案决定 T9 之后的打磨顺序,也是 P1 的第一次外部检验</td></tr>
+        <tr><td>Open Q1 拍板</td><td><span class="badge orange">你</span></td><td>内测部署平台 + 外部用户 key 方案(自带 or 代理计费)——阶段 3 前必须关闭</td></tr>
+        <tr><td>T13 存储纪律</td><td><span class="badge blue">Claude+Codex</span></td><td>版本上限裁剪+孤儿清理,治渲染冻结(建议提前)</td></tr>
+        <tr><td>T9 视觉层</td><td><span class="badge blue">Claude+Codex</span></td><td>资产卡池 / 故事板页 / 首帧,段实例 batch 展开</td></tr>
+        <tr><td>T10-T12</td><td><span class="badge gray">排队</span></td><td>视频层(九宫格直出+任务恢复)→ 部署 → 收尾+Agent 注入</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <footer>Generated by Claude · 2026-07-12 · git 范围 3caea85..1d3b88d(main,14 commits,未 push)· Design doc:~/.gstack/projects/basketikun-infinite-canvas/Administrator-main-design-20260712-103217.md · 相关报告:toonflow-generation-design-20260712.html</footer>
+
+</div>
+</body>
+</html>
