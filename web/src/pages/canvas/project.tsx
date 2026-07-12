@@ -10,7 +10,7 @@ import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/vide
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
-import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -46,7 +46,9 @@ import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
+import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
 import { applyAdoptStale, applyApprove, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
+import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
 import { skillCards } from "@/pages/skills/skills-data";
@@ -339,6 +341,7 @@ function InfiniteCanvasPage() {
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [toonflowEditNodeId, setToonflowEditNodeId] = useState<string | null>(null);
     const [toonflowHistoryNodeId, setToonflowHistoryNodeId] = useState<string | null>(null);
+    const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
     const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
     const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
@@ -2514,13 +2517,37 @@ function InfiniteCanvasPage() {
         [runToonflowNodeGeneration],
     );
 
-    const handleToonflowApprove = useCallback((nodeId: string) => {
-        setNodes((prev) => {
-            const next = applyApprove(prev, connectionsRef.current, nodeId);
-            nodesRef.current = next;
-            return next;
-        });
+    const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
+        const next = applyInstanceSync(nodesRef.current, connectionsRef.current, plan, () => nanoid());
+        nodesRef.current = next.nodes;
+        connectionsRef.current = next.connections;
+        setNodes(next.nodes);
+        setConnections(next.connections);
     }, []);
+
+    const syncStoryboardInstances = useCallback(
+        (nodeId: string) => {
+            const plan = planInstanceSync(nodesRef.current, nodeId);
+            if (!plan || (!plan.toCreate.length && !plan.toArchive.length && !plan.toStale.length && !plan.reindex.length)) return;
+            if (plan.isFirstSync || (!plan.toCreate.length && !plan.toArchive.length)) {
+                applyStoryboardInstancePlan(plan);
+                return;
+            }
+            setToonflowSegmentSyncPlan(plan);
+        },
+        [applyStoryboardInstancePlan],
+    );
+
+    const handleToonflowApprove = useCallback(
+        (nodeId: string) => {
+            const next = applyApprove(nodesRef.current, connectionsRef.current, nodeId);
+            nodesRef.current = next;
+            setNodes(next);
+            const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+        },
+        [syncStoryboardInstances],
+    );
 
     const handleToonflowEditSave = useCallback((nodeId: string, text: string) => {
         setNodes((prev) => {
@@ -2531,13 +2558,26 @@ function InfiniteCanvasPage() {
         setToonflowEditNodeId(null);
     }, []);
 
-    const handleToonflowRollback = useCallback((nodeId: string, version: number) => {
-        setNodes((prev) => {
-            const next = applyRollback(prev, connectionsRef.current, nodeId, version);
+    const handleToonflowRollback = useCallback(
+        (nodeId: string, version: number) => {
+            const next = applyRollback(nodesRef.current, connectionsRef.current, nodeId, version);
             nodesRef.current = next;
-            return next;
-        });
-        setToonflowHistoryNodeId(null);
+            setNodes(next);
+            setToonflowHistoryNodeId(null);
+            const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+        },
+        [syncStoryboardInstances],
+    );
+
+    const handleDeleteArchivedInstance = useCallback(async (nodeId: string) => {
+        // 先落画布状态再清媒体:媒体清理失败最多留下孤儿 key,反序会出现节点引用已删媒体。
+        const next = deleteArchivedInstance(nodesRef.current, connectionsRef.current, nodeId);
+        nodesRef.current = next.nodes;
+        connectionsRef.current = next.connections;
+        setNodes(next.nodes);
+        setConnections(next.connections);
+        await deleteStoredMedia(next.mediaKeys);
     }, []);
 
     const handleToonflowAdopt = useCallback((nodeId: string) => {
@@ -2627,9 +2667,13 @@ function InfiniteCanvasPage() {
         const result = approveChain(nodesRef.current, connectionsRef.current, reviewNodeIds);
         nodesRef.current = result.nodes;
         setNodes(result.nodes);
+        reviewNodeIds.forEach((nodeId) => {
+            const toonflow = result.nodes.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+        });
         setToonflowCascadeProgress(null);
         message.success(`已通过 ${result.approvedCount} 个节点`);
-    }, [message, toonflowCascadeProgress]);
+    }, [message, syncStoryboardInstances, toonflowCascadeProgress]);
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
@@ -2992,12 +3036,16 @@ function InfiniteCanvasPage() {
                                     <ToonflowNodeContent
                                         node={contentNode}
                                         cascadeLocked={cascadeLockedNodeIds.has(contentNode.id)}
+                                        batchCount={batchChildCountById.get(contentNode.id) || 0}
+                                        batchExpanded={Boolean(contentNode.metadata?.imageBatchExpanded)}
                                         onGenerate={(nodeId) => void handleToonflowGenerate(nodeId)}
                                         onApprove={handleToonflowApprove}
                                         onEdit={setToonflowEditNodeId}
                                         onCascade={(nodeId) => void handleToonflowCascade(nodeId)}
                                         onHistory={setToonflowHistoryNodeId}
                                         onAdopt={handleToonflowAdopt}
+                                        onDeleteArchived={(nodeId) => void handleDeleteArchivedInstance(nodeId)}
+                                        onToggleBatch={toggleBatchExpanded}
                                     />
                                 ) : (
                                     <CanvasConfigNodePanel
@@ -3138,6 +3186,17 @@ function InfiniteCanvasPage() {
                 <ToonflowEditModal open={Boolean(toonflowEditNode)} node={toonflowEditNode} onSave={handleToonflowEditSave} onCancel={() => setToonflowEditNodeId(null)} />
 
                 <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
+
+                <ToonflowSegmentSyncModal
+                    open={Boolean(toonflowSegmentSyncPlan)}
+                    plan={toonflowSegmentSyncPlan}
+                    nodes={nodes}
+                    onConfirm={() => {
+                        if (toonflowSegmentSyncPlan) applyStoryboardInstancePlan(toonflowSegmentSyncPlan);
+                        setToonflowSegmentSyncPlan(null);
+                    }}
+                    onCancel={() => setToonflowSegmentSyncPlan(null)}
+                />
 
                 {toonflowCascadeProgress ? (
                     <div className="fixed left-1/2 top-16 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-black/10 bg-white px-4 py-2 shadow-lg dark:border-white/15 dark:bg-neutral-900">
@@ -3665,6 +3724,7 @@ function isAudioFile(file: File) {
 }
 
 function isHiddenBatchChild(node: CanvasNodeData, nodes: CanvasNodeData[], collapsingBatchIds?: Set<string>) {
+    if (node.metadata?.toonflow?.archived) return false;
     const rootId = node.metadata?.batchRootId;
     if (!rootId) return false;
     const root = nodes.find((item) => item.id === rootId);

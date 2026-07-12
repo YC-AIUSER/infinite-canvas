@@ -1,5 +1,5 @@
-import { Button } from "antd";
-import { AlertTriangle, CheckCircle2, CircleDashed, Clock3 } from "lucide-react";
+import { Button, Popconfirm } from "antd";
+import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, Clock3 } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -37,9 +37,13 @@ type ToonflowNodeContentProps = {
     onCascade?: (nodeId: string) => void;
     onHistory?: (nodeId: string) => void;
     onAdopt?: (nodeId: string) => void;
+    onDeleteArchived?: (nodeId: string) => void;
+    batchCount?: number;
+    batchExpanded?: boolean;
+    onToggleBatch?: (nodeId: string) => void;
 };
 
-export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onAdopt }: ToonflowNodeContentProps) {
+export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onAdopt, onDeleteArchived, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const toonflow = node.metadata?.toonflow;
@@ -62,7 +66,30 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                     <h3 className="mt-1 truncate text-lg font-semibold leading-6">{node.title}</h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
+                    {batchCount > 1 ? (
+                        <Button
+                            size="small"
+                            type="text"
+                            aria-label={batchExpanded ? "收起段实例" : "展开段实例"}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onToggleBatch?.(node.id);
+                            }}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                        >
+                            <span className="inline-flex items-center gap-1">
+                                <span>{batchCount}</span>
+                                <ChevronRight className={`size-3.5 transition-transform ${batchExpanded ? "rotate-90" : ""}`} />
+                            </span>
+                        </Button>
+                    ) : null}
                     {toonflow.output && toonflow.output.version > 0 ? <span className="text-[11px] font-medium opacity-45">v{toonflow.output.version}</span> : null}
+                    {toonflow.archived ? (
+                        <span className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: `${theme.node.muted}18`, color: theme.node.muted }}>
+                            已归档
+                        </span>
+                    ) : null}
                     <span className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: `${statusColor}18`, color: statusColor }}>
                         {statusLabel[toonflow.status]}
                     </span>
@@ -119,6 +146,16 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                             {item}
                         </span>
                     ))}
+                </div>
+            ) : null}
+
+            {toonflow.archived && toonflow.segmentId ? (
+                <div className="mt-2 flex justify-end" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                    <Popconfirm title="删除已归档实例？" description="该实例的产物与版本历史将一并清理。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => onDeleteArchived?.(node.id)}>
+                        <Button size="small" danger>
+                            删除
+                        </Button>
+                    </Popconfirm>
                 </div>
             ) : null}
 

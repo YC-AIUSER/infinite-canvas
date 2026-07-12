@@ -47,6 +47,9 @@ export type ToonflowNodeMetadata = {
     status: ToonflowNodeStageStatus;
     summary: string;
     checks: string[];
+    segmentId?: string;
+    segmentIndex?: number;
+    archived?: boolean;
     outputs?: string[];
     accent?: string;
     output?: NodeOutput;
