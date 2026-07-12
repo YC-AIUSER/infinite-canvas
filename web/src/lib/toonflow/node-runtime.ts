@@ -11,7 +11,7 @@ import {
     buildStoryboardTablePrompt,
     washPrompt,
 } from "./prompts";
-import { NODE_STATUSES, StoryboardRowSchema, VERSION_LIMIT_TEXT, migrateToonflowStatus, parseModelJson, type NodeOutput, type NodeStatus, type StoryboardRow } from "./schema";
+import { NODE_STATUSES, StoryboardRowSchema, VERSION_LIMIT_TEXT, migrateToonflowStatus, parseModelJson, type AssetCard, type NodeOutput, type NodeStatus, type StoryboardRow } from "./schema";
 import { assignIds, validateSegmentRows } from "./segments";
 import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, rollbackToVersion, saveEditedNode, type GraphNode } from "./state-machine";
 
@@ -33,9 +33,16 @@ function isGeneratableKind(kind: ToonflowNodeKind): kind is GeneratableToonflowK
     return GENERATABLE_KINDS.has(kind);
 }
 
-function readNodeInput(node: CanvasNodeData) {
+const ASSET_CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
+    character: "角色",
+    scene: "场景",
+    prop: "道具",
+};
+
+export function readNodeInput(node: CanvasNodeData) {
     const payload = node.metadata?.toonflow?.output?.payload;
     if (payload?.text) return payload.text;
+    if (payload?.cards) return payload.cards.map((card) => `【${ASSET_CARD_TYPE_LABELS[card.cardType]}】${card.name}：${card.anchor}`).join("\n");
     if (payload?.table) return JSON.stringify(payload.table, null, 2);
     return node.metadata?.content?.trim() || node.metadata?.prompt?.trim() || "";
 }
@@ -322,6 +329,73 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
 
 function appendTextHistory(history: NodeOutput[] | undefined, output: NodeOutput) {
     return [...(history ?? []), output].slice(-VERSION_LIMIT_TEXT);
+}
+
+export function applyAssetCardsSave(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, cards: AssetCard[]): CanvasNodeData[] {
+    const target = nodes.find((node) => node.id === nodeId);
+    const toonflow = target?.metadata?.toonflow;
+    if (!target || !toonflow || toonflow.kind !== "assets") return nodes;
+
+    const previous = toonflow.output;
+    const status: NodeStatus = toonflow.status === "approved" && previous?.status === "approved" ? "approved" : "review";
+    const output: NodeOutput = {
+        nodeId,
+        kind: "assets",
+        version: (previous?.version ?? 0) + 1,
+        status,
+        payload: { cards },
+        upstreamVersions: computeUpstreamVersions(nodes, connections, nodeId),
+        generatedAt: new Date().toISOString(),
+    };
+    const next = nodes.map<CanvasNodeData>((node) =>
+        node.id === nodeId
+            ? {
+                  ...node,
+                  metadata: {
+                      ...node.metadata,
+                      status: "success",
+                      errorDetails: undefined,
+                      toonflow: { ...toonflow, status, output, history: previous ? appendTextHistory(toonflow.history, previous) : toonflow.history },
+                  },
+              }
+            : node,
+    );
+    return propagateAfterNewVersion(next, connections, nodeId);
+}
+
+export function parseEntityHints(scriptText: string): Array<{ cardType: "character" | "prop"; name: string; note: string }> {
+    const hints: Array<{ cardType: "character" | "prop"; name: string; note: string }> = [];
+    let activeType: "character" | "prop" | null = null;
+
+    for (const rawLine of scriptText.split(/\r?\n/)) {
+        if (rawLine.includes("角色实体清单")) {
+            activeType = "character";
+            continue;
+        }
+        if (rawLine.includes("道具实体清单")) {
+            activeType = "prop";
+            continue;
+        }
+        if (activeType && rawLine.includes("清单")) {
+            activeType = null;
+            continue;
+        }
+        if (!activeType) continue;
+
+        const line = rawLine
+            .trim()
+            .replace(/^[-*•]\s*/, "")
+            .replace(/^\d+[.)、]\s*/, "")
+            .trim();
+        if (!line) continue;
+        const separator = line.search(/[:：—]/);
+        if (separator <= 0) continue;
+        const name = line.slice(0, separator).trim();
+        const note = line.slice(separator + 1).trim();
+        if (name && note) hints.push({ cardType: activeType, name, note });
+    }
+
+    return hints;
 }
 
 function payloadContent(payload: NodeOutput["payload"]) {

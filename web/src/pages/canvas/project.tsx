@@ -9,7 +9,7 @@ import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audi
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
+import { imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
@@ -44,10 +44,13 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
+import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
-import { applyAdoptStale, applyApprove, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion } from "@/lib/toonflow/node-runtime";
+import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
+import type { AssetCard } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
@@ -340,6 +343,7 @@ function InfiniteCanvasPage() {
     const [angleNodeId, setAngleNodeId] = useState<string | null>(null);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [toonflowEditNodeId, setToonflowEditNodeId] = useState<string | null>(null);
+    const [toonflowAssetCardsNodeId, setToonflowAssetCardsNodeId] = useState<string | null>(null);
     const [toonflowHistoryNodeId, setToonflowHistoryNodeId] = useState<string | null>(null);
     const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
     const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
@@ -699,7 +703,13 @@ function InfiniteCanvasPage() {
     const angleNode = angleNodeId ? nodeById.get(angleNodeId) || null : null;
     const previewNode = previewNodeId ? nodeById.get(previewNodeId) || null : null;
     const toonflowEditNode = toonflowEditNodeId ? nodeById.get(toonflowEditNodeId) || null : null;
+    const toonflowAssetCardsNode = toonflowAssetCardsNodeId ? nodeById.get(toonflowAssetCardsNodeId) || null : null;
     const toonflowHistoryNode = toonflowHistoryNodeId ? nodeById.get(toonflowHistoryNodeId) || null : null;
+    const toonflowAssetScriptText = useMemo(() => {
+        if (!toonflowAssetCardsNode) return "";
+        const scriptConnection = connections.find((connection) => connection.toNodeId === toonflowAssetCardsNode.id && nodeById.get(connection.fromNodeId)?.metadata?.toonflow?.kind === "script");
+        return scriptConnection ? nodeById.get(scriptConnection.fromNodeId)?.metadata?.toonflow?.output?.payload.text ?? "" : "";
+    }, [connections, nodeById, toonflowAssetCardsNode]);
     const hasMultipleSelectedNodes = selectedNodeIds.size > 1;
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
     const batchChildCountById = useMemo(() => {
@@ -2558,6 +2568,38 @@ function InfiniteCanvasPage() {
         setToonflowEditNodeId(null);
     }, []);
 
+    const handleToonflowAssetCardsSave = useCallback((nodeId: string, cards: AssetCard[]) => {
+        const next = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
+        nodesRef.current = next;
+        setNodes(next);
+        setToonflowAssetCardsNodeId(null);
+    }, []);
+
+    const handleToonflowAssetCardGenerate = useCallback(
+        async (nodeId: string, card: AssetCard) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            if (sourceNode?.metadata?.toonflow?.kind !== "assets") throw new Error("未找到资产库节点");
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "image"), count: "1" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return undefined;
+            }
+
+            const { washed, hits } = washPrompt(buildAssetCardPrompt(card));
+            if (hits.length) message.warning(`已自动软化 ${hits.length} 个避雷词`);
+            const image = card.storageKey
+                ? await imageToDataUrl({ storageKey: card.storageKey }).then(async (dataUrl) => {
+                      if (!dataUrl) throw new Error("锚点参考图读取失败");
+                      const type = dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png";
+                      return requestEdit(generationConfig, washed, [{ id: card.cardId, name: `${card.name}.png`, type, dataUrl, storageKey: card.storageKey }], undefined).then((items) => items[0]);
+                  })
+                : await requestGeneration(generationConfig, washed).then((items) => items[0]);
+            if (!image?.dataUrl) throw new Error("图像接口没有返回锚点图");
+            return (await uploadImage(image.dataUrl)).storageKey;
+        },
+        [effectiveConfig, isAiConfigReady, message, openConfigDialog],
+    );
+
     const handleToonflowRollback = useCallback(
         (nodeId: string, version: number) => {
             const next = applyRollback(nodesRef.current, connectionsRef.current, nodeId, version);
@@ -3043,6 +3085,7 @@ function InfiniteCanvasPage() {
                                         onEdit={setToonflowEditNodeId}
                                         onCascade={(nodeId) => void handleToonflowCascade(nodeId)}
                                         onHistory={setToonflowHistoryNodeId}
+                                        onOpenAssetCards={setToonflowAssetCardsNodeId}
                                         onAdopt={handleToonflowAdopt}
                                         onDeleteArchived={(nodeId) => void handleDeleteArchivedInstance(nodeId)}
                                         onToggleBatch={toggleBatchExpanded}
@@ -3184,6 +3227,15 @@ function InfiniteCanvasPage() {
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
 
                 <ToonflowEditModal open={Boolean(toonflowEditNode)} node={toonflowEditNode} onSave={handleToonflowEditSave} onCancel={() => setToonflowEditNodeId(null)} />
+
+                <ToonflowAssetCardModal
+                    open={Boolean(toonflowAssetCardsNode)}
+                    node={toonflowAssetCardsNode}
+                    scriptText={toonflowAssetScriptText}
+                    onSave={handleToonflowAssetCardsSave}
+                    onGenerateCard={handleToonflowAssetCardGenerate}
+                    onCancel={() => setToonflowAssetCardsNodeId(null)}
+                />
 
                 <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
 

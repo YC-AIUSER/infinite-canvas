@@ -36,6 +36,7 @@ type ToonflowNodeContentProps = {
     onEdit?: (nodeId: string) => void;
     onCascade?: (nodeId: string) => void;
     onHistory?: (nodeId: string) => void;
+    onOpenAssetCards?: (nodeId: string) => void;
     onAdopt?: (nodeId: string) => void;
     onDeleteArchived?: (nodeId: string) => void;
     batchCount?: number;
@@ -43,7 +44,7 @@ type ToonflowNodeContentProps = {
     onToggleBatch?: (nodeId: string) => void;
 };
 
-export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onAdopt, onDeleteArchived, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
+export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onOpenAssetCards, onAdopt, onDeleteArchived, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const toonflow = node.metadata?.toonflow;
@@ -54,6 +55,16 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
     const isActionable = actionableKinds.has(toonflow.kind);
     const error = toonflow.output?.error || node.metadata?.errorDetails;
     const washHits = toonflow.washReport?.hits || [];
+    const assetCards = toonflow.output?.payload.cards;
+    const assetCardSummary = assetCards?.length
+        ? assetCards.reduce(
+              (summary, card) => {
+                  summary[card.cardType] += 1;
+                  return summary;
+              },
+              { character: 0, scene: 0, prop: 0 },
+          )
+        : null;
 
     return (
         <div className="flex h-full w-full flex-col overflow-hidden p-3.5" style={{ color: theme.node.text }}>
@@ -97,6 +108,12 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
             </div>
 
             <p className="mt-2 line-clamp-1 text-sm leading-5 opacity-70">{toonflow.summary}</p>
+
+            {assetCardSummary ? (
+                <p className="mt-1 truncate text-xs font-medium opacity-60">
+                    {assetCards?.length ?? 0} 张卡：角色{assetCardSummary.character} · 场景{assetCardSummary.scene} · 道具{assetCardSummary.prop}
+                </p>
+            ) : null}
 
             {toonflow.status === "failed" && error ? (
                 <p className="mt-1 line-clamp-1 text-xs" style={{ color: statusColor }} title={error}>
@@ -156,6 +173,46 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                             删除
                         </Button>
                     </Popconfirm>
+                </div>
+            ) : null}
+
+            {toonflow.kind === "assets" && !toonflow.archived ? (
+                <div className="mt-2 flex flex-wrap justify-end gap-2" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                    {toonflow.status === "review" ? (
+                        <Button
+                            size="small"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onApprove?.(node.id);
+                            }}
+                        >
+                            通过
+                        </Button>
+                    ) : null}
+                    {toonflow.status === "stale" ? (
+                        <Button
+                            size="small"
+                            disabled={cascadeLocked}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onAdopt?.(node.id);
+                            }}
+                        >
+                            沿用
+                        </Button>
+                    ) : null}
+                    <Button
+                        size="small"
+                        type="primary"
+                        disabled={cascadeLocked}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenAssetCards?.(node.id);
+                        }}
+                    >
+                        资产卡池
+                    </Button>
                 </div>
             ) : null}
 

@@ -106,6 +106,18 @@ export function buildActionContractPrompt(context: string) {
 仅输出 JSON 数组。每项格式（键名必须逐字使用英文，含义：cause=起因、process=过程、consequence=物理后果、endState=结束状态）：{"shotId":"","cause":"","process":"","consequence":"","endState":""}。`, context);
 }
 
+// 资产锚点卡，方法论源 ai-short-drama S4/pitfalls；卡片体系参考 manga-drama asset-card。
+export function buildAssetCardPrompt(card: { cardType: "character" | "scene" | "prop"; name: string; anchor: string }): string {
+    const subject = card.name.trim() || "未命名主体";
+    if (card.cardType === "character") {
+        return `生成一张角色全身立绘锚点卡，只画“${subject}”这一个主体。正面全身，自然站姿，服装完整可见，干净纯色浅底，构图简洁。外貌与服装锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo、水印或边框。单图输出。`;
+    }
+    if (card.cardType === "prop") {
+        return `生成一张道具锚点卡，只画“${subject}”这一个主体。白底单道具居中，无手持、无人物，形态与细节清晰，构图简洁。外形锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
+    }
+    return `生成一张场景锚点图，只画“${subject}”这一个场景。空场景、无人物，固定机位单视角，光线与地标清晰，构图简洁。场景锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
+}
+
 /*
  * 编译顺序（数组左侧优先级最高）：
  * inputs -> [节点优先级数组] -> 去空白/补充未知输入 -> 拼接上下文

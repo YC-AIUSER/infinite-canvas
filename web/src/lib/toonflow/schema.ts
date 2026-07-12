@@ -115,6 +115,16 @@ export const AudioLineSchema = z.object({
 
 export type AudioLine = z.infer<typeof AudioLineSchema>;
 
+export const AssetCardSchema = z.object({
+    cardId: z.string(),
+    cardType: z.enum(["character", "scene", "prop"]),
+    name: z.string(),
+    anchor: z.string(),
+    storageKey: z.string().optional(),
+});
+
+export type AssetCard = z.infer<typeof AssetCardSchema>;
+
 export const MediaKeySchema = z.string().refine((value) => !value.startsWith("data:"), {
     message: "历史记录禁止保存 dataUrl，请使用媒体存储键",
 });
@@ -135,6 +145,7 @@ export const NodeOutputSchema = z.object({
         audioKeys: z.array(MediaKeySchema).optional(),
         shotPrompts: z.record(z.string(), z.string()).optional(),
         audioLines: z.array(AudioLineSchema).optional(),
+        cards: z.array(AssetCardSchema).optional(),
     }),
     upstreamVersions: z.record(z.string(), z.number()),
     generationMeta: GenerationMetaSchema.optional(),
