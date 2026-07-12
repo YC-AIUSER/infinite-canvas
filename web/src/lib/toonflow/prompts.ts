@@ -110,7 +110,7 @@ export function buildActionContractPrompt(context: string) {
 
 // 资产锚点卡与派生资产，方法论源 manga-drama asset-card / ai-short-drama S4。
 export function buildAssetCardPrompt(
-    card: { cardType: "character" | "scene" | "prop" | "action" | "expression"; name: string; anchor: string },
+    card: { cardType: "character" | "scene" | "prop" | "action" | "expression" | "outfit" | "form"; name: string; anchor: string },
     parent?: { name: string; anchor: string },
 ): string {
     const subject = card.name.trim() || "未命名主体";
@@ -129,6 +129,15 @@ export function buildAssetCardPrompt(
         return parent
             ? `以参考图中的角色为唯一主体，“${parent.name}”的表情特写（胸像以上）：${card.anchor}。外貌锚点逐字遵守：${parent.anchor}；只改表情不改外观；干净浅底；画面禁止任何文字或水印；单图输出。`
             : `生成一张衍生表情锚点卡，只画“${subject}”这一个主体。表情特写（胸像以上）：${card.anchor}。外观与参考图一致，只改表情不改外观；干净浅底；画面禁止任何文字或水印；单图输出。`;
+    }
+    if (card.cardType === "outfit") {
+        return parent
+            ? `以参考图中的角色为唯一主体，为"${parent.name}"更换服装：${card.anchor}。全身入画、服装细节清晰、干净纯色浅底；脸型、发型、体型必须与参考图和以下锚点完全一致，逐字遵守：${parent.anchor}；只换服装，不改容貌；画面禁止任何文字、logo或水印；单图输出。`
+            : `生成一张衍生服装锚点卡，只画"${subject}"这一个主体。服装描述：${card.anchor}。全身入画、服装细节清晰、干净纯色浅底；外观与参考图一致，只换服装，不改容貌，禁止改变脸型、发型、体型；画面禁止任何文字、logo或水印；单图输出。`;
+    }
+    // 形态卡刻意不继承角色外观锚点——变身形态有独立参考或不露脸，注入原形态特征会造成反向漂移（创始人裁决 2026-07-12）。
+    if (card.cardType === "form") {
+        return `生成一张形态锚点卡，只画"${subject}"这一个主体。形态描述：${card.anchor}。构图完整、主体清晰、干净纯色浅底；有参考图时以参考图为唯一形象基准；画面禁止任何文字、logo或水印；单图输出。`;
     }
     return `生成一张场景锚点图，只画“${subject}”这一个场景。空场景、无人物，固定机位单视角，光线与地标清晰，构图简洁。场景锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
 }

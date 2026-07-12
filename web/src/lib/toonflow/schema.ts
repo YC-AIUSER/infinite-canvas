@@ -117,7 +117,7 @@ export type AudioLine = z.infer<typeof AudioLineSchema>;
 
 export const AssetCardSchema = z.object({
     cardId: z.string(),
-    cardType: z.enum(["character", "scene", "prop", "action", "expression"]),
+    cardType: z.enum(["character", "scene", "prop", "action", "expression", "outfit", "form"]),
     name: z.string(),
     anchor: z.string(),
     parentCardId: z.string().optional(),
@@ -130,16 +130,18 @@ export function validateAssetCards(cards: AssetCard[]): string[] {
     const cardById = new Map(cards.map((card) => [card.cardId, card]));
     const issues: string[] = [];
     for (const card of cards) {
-        if (card.cardType !== "action" && card.cardType !== "expression") continue;
+        const requiresParent = card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit";
+        if (!requiresParent && card.cardType !== "form") continue;
         if (!card.parentCardId) {
-            issues.push(`衍生卡“${card.name}”缺少父卡`);
+            if (requiresParent) issues.push(`衍生卡“${card.name}”缺少父卡`);
             continue;
         }
         const parent = cardById.get(card.parentCardId);
+        const cardLabel = card.cardType === "form" ? "形态卡" : "衍生卡";
         if (!parent) {
-            issues.push(`衍生卡“${card.name}”指向不存在的父卡`);
+            issues.push(`${cardLabel}“${card.name}”指向不存在的父卡`);
         } else if (parent.cardType !== "character") {
-            issues.push(`衍生卡“${card.name}”的父卡不是角色卡`);
+            issues.push(`${cardLabel}“${card.name}”的父卡不是角色卡`);
         }
     }
     return issues;

@@ -86,6 +86,19 @@ describe("资产卡输入与实体清单", () => {
         expect(readNodeInput(assets)).toContain("【动作】阿青·拔剑（衍生自阿青）：右手拔剑，侧身前倾");
     });
 
+    it("readNodeInput 区分角色形态与独立形态", () => {
+        const assets = node("assets", "assets", "approved", CanvasNodeType.Image);
+        assets.metadata!.toonflow!.output = output("assets", "assets", 1, "approved", {
+            cards: [
+                cards[0],
+                { cardId: "form-1", cardType: "form", parentCardId: "card-1", name: "阿青·青龙形态", anchor: "青色龙鳞覆盖全身" },
+                { cardId: "form-2", cardType: "form", name: "机械核心", anchor: "悬浮的金属球形核心" },
+            ],
+        });
+        expect(readNodeInput(assets)).toContain("【形态】阿青·青龙形态（阿青的形态）：青色龙鳞覆盖全身");
+        expect(readNodeInput(assets)).toContain("【形态】机械核心：悬浮的金属球形核心");
+    });
+
     it("提取角色和道具清单，兼容中文冒号与破折号", () => {
         const result = parseEntityHints("## 角色实体清单\n1. 阿青：黑色短发，青色长衫\n- 老周—花白短发，灰夹克\n## 道具实体清单\n* 油纸伞：旧竹骨红伞");
         expect(result).toEqual([
@@ -117,9 +130,11 @@ describe("AssetCardSchema", () => {
         ).toBe(true);
     });
 
-    it("接受动作和表情衍生卡并拒绝非法类型", () => {
+    it("接受动作、表情、服装和形态卡并拒绝非法类型", () => {
         expect(AssetCardSchema.safeParse({ cardId: "action-1", cardType: "action", parentCardId: "card-1", name: "拔剑", anchor: "拔剑前冲" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "expression-1", cardType: "expression", parentCardId: "card-1", name: "惊讶", anchor: "瞳孔放大" }).success).toBe(true);
+        expect(AssetCardSchema.safeParse({ cardId: "outfit-1", cardType: "outfit", parentCardId: "card-1", name: "夜行装", anchor: "黑色束袖夜行衣" }).success).toBe(true);
+        expect(AssetCardSchema.safeParse({ cardId: "form-1", cardType: "form", name: "青龙形态", anchor: "青色龙鳞覆盖全身" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "bad", cardType: "vehicle", name: "车", anchor: "红色" }).success).toBe(false);
     });
 });
@@ -127,6 +142,23 @@ describe("AssetCardSchema", () => {
 describe("validateAssetCards", () => {
     it("报告衍生卡缺少父卡", () => {
         expect(validateAssetCards([{ cardId: "action-1", cardType: "action", name: "拔剑", anchor: "拔剑前冲" }])).toEqual([expect.stringContaining("缺少父卡")]);
+    });
+
+    it("报告服装卡缺少父卡", () => {
+        expect(validateAssetCards([{ cardId: "outfit-1", cardType: "outfit", name: "夜行装", anchor: "黑色束袖夜行衣" }])).toEqual([expect.stringContaining("缺少父卡")]);
+    });
+
+    it("允许形态卡不挂父角色", () => {
+        expect(validateAssetCards([{ cardId: "form-1", cardType: "form", name: "青龙形态", anchor: "青色龙鳞覆盖全身" }])).toEqual([]);
+    });
+
+    it("报告形态卡父卡不是角色卡", () => {
+        expect(
+            validateAssetCards([
+                { cardId: "prop-1", cardType: "prop", name: "龙珠", anchor: "青色发光宝珠" },
+                { cardId: "form-1", cardType: "form", parentCardId: "prop-1", name: "青龙形态", anchor: "青色龙鳞覆盖全身" },
+            ]),
+        ).toEqual([expect.stringContaining("父卡不是角色卡")]);
     });
 
     it("报告父卡不存在", () => {
@@ -167,6 +199,20 @@ describe("buildAssetCardPrompt", () => {
         expect(prompt).toContain("只改表情不改外观");
         expect(prompt).toContain("胸像以上");
     });
+
+    it("服装卡逐字注入父锚点并约束只换服装", () => {
+        const prompt = buildAssetCardPrompt({ cardType: "outfit", name: "阿青·夜行装", anchor: "黑色束袖夜行衣" }, { name: "阿青", anchor: "黑色短发，清瘦体型" });
+        expect(prompt).toContain("黑色短发，清瘦体型");
+        expect(prompt).toContain("只换服装，不改容貌");
+        expect(prompt).toContain("脸型、发型、体型必须");
+    });
+
+    it("形态卡即使传入父角色也只使用自身锚点", () => {
+        const prompt = buildAssetCardPrompt({ cardType: "form", name: "阿青·青龙形态", anchor: "青色龙鳞覆盖全身" }, { name: "阿青", anchor: "父锚点绝不能出现" });
+        expect(prompt).toContain("青色龙鳞覆盖全身");
+        expect(prompt).not.toContain("父锚点绝不能出现");
+        expect(prompt).not.toContain("阿青的外貌");
+    });
 });
 
 describe("buildToonflowImageGeneration 衍生资产", () => {
@@ -203,5 +249,56 @@ describe("buildToonflowImageGeneration 衍生资产", () => {
 
         const result = buildToonflowImageGeneration([table, assets, target], [], "target");
         expect(result.referenceKeys).toEqual(["image:anchor-1", "image:action", "image:expression", "image:scene", "image:prop"]);
+    });
+
+    it("挂父形态跟随角色，独立形态排在道具之后", () => {
+        const table = node("table", "storyboard-table", "approved");
+        table.metadata!.toonflow!.output = output("table", "storyboard-table", 1, "approved", {
+            table: [
+                {
+                    segmentId: "seg-a",
+                    shotId: "shot-1",
+                    shotNo: 1,
+                    scale: "中景",
+                    angle: "平视",
+                    action: "变身",
+                    line: "",
+                    sfx: "",
+                    mood: "紧张",
+                    durationSec: 3,
+                },
+            ],
+        });
+        const assets = node("assets", "assets", "approved", CanvasNodeType.Image);
+        assets.metadata!.toonflow!.output = output("assets", "assets", 1, "approved", {
+            cards: [
+                { cardId: "form-independent", cardType: "form", name: "机械核心", anchor: "球形核心", storageKey: "image:form-independent" },
+                cards[0],
+                { cardId: "character-2", cardType: "character", name: "老周", anchor: "花白短发", storageKey: "image:character-2" },
+                { cardId: "form-2", cardType: "form", parentCardId: "character-2", name: "老周·石像形态", anchor: "石质躯体", storageKey: "image:form-2" },
+                { cardId: "prop-1", cardType: "prop", name: "剑", anchor: "青铜剑", storageKey: "image:prop" },
+                { cardId: "outfit-1", cardType: "outfit", parentCardId: "card-1", name: "阿青·夜行装", anchor: "黑色束袖夜行衣", storageKey: "image:outfit" },
+                { cardId: "form-1", cardType: "form", parentCardId: "card-1", name: "阿青·青龙形态", anchor: "青色龙鳞", storageKey: "image:form-1" },
+                { cardId: "action-1", cardType: "action", parentCardId: "card-1", name: "阿青·拔剑", anchor: "拔剑前冲", storageKey: "image:action" },
+                { cardId: "expression-1", cardType: "expression", parentCardId: "card-1", name: "阿青·惊讶", anchor: "瞳孔放大", storageKey: "image:expression" },
+                { cardId: "scene-1", cardType: "scene", name: "院落", anchor: "青砖院墙", storageKey: "image:scene" },
+            ],
+        });
+        const target = node("target", "storyboard-page", "generating", CanvasNodeType.Image);
+        target.metadata!.toonflow!.segmentId = "seg-a";
+
+        const result = buildToonflowImageGeneration([table, assets, target], [], "target");
+        expect(result.referenceKeys).toEqual([
+            "image:anchor-1",
+            "image:action",
+            "image:expression",
+            "image:outfit",
+            "image:form-1",
+            "image:character-2",
+            "image:form-2",
+            "image:scene",
+            "image:prop",
+            "image:form-independent",
+        ]);
     });
 });

@@ -2686,13 +2686,14 @@ function InfiniteCanvasPage() {
             }
 
             const savedCards = sourceNode.metadata.toonflow.output?.payload.cards ?? [];
-            const parentCard = card.parentCardId
+            const isDerived = card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit";
+            const parentCard = isDerived && card.parentCardId
                 ? allCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character") ?? savedCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character")
                 : undefined;
-            const isDerived = card.cardType === "action" || card.cardType === "expression";
             if (isDerived && !parentCard?.storageKey) message.warning("父卡没有锚点图，衍生一致性可能漂移");
-            const referenceCard = isDerived ? (parentCard?.storageKey ? parentCard : card.storageKey ? card : undefined) : card.storageKey ? card : undefined;
-            const { washed, hits } = washPrompt(buildAssetCardPrompt(card, parentCard ? { name: parentCard.name, anchor: parentCard.anchor } : undefined));
+            const referenceCard = card.cardType === "form" ? (card.storageKey ? card : undefined) : isDerived ? (parentCard?.storageKey ? parentCard : card.storageKey ? card : undefined) : card.storageKey ? card : undefined;
+            const prompt = card.cardType === "form" ? buildAssetCardPrompt(card) : buildAssetCardPrompt(card, parentCard ? { name: parentCard.name, anchor: parentCard.anchor } : undefined);
+            const { washed, hits } = washPrompt(prompt);
             if (hits.length) message.warning(`已自动软化 ${hits.length} 个避雷词`);
             const image = referenceCard?.storageKey
                 ? await imageToDataUrl({ storageKey: referenceCard.storageKey }).then(async (dataUrl) => {

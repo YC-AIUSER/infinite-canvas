@@ -56,11 +56,14 @@ const ASSET_CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     prop: "道具",
     action: "动作",
     expression: "表情",
+    outfit: "服装",
+    form: "形态",
 };
 
 function formatAssetCard(card: AssetCard, parentNameById: Map<string, string>) {
     const parentName = card.parentCardId ? parentNameById.get(card.parentCardId) : undefined;
-    const derivedFrom = (card.cardType === "action" || card.cardType === "expression") && parentName ? `（衍生自${parentName}）` : "";
+    const derivedFrom = (card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit") && parentName ? `（衍生自${parentName}）` : "";
+    if (card.cardType === "form" && parentName) return `【形态】${card.name}（${parentName}的形态）：${card.anchor}`;
     return `【${ASSET_CARD_TYPE_LABELS[card.cardType]}】${card.name}${derivedFrom}：${card.anchor}`;
 }
 
@@ -141,10 +144,12 @@ export type ToonflowImageGeneration = {
 
 function assetCardSortKey(card: AssetCard, characterOrder: Map<string, number>): [number, number, number] {
     if (card.cardType === "character") return [0, characterOrder.get(card.cardId) ?? 0, 0];
-    if (card.cardType === "action" || card.cardType === "expression") {
+    if (card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit" || card.cardType === "form") {
         const parentOrder = card.parentCardId ? characterOrder.get(card.parentCardId) : undefined;
-        if (parentOrder !== undefined) return [0, parentOrder, card.cardType === "action" ? 1 : 2];
-        return [1, 0, card.cardType === "action" ? 0 : 1];
+        const derivedOrder = card.cardType === "action" ? 1 : card.cardType === "expression" ? 2 : card.cardType === "outfit" ? 3 : 4;
+        if (parentOrder !== undefined) return [0, parentOrder, derivedOrder];
+        if (card.cardType === "form") return [4, 0, 0];
+        return [1, 0, derivedOrder];
     }
     return [card.cardType === "scene" ? 2 : 3, 0, 0];
 }

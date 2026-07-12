@@ -14,6 +14,8 @@ const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     prop: "道具",
     action: "动作",
     expression: "表情",
+    outfit: "服装",
+    form: "形态",
 };
 
 const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
@@ -22,6 +24,8 @@ const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
     prop: "orange",
     action: "purple",
     expression: "cyan",
+    outfit: "magenta",
+    form: "gold",
 };
 
 type ToonflowAssetCardModalProps = {
@@ -101,8 +105,8 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     const parentCards = cards.filter((card) => card.cardType === "character");
     const parentNameById = new Map(cards.map((card) => [card.cardId, card.name]));
     const cardGroups = [
-        { key: "base", label: "基础卡", cards: cards.filter((card) => card.cardType !== "action" && card.cardType !== "expression") },
-        { key: "derived", label: "衍生卡", cards: cards.filter((card) => card.cardType === "action" || card.cardType === "expression") },
+        { key: "base", label: "基础卡", cards: cards.filter((card) => card.cardType === "character" || card.cardType === "scene" || card.cardType === "prop") },
+        { key: "derived", label: "衍生卡", cards: cards.filter((card) => card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit" || card.cardType === "form") },
     ].filter((group) => group.cards.length);
 
     const startNewCard = (preset?: Partial<Pick<AssetCard, "cardType" | "name" | "anchor" | "parentCardId">>) => {
@@ -126,7 +130,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
             message.warning("请填写名称和锚点文字");
             return;
         }
-        if ((draft.cardType === "action" || draft.cardType === "expression") && !draft.parentCardId) {
+        if ((draft.cardType === "action" || draft.cardType === "expression" || draft.cardType === "outfit") && !draft.parentCardId) {
             message.warning("请选择父角色卡");
             return;
         }
@@ -210,7 +214,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                         <div>
                             <h3 className="text-sm font-semibold">锚点卡</h3>
                             <p className="mt-0.5 text-xs" style={{ color: token.colorTextSecondary }}>
-                                角色、场景、道具及角色衍生动作与表情集中在这里，下游会逐字复用锚点文字。
+                                角色、场景、道具及角色衍生动作、表情、服装与形态集中在这里，下游会逐字复用锚点文字。
                             </p>
                         </div>
                         <Button icon={<Plus className="size-4" />} onClick={() => startNewCard()}>
@@ -244,7 +248,11 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                                                                 <Tag color={CARD_TYPE_COLORS[card.cardType]} className="!mr-0">
                                                                     {CARD_TYPE_LABELS[card.cardType]}
                                                                 </Tag>
-                                                                {parentName ? <Tag className="!mr-0">衍生自 {parentName}</Tag> : null}
+                                                                {card.cardType === "form" ? (
+                                                                    <Tag className="!mr-0">{parentName ? `${parentName}的形态` : "独立形态"}</Tag>
+                                                                ) : parentName ? (
+                                                                    <Tag className="!mr-0">衍生自 {parentName}</Tag>
+                                                                ) : null}
                                                             </span>
                                                         </div>
                                                         <p className="line-clamp-2 min-h-10 text-xs leading-5" style={{ color: token.colorTextSecondary }} title={card.anchor}>
@@ -261,8 +269,10 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                                                                         items: [
                                                                             { key: "action", label: "衍生动作" },
                                                                             { key: "expression", label: "衍生表情" },
+                                                                            { key: "outfit", label: "换装" },
+                                                                            { key: "form", label: "形态" },
                                                                         ],
-                                                                        onClick: ({ key }) => startNewCard({ cardType: key as "action" | "expression", parentCardId: card.cardId, name: `${card.name}·` }),
+                                                                        onClick: ({ key }) => startNewCard({ cardType: key as "action" | "expression" | "outfit" | "form", parentCardId: card.cardId, name: `${card.name}·` }),
                                                                     }}
                                                                 >
                                                                     <Button size="small" icon={<Plus className="size-3.5" />}>
@@ -330,7 +340,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                                 onChange={(cardType) =>
                                     setDraft((current) => {
                                         if (!current) return current;
-                                        if (cardType === "action" || cardType === "expression") return { ...current, cardType };
+                                        if (cardType === "action" || cardType === "expression" || cardType === "outfit" || cardType === "form") return { ...current, cardType };
                                         const next = { ...current, cardType };
                                         delete next.parentCardId;
                                         return next;
@@ -339,13 +349,22 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                             />
                             <Input value={draft.name} placeholder="名称" onChange={(event) => setDraft((current) => (current ? { ...current, name: event.target.value } : current))} />
                         </div>
-                        {draft.cardType === "action" || draft.cardType === "expression" ? (
+                        {draft.cardType === "action" || draft.cardType === "expression" || draft.cardType === "outfit" || draft.cardType === "form" ? (
                             <Select
                                 className="mt-3 w-full"
                                 value={draft.parentCardId}
-                                placeholder="选择父角色卡"
+                                placeholder={draft.cardType === "form" ? "可不挂角色（独立形态）" : "选择父角色卡"}
+                                allowClear={draft.cardType === "form"}
                                 options={parentCards.map((card) => ({ value: card.cardId, label: card.name }))}
-                                onChange={(parentCardId) => setDraft((current) => (current ? { ...current, parentCardId } : current))}
+                                onChange={(parentCardId) =>
+                                    setDraft((current) => {
+                                        if (!current) return current;
+                                        if (parentCardId) return { ...current, parentCardId };
+                                        const next = { ...current };
+                                        delete next.parentCardId;
+                                        return next;
+                                    })
+                                }
                             />
                         ) : null}
                         <Input.TextArea className="mt-3" value={draft.anchor} autoSize={{ minRows: 3, maxRows: 7 }} placeholder="外貌、外形或场景锚点文字；保存后下游逐字复用" onChange={(event) => setDraft((current) => (current ? { ...current, anchor: event.target.value } : current))} />
