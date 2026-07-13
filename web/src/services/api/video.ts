@@ -61,7 +61,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     assertVideoConfig(requestConfig, requestConfig.model);
     // cano(格物智绘)是独立方言:模型名同样含 "seedance" 会被误判进火山 Seedance 路径,故先按 baseUrl 识别。
     if (isCanoVideoConfig(requestConfig)) {
-        return createCanoTask(requestConfig, selectedModel, prompt, references, options);
+        return createCanoTask(requestConfig, selectedModel, prompt, references, audioReferences, options);
     }
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
@@ -160,7 +160,7 @@ function canoErrorMessage(payload: CanoEnvelope): string {
     );
 }
 
-async function createCanoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createCanoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     const body = new FormData();
     body.append("model", modelOptionName(model));
     body.append("type", references.length ? "multimodal2video" : "text2video");
@@ -175,6 +175,13 @@ async function createCanoTask(config: AiConfig, model: string, prompt: string, r
         }),
     );
     files.forEach((file) => body.append("images", file));
+    // 参考音频(人声):cano 音频接口 2026-07-13 承诺次日修复,字段名/格式待核实,暂按 images 模式用 "audios";
+    // 仅在有音频卡时附加,不影响现有纯图请求。拿到 cano 音频 API 文档后核对字段名与是否需要 base64/URL。
+    for (const audio of audioReferences.slice(0, 9)) {
+        if (!audio.storageKey) continue;
+        const blob = await getMediaBlob(audio.storageKey);
+        if (blob) body.append("audios", new File([blob], `${audio.storageKey.replace(/[^a-zA-Z0-9]/g, "_")}.mp3`, { type: blob.type || "audio/mpeg" }));
+    }
     try {
         const payload = (await axios.post<CanoEnvelope>(aiApiUrl(config, "/videos/generations"), body, { headers: aiHeaders(config), signal: options?.signal })).data;
         if (payload?.success === false) throw new Error(canoErrorMessage(payload) || "Cano 视频任务创建失败");

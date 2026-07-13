@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Tag, Upload, theme } from "antd";
-import { ImageIcon, ImagePlus, Pencil, Plus, Trash2, UploadIcon } from "lucide-react";
+import { AudioLines, ImageIcon, ImagePlus, Pencil, Plus, Trash2, UploadIcon } from "lucide-react";
 import { nanoid } from "nanoid";
 
 import { parseEntityHints } from "@/lib/toonflow/node-runtime";
 import { validateAssetCards, type AssetCard } from "@/lib/toonflow/schema";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import type { CanvasNodeData } from "@/types/canvas";
 
 const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
@@ -16,6 +17,7 @@ const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     expression: "表情",
     outfit: "服装",
     form: "形态",
+    audio: "音频",
 };
 
 const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
@@ -26,6 +28,7 @@ const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
     expression: "cyan",
     outfit: "magenta",
     form: "gold",
+    audio: "volcano",
 };
 
 type ToonflowAssetCardModalProps = {
@@ -63,6 +66,34 @@ function AssetCardImage({ storageKey, name }: { storageKey?: string; name: strin
         <div className="flex h-full flex-col items-center justify-center gap-2 text-xs" style={{ color: token.colorTextQuaternary }}>
             <ImageIcon className="size-7" />
             <span>暂无锚点图</span>
+        </div>
+    );
+}
+
+function AssetCardAudio({ storageKey }: { storageKey?: string }) {
+    const { token } = theme.useToken();
+    const [url, setUrl] = useState("");
+
+    useEffect(() => {
+        let active = true;
+        if (!storageKey) {
+            setUrl("");
+            return () => {
+                active = false;
+            };
+        }
+        void resolveMediaUrl(storageKey).then((resolved) => {
+            if (active) setUrl(resolved);
+        });
+        return () => {
+            active = false;
+        };
+    }, [storageKey]);
+
+    return (
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-3 text-xs" style={{ color: token.colorTextQuaternary }} onPointerDown={(event) => event.stopPropagation()}>
+            <AudioLines className="size-7" />
+            {url ? <audio src={url} controls className="w-full" /> : <span>暂无人声参考</span>}
         </div>
     );
 }
@@ -111,6 +142,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     const cardGroups = [
         { key: "base", label: "基础卡", cards: cards.filter((card) => card.cardType === "character" || card.cardType === "scene" || card.cardType === "prop") },
         { key: "derived", label: "衍生卡", cards: cards.filter((card) => card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit" || card.cardType === "form") },
+        { key: "audio", label: "音频卡（人声参考）", cards: cards.filter((card) => card.cardType === "audio") },
     ].filter((group) => group.cards.length);
 
     const startNewCard = (preset?: Partial<Pick<AssetCard, "cardType" | "name" | "anchor" | "parentCardId">>) => {
@@ -130,8 +162,13 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     };
 
     const saveDraft = () => {
-        if (!draft?.name.trim() || !draft.anchor.trim()) {
-            message.warning("请填写名称和锚点文字");
+        if (!draft?.name.trim()) {
+            message.warning("请填写名称");
+            return;
+        }
+        // 音频卡是上传的人声参考,不注入文字锚点,描述可选;其余卡必须有锚点文字(下游逐字复用)。
+        if (draft.cardType !== "audio" && !draft.anchor.trim()) {
+            message.warning("请填写锚点文字");
             return;
         }
         if ((draft.cardType === "action" || draft.cardType === "expression" || draft.cardType === "outfit") && !draft.parentCardId) {
@@ -150,18 +187,19 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
         setDraft((current) => (current?.cardId === cardId ? { ...current, storageKey } : current));
     };
 
-    const handleUpload = async (cardId: string, file: File) => {
-        setUploadingCardIds((current) => new Set(current).add(cardId));
+    const handleUpload = async (card: AssetCard, file: File) => {
+        setUploadingCardIds((current) => new Set(current).add(card.cardId));
         try {
-            const uploaded = await uploadImage(file);
-            updateCardStorageKey(cardId, uploaded.storageKey);
-            message.success("锚点图已上传");
+            // 音频卡存 media_files(键 audio:*,非 image: 前缀,自动被 collectMediaStorageKeys 保护),图像卡存 image_files。
+            const uploaded = card.cardType === "audio" ? await uploadMediaFile(file, "audio") : await uploadImage(file);
+            updateCardStorageKey(card.cardId, uploaded.storageKey);
+            message.success(card.cardType === "audio" ? "人声参考已上传" : "锚点图已上传");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "上传失败");
         } finally {
             setUploadingCardIds((current) => {
                 const next = new Set(current);
-                next.delete(cardId);
+                next.delete(card.cardId);
                 return next;
             });
         }
@@ -191,7 +229,12 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     const cleanupSessionKeys = (keptKeys: Set<string>) => {
         const orphaned = Array.from(sessionKeysRef.current).filter((key) => !keptKeys.has(key));
         sessionKeysRef.current = new Set(keptKeys);
-        if (orphaned.length) void deleteStoredImages(orphaned);
+        if (!orphaned.length) return;
+        // 按存储库前缀分流清理:image: → image_files,其余(audio: 等)→ media_files,防跨库误删/漏删。
+        const imageOrphans = orphaned.filter((key) => key.startsWith("image:"));
+        const mediaOrphans = orphaned.filter((key) => !key.startsWith("image:"));
+        if (imageOrphans.length) void deleteStoredImages(imageOrphans);
+        if (mediaOrphans.length) void deleteStoredMedia(mediaOrphans);
     };
 
     const handleCancel = () => {
@@ -255,7 +298,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                                             return (
                                                 <article key={card.cardId} className="overflow-hidden rounded-xl border" style={{ borderColor: token.colorBorderSecondary, background: token.colorBgContainer }}>
                                                     <div className="aspect-[4/3]" style={{ background: token.colorFillAlter }}>
-                                                        <AssetCardImage storageKey={card.storageKey} name={card.name} />
+                                                        {card.cardType === "audio" ? <AssetCardAudio storageKey={card.storageKey} /> : <AssetCardImage storageKey={card.storageKey} name={card.name} />}
                                                     </div>
                                                     <div className="space-y-2.5 p-3">
                                                         <div className="flex items-start justify-between gap-2">
@@ -311,22 +354,24 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                                                                 </Button>
                                                             </Popconfirm>
                                                             <Upload
-                                                                accept="image/*"
+                                                                accept={card.cardType === "audio" ? "audio/*" : "image/*"}
                                                                 showUploadList={false}
                                                                 beforeUpload={(file) => {
-                                                                    void handleUpload(card.cardId, file);
+                                                                    void handleUpload(card, file);
                                                                     return false;
                                                                 }}
                                                             >
                                                                 <Button size="small" loading={uploading} disabled={generating} icon={<UploadIcon className="size-3.5" />}>
-                                                                    上传图
+                                                                    {card.cardType === "audio" ? "上传音频" : "上传图"}
                                                                 </Button>
                                                             </Upload>
-                                                            <Popconfirm title="将调用 1 次图像生成" description={card.storageKey ? "当前锚点图会作为参考图参与生成。" : "将根据锚点文字从零生成。"} okText="确认生成" cancelText="取消" onConfirm={() => handleGenerate(card)}>
-                                                                <Button size="small" loading={generating} disabled={uploading} icon={<ImagePlus className="size-3.5" />}>
-                                                                    生成锚点图
-                                                                </Button>
-                                                            </Popconfirm>
+                                                            {card.cardType === "audio" ? null : (
+                                                                <Popconfirm title="将调用 1 次图像生成" description={card.storageKey ? "当前锚点图会作为参考图参与生成。" : "将根据锚点文字从零生成。"} okText="确认生成" cancelText="取消" onConfirm={() => handleGenerate(card)}>
+                                                                    <Button size="small" loading={generating} disabled={uploading} icon={<ImagePlus className="size-3.5" />}>
+                                                                        生成锚点图
+                                                                    </Button>
+                                                                </Popconfirm>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </article>

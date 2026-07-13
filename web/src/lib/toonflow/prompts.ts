@@ -110,7 +110,7 @@ export function buildActionContractPrompt(context: string) {
 
 // 资产锚点卡与派生资产，方法论源 manga-drama asset-card / ai-short-drama S4。
 export function buildAssetCardPrompt(
-    card: { cardType: "character" | "scene" | "prop" | "action" | "expression" | "outfit" | "form"; name: string; anchor: string },
+    card: { cardType: "character" | "scene" | "prop" | "action" | "expression" | "outfit" | "form" | "audio"; name: string; anchor: string },
     parent?: { name: string; anchor: string },
 ): string {
     const subject = card.name.trim() || "未命名主体";

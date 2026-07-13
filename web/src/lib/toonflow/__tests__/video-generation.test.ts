@@ -123,6 +123,22 @@ describe("buildToonflowVideoGeneration", () => {
         expect(() => buildToonflowVideoGeneration(nodes, [], "target")).toThrow("请先生成该段故事板页");
     });
 
+    it("音频卡(人声)进 audioReferenceKeys、不混入图像 referenceKeys", () => {
+        const nodes = baseNodes().filter((item) => item.id !== "assets");
+        nodes.push(
+            node("assets", "assets", {
+                cards: [
+                    { cardId: "character", cardType: "character", name: "主角", anchor: "红衣黑发", storageKey: "image:character" },
+                    { cardId: "voice", cardType: "audio", name: "主角人声", anchor: "低沉嗓音", storageKey: "audio:voice" },
+                ],
+            }),
+        );
+        const result = buildToonflowVideoGeneration(nodes, [], "target");
+        expect(result.referenceKeys).toContain("image:character");
+        expect(result.referenceKeys).not.toContain("audio:voice");
+        expect(result.audioReferenceKeys).toEqual(["audio:voice"]);
+    });
+
     it("缺首帧组只给 warning 不阻断,参考里没有首帧键", () => {
         const nodes = baseNodes().filter((item) => item.id !== "keyframes");
         const result = buildToonflowVideoGeneration(nodes, [], "target");

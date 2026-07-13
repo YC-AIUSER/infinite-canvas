@@ -2618,7 +2618,9 @@ function InfiniteCanvasPage() {
 
                 let storageKey: string;
                 if (videoGeneration) {
-                    const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], [], { signal: controller.signal });
+                    // 音频卡→参考音频(人声):storageKey 指向 media_files 音频,video 服务按 provider 处理(火山 Seedance 生效,cano 待其音频接口)。
+                    const audioReferences = videoGeneration.audioReferenceKeys.map((key) => ({ id: key, name: key, type: "audio/mpeg", url: "", storageKey: key }));
+                    const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], audioReferences, { signal: controller.signal });
                     videoTaskId = task.id;
                     resumedVideoTaskIdsRef.current.add(task.id);
                     const pendingNodes = nodesRef.current.map((node) =>
@@ -2916,6 +2918,11 @@ function InfiniteCanvasPage() {
         async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             if (sourceNode?.metadata?.toonflow?.kind !== "assets") throw new Error("未找到资产库节点");
+            // 音频卡是上传的人声参考,不走 AI 图像生成(也收窄类型:下方 buildAssetCardPrompt 仅接受视觉卡类型)。
+            if (card.cardType === "audio") {
+                message.warning("音频卡是上传的人声参考，不支持 AI 生成，请直接上传音频");
+                return undefined;
+            }
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);

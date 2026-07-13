@@ -117,7 +117,7 @@ export type AudioLine = z.infer<typeof AudioLineSchema>;
 
 export const AssetCardSchema = z.object({
     cardId: z.string(),
-    cardType: z.enum(["character", "scene", "prop", "action", "expression", "outfit", "form"]),
+    cardType: z.enum(["character", "scene", "prop", "action", "expression", "outfit", "form", "audio"]),
     name: z.string(),
     anchor: z.string(),
     parentCardId: z.string().optional(),

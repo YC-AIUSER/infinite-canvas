@@ -60,6 +60,7 @@ const ASSET_CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     expression: "表情",
     outfit: "服装",
     form: "形态",
+    audio: "音频",
 };
 
 function formatAssetCard(card: AssetCard, parentNameById: Map<string, string>) {
@@ -199,8 +200,9 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
     const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
     const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
     const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
+    // 音频卡不是图像参考,从图像生成的锚点与参考图里剔除(其 storageKey 是音频媒体键,误入会当图像参考读取失败)。
     const cards = allAssetCards
-        .filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey))
+        .filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey) && card.cardType !== "audio")
         .sort((left, right) => {
             const leftKey = assetCardSortKey(left, characterOrder);
             const rightKey = assetCardSortKey(right, characterOrder);
@@ -235,7 +237,7 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
     return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings };
 }
 
-export type ToonflowVideoGeneration = ToonflowImageGeneration & { shotPrompts: Record<string, string> };
+export type ToonflowVideoGeneration = ToonflowImageGeneration & { shotPrompts: Record<string, string>; audioReferenceKeys: string[] };
 
 export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, note?: string): ToonflowVideoGeneration {
     void connections;
@@ -256,8 +258,11 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
     const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
     const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
     const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
-    const cards = allAssetCards
-        .filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey))
+    const withStorageKey = allAssetCards.filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey));
+    // 音频卡(人声参考)从图像参考/视觉锚点剔除,单独作为视频参考音频(仅火山 Seedance 生效;cano 待其音频接口修复)。
+    const audioReferenceKeys = withStorageKey.filter((card) => card.cardType === "audio").map((card) => card.storageKey);
+    const cards = withStorageKey
+        .filter((card) => card.cardType !== "audio")
         .sort((left, right) => {
             const leftKey = assetCardSortKey(left, characterOrder);
             const rightKey = assetCardSortKey(right, characterOrder);
@@ -285,7 +290,7 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
     const mandatoryKeys = [storyboardKey];
 
     const { washed, hits } = washPrompt(prompt);
-    return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings, shotPrompts };
+    return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings, shotPrompts, audioReferenceKeys };
 }
 
 function generationMeta(node: CanvasNodeData, _washHits: WashHit[]) {
