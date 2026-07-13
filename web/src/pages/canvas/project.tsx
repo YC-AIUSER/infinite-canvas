@@ -53,7 +53,7 @@ import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-s
 import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
 import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
 import type { AssetCard } from "@/lib/toonflow/schema";
-import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
+import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
 import { skillCards } from "@/pages/skills/skills-data";
@@ -3660,8 +3660,18 @@ function InfiniteCanvasPage() {
                     plan={toonflowSegmentSyncPlan}
                     nodes={nodes}
                     onConfirm={() => {
-                        if (toonflowSegmentSyncPlan) applyStoryboardInstancePlan(toonflowSegmentSyncPlan);
-                        setToonflowSegmentSyncPlan(null);
+                        if (!toonflowSegmentSyncPlan) return;
+                        const fresh = planInstanceSync(nodesRef.current, toonflowSegmentSyncPlan.storyboardNodeId);
+                        const resolution = resolveConfirmedSync(toonflowSegmentSyncPlan, fresh);
+                        if (resolution.action === "apply") {
+                            applyStoryboardInstancePlan(resolution.plan);
+                            setToonflowSegmentSyncPlan(null);
+                        } else if (resolution.action === "represent") {
+                            message.info("分镜表已更新，请确认最新的同步计划");
+                            setToonflowSegmentSyncPlan(resolution.plan);
+                        } else {
+                            setToonflowSegmentSyncPlan(null);
+                        }
                     }}
                     onCancel={() => setToonflowSegmentSyncPlan(null)}
                 />

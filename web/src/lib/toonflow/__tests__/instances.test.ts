@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind } from "../../../types/canvas";
-import { applyInstanceSync, deleteArchivedInstance, planInstanceSync } from "../instances";
+import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync } from "../instances";
 import type { NodeOutput, StoryboardRow } from "../schema";
 
 function row(segmentId: string, shotNo: number): StoryboardRow {
@@ -228,5 +228,35 @@ describe("Toonflow segment instances", () => {
     it("三个模板根缺一时不生成同步计划", () => {
         const nodes = [storyboard([row("seg-a", 1)]), root("storyboard-root", "storyboard-page", 500), root("keyframes-root", "keyframes", 900)];
         expect(planInstanceSync(nodes, "storyboard")).toBeNull();
+    });
+
+    it("确认时状态未变则按用户所见应用同一计划", () => {
+        const first = sync(template([row("seg-a", 1)]));
+        const changed = first.nodes.map((node) => (node.id === "storyboard" ? storyboard([row("seg-a", 1), row("seg-b", 1)]) : node));
+        const confirmed = planInstanceSync(changed, "storyboard")!;
+        const fresh = planInstanceSync(changed, "storyboard")!;
+
+        expect(resolveConfirmedSync(confirmed, fresh)).toEqual({ action: "apply", plan: fresh });
+    });
+
+    it("确认时分镜表已再次变化则用最新计划重新弹窗而非套旧计划", () => {
+        const first = sync(template([row("seg-a", 1)]));
+        const changed = first.nodes.map((node) => (node.id === "storyboard" ? storyboard([row("seg-a", 1), row("seg-b", 1)]) : node));
+        const confirmed = planInstanceSync(changed, "storyboard")!;
+        const changedAgain = first.nodes.map((node) => (node.id === "storyboard" ? storyboard([row("seg-a", 1), row("seg-b", 1), row("seg-c", 1)]) : node));
+        const fresh = planInstanceSync(changedAgain, "storyboard")!;
+
+        expect(fresh.toCreate.map((item) => item.segmentId)).toContain("seg-c");
+        expect(resolveConfirmedSync(confirmed, fresh)).toEqual({ action: "represent", plan: fresh });
+    });
+
+    it("确认时改动已被应用则关闭弹窗不重复建实例", () => {
+        const first = sync(template([row("seg-a", 1)]));
+        const changed = first.nodes.map((node) => (node.id === "storyboard" ? storyboard([row("seg-a", 1), row("seg-b", 1)]) : node));
+        const confirmed = planInstanceSync(changed, "storyboard")!;
+        const applied = applyInstanceSync(changed, first.connections, confirmed, idFactory());
+        const fresh = planInstanceSync(applied.nodes, "storyboard");
+
+        expect(resolveConfirmedSync(confirmed, fresh)).toEqual({ action: "dismiss" });
     });
 });
