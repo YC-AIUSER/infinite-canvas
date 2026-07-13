@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toonflow 一期交付 — infinite-canvas</title>
+<style>
+:root {
+  --ivory:#FAF9F5; --slate:#141413; --clay:#D97757; --oat:#E3DACC; --olive:#788C5D; --rust:#B04A3F;
+  --white:#FFFFFF; --gray-100:#F0EEE6; --gray-300:#D1CFC5; --gray-500:#87867F; --gray-700:#3D3D3A;
+  --warning:#C78E3F; --danger:#B04A4A; --info:#5C7CA3;
+  --serif:ui-serif,Georgia,"Noto Serif SC","Source Han Serif SC",serif;
+  --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --radius:12px; --border:1.5px solid var(--gray-300); --shadow:0 1px 2px rgba(20,20,19,0.06);
+}
+html[data-theme="dark"] {
+  --ivory:#16161A; --white:#201F1D; --slate:#F2EEE6; --oat:#3A3226; --gray-100:#26251F;
+  --gray-300:#3A3A36; --gray-500:#9C9A92; --gray-700:#D6D3CB; --shadow:0 1px 2px rgba(0,0,0,0.4);
+}
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; scroll-padding-top:76px; }
+body { margin:0; padding:0 32px 120px; background:var(--ivory); color:var(--gray-700); font-family:var(--sans); font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased; transition:background .2s,color .2s; }
+.page { max-width:1000px; margin:0 auto; }
+.docnav { position:sticky; top:0; z-index:20; background:color-mix(in srgb,var(--ivory) 88%,transparent); backdrop-filter:saturate(1.4) blur(8px); border-bottom:1px solid var(--gray-300); margin:0 -32px 40px; padding:10px 32px; }
+.docnav-inner { max-width:1000px; margin:0 auto; display:flex; align-items:center; gap:10px; }
+.docnav .toc { display:flex; gap:4px; flex-wrap:wrap; flex:1; min-width:0; overflow-x:auto; scrollbar-width:thin; }
+.docnav .toc a { font-family:var(--mono); font-size:12px; color:var(--gray-500); text-decoration:none; padding:5px 10px; border-radius:7px; white-space:nowrap; transition:background .15s,color .15s; }
+.docnav .toc a:hover { color:var(--clay); background:var(--gray-100); }
+.docnav .toc a.active { color:var(--slate); background:var(--oat); }
+.docnav .search { font-family:var(--mono); font-size:12px; background:var(--white); color:var(--gray-700); border:var(--border); border-radius:999px; padding:6px 12px; width:150px; transition:width .2s,border-color .15s; }
+.docnav .search:focus { outline:none; width:200px; border-color:var(--clay); }
+.docnav .search-count { font-family:var(--mono); font-size:11px; color:var(--gray-500); min-width:30px; text-align:center; }
+.docnav .theme-btn { background:var(--white); border:var(--border); border-radius:999px; width:34px; height:34px; cursor:pointer; font-size:15px; display:grid; place-items:center; flex-shrink:0; color:var(--gray-700); }
+.docnav .theme-btn:hover { border-color:var(--clay); }
+mark.dochit { background:var(--clay); color:var(--ivory); border-radius:3px; padding:0 1px; }
+mark.dochit.current { outline:2px solid var(--slate); }
+.eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--gray-500); margin-bottom:12px; }
+h1 { font-family:var(--serif); font-weight:500; font-size:36px; line-height:1.15; color:var(--slate); letter-spacing:-.01em; margin:0 0 16px; }
+.lede { font-size:17px; color:var(--gray-500); max-width:760px; margin:0 0 40px; }
+.summary-band { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:56px; }
+@media (max-width:720px){ .summary-band { grid-template-columns:repeat(2,1fr); } }
+.stat-card { background:var(--white); border:var(--border); border-radius:var(--radius); padding:20px 22px 18px; }
+.stat-card.warn { border-left:4px solid var(--clay); padding-left:19px; }
+.stat-num { font-family:var(--serif); font-size:42px; font-weight:500; line-height:1; color:var(--slate); margin-bottom:8px; }
+.stat-label { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--gray-500); }
+.stat-delta { font-family:var(--mono); font-size:11px; margin-top:6px; }
+.stat-delta.up { color:var(--olive); } .stat-delta.flat { color:var(--gray-500); }
+section { margin-bottom:56px; }
+.sec-head { display:flex; align-items:baseline; gap:14px; margin-bottom:8px; }
+.sec-head .num { font-family:var(--mono); font-size:12px; background:var(--oat); color:var(--slate); padding:3px 9px; border-radius:8px; }
+.sec-head h2 { font-family:var(--serif); font-weight:500; font-size:24px; color:var(--slate); letter-spacing:-.01em; margin:0; }
+.sec-intro { font-size:14px; color:var(--gray-500); max-width:760px; margin-bottom:24px; }
+.highlights { list-style:none; margin:0; padding:0; }
+.highlights li { position:relative; padding:0 0 14px 26px; font-size:15px; color:var(--gray-700); }
+.highlights li::before { content:""; position:absolute; left:6px; top:8px; width:7px; height:7px; border-radius:2px; background:var(--clay); }
+.highlights li strong { color:var(--slate); font-weight:600; }
+table.data { width:100%; border-collapse:separate; border-spacing:0; background:var(--white); border:var(--border); border-radius:var(--radius); overflow:hidden; }
+table.data thead th { text-align:left; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--gray-500); background:var(--gray-100); padding:12px 16px; border-bottom:1px solid var(--gray-300); }
+table.data.sortable thead th { cursor:pointer; user-select:none; }
+table.data.sortable thead th::after { content:" \2195"; opacity:.35; font-size:10px; }
+table.data.sortable thead th.asc::after { content:" \2191"; opacity:1; color:var(--clay); }
+table.data.sortable thead th.desc::after { content:" \2193"; opacity:1; color:var(--clay); }
+table.data tbody td { padding:13px 16px; border-bottom:1px solid var(--gray-100); font-size:14px; color:var(--gray-700); vertical-align:top; }
+table.data tbody tr:last-child td { border-bottom:none; }
+.badge { display:inline-block; font-family:var(--mono); font-size:11px; font-weight:600; padding:3px 10px; border-radius:999px; color:#FFF; }
+.badge.green { background:var(--olive); } .badge.orange { background:var(--warning); } .badge.red { background:var(--danger); } .badge.blue { background:var(--info); } .badge.gray { background:var(--gray-500); }
+.tag { display:inline-block; font-family:var(--mono); font-size:11px; background:var(--gray-100); border:1px solid var(--gray-300); border-radius:6px; padding:3px 8px; color:var(--gray-700); }
+code { font-family:var(--mono); font-size:13px; color:var(--clay); background:var(--oat); padding:1px 6px; border-radius:4px; }
+pre { background:var(--gray-100); border:1px solid var(--gray-300); border-radius:8px; padding:16px 20px; overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.6; color:var(--slate); }
+pre code { background:none; padding:0; color:inherit; }
+.callout { background:var(--gray-100); border:var(--border); border-left:4px solid var(--clay); border-radius:var(--radius); padding:16px 20px; margin-bottom:20px; font-size:14px; }
+.callout b { color:var(--slate); }
+.milestones { display:flex; flex-direction:column; }
+.milestone { display:grid; grid-template-columns:110px 28px 1fr; gap:0 18px; }
+.milestone .when { text-align:right; font-family:var(--mono); font-size:12px; color:var(--gray-500); padding-top:4px; }
+.milestone .dot-col { display:flex; flex-direction:column; align-items:center; }
+.milestone .dot { width:14px; height:14px; border-radius:50%; background:var(--white); border:3px solid var(--clay); margin-top:4px; flex-shrink:0; }
+.milestone .dot.done { background:var(--olive); border-color:var(--olive); }
+.milestone .line { width:2px; flex:1; background:var(--gray-300); margin:4px 0; }
+.milestone:last-child .line { display:none; }
+.milestone .body { padding-bottom:28px; }
+.milestone .body h3 { font-family:var(--serif); font-weight:500; font-size:17px; color:var(--slate); margin:0 0 4px; }
+.milestone .body p { font-size:14px; color:var(--gray-500); margin:0; max-width:640px; }
+footer { margin-top:64px; padding-top:24px; border-top:1px solid var(--gray-300); font-size:13px; color:var(--gray-500); }
+@media (max-width:640px){ body { padding:0 16px 64px; } .docnav { margin:0 -16px 32px; padding:10px 16px; } h1 { font-size:28px; } .summary-band { grid-template-columns:1fr; } .milestone { grid-template-columns:70px 24px 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="docnav">
+  <div class="docnav-inner">
+    <nav class="toc" aria-label="目录"></nav>
+    <input class="search" type="search" placeholder="搜索…" aria-label="页内搜索">
+    <span class="search-count"></span>
+    <button class="theme-btn" title="深/浅色切换" aria-label="切换主题">🌙</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <div class="eyebrow">交付报告 · infinite-canvas / Toonflow</div>
+  <h1>Toonflow 生成能力 一期交付</h1>
+  <p class="lede">从剧本到分段成片的画布生成全链闭环。阶段 1–4 工程侧 100% 完成、验证、已 ship 到你的 fork（PR #1）。本页是给你的收尾手册——剩下的三件只能你亲手做，命令都备好了，照着走即可。</p>
+
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">4/4</div><div class="stat-label">阶段完成</div><div class="stat-delta up">阶段 1–4 全链</div></div>
+    <div class="stat-card"><div class="stat-num">184</div><div class="stat-label">单测全绿</div><div class="stat-delta up">tsc 0 · build 通过</div></div>
+    <div class="stat-card"><div class="stat-num">7</div><div class="stat-label">本次提交(已push)</div><div class="stat-delta flat">PR #1 已更新</div></div>
+    <div class="stat-card warn"><div class="stat-num">3</div><div class="stat-label">待你收尾</div><div class="stat-delta">需你的凭据/决策</div></div>
+  </div>
+
+  <section id="s-todo" data-nav="你的收尾清单">
+    <div class="sec-head"><span class="num">01</span><h2>你的收尾清单（最重要）</h2></div>
+    <p class="sec-intro">这三件我做不了——不是能力问题，是安全规则禁止我用你的账号凭据登录/部署/发包。命令已备好，你在 Claude Code 里用 <code>!</code> 前缀即可直接运行。</p>
+
+    <div class="callout"><b>① 上线 T11 转发（你的 Cloudflare，免费）</b><br>让对外内测网页能绕过 CORS 调 AI 网关。转发核心已建好并 <code>deploy --dry-run</code> 验证可部署。</div>
+    <pre><code>! wrangler login
+# 编辑 edge-relay/wrangler.toml：RELAY_ALLOWED_ORIGINS 填你的站点域名，RELAY_ALLOWED_TARGET_HOSTS 填上游网关
+! cd edge-relay &amp;&amp; wrangler secret put RELAY_ACCESS_TOKEN   # 设一个访问令牌，发给内测用户
+! cd edge-relay &amp;&amp; wrangler deploy</code></pre>
+
+    <div class="callout"><b>② 发布 canvas-agent（你的 npm token）</b><br>本地 dist 已重建、方法论注入已生效，只差发布上架。</div>
+    <pre><code>! cd canvas-agent &amp;&amp; npm publish</code></pre>
+
+    <div class="callout"><b>③ 二期方案决策</b><br>成片拼接（ffmpeg 方案 Open Q5）、C 路线粗版对接（Open Q3）等需你先拍板方案，我再开工。点一个 + 说方案即可。</div>
+  </section>
+
+  <section id="s-phase4" data-nav="阶段4 交付">
+    <div class="sec-head"><span class="num">02</span><h2>阶段 4「收尾」交付</h2></div>
+    <p class="sec-intro">重大裁决：砍掉 #13 配音节点——核实到视频 Seedance <code>generate_audio</code> 默认开、原生有声（对白+口型同步），配音随视频出；单独 TTS 会与原声打架且需混轨（本期不做）。你两次的判断是对的。</p>
+    <table class="data sortable">
+      <thead><tr><th>交付</th><th>内容</th><th>状态</th><th>提交</th></tr></thead>
+      <tbody>
+        <tr><td>#14 成片 / 导出</td><td>汇总已通过段视频 → 顺序连播预览 + 逐段下载 + 打包 ZIP（本期不拼接单文件）</td><td><span class="badge green">已交付</span></td><td><code>6811d3c</code></td></tr>
+        <tr><td>#12 接缝检查</td><td>相邻段并排播放器 + 连续性人工勾选，全勾即通过、可跳过（不调 AI，按段对+版本记录）</td><td><span class="badge green">已交付</span></td><td><code>5f9312e</code></td></tr>
+        <tr><td>决议 8B Agent 注入</td><td>canvas-agent 注入九宫格直出 / 禁首尾帧方法论，guard 测试锁单源一致</td><td><span class="badge green">已交付</span></td><td><code>d50d256</code></td></tr>
+        <tr><td>#13 配音</td><td>裁掉（视频原生有声，单独配音多余且冲突）</td><td><span class="badge gray">已裁</span></td><td>—</td></tr>
+        <tr><td>T11 生产转发</td><td>edge-relay 核心 + 安全加固（token 门/上游白名单/来源校验）+ CF 配置</td><td><span class="badge orange">待部署</span></td><td><code>c966358</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="s-verify" data-nav="验收证据">
+    <div class="sec-head"><span class="num">03</span><h2>验收证据（非口头）</h2></div>
+    <ul class="highlights">
+      <li><strong>静态验证</strong> — tsc 0 错 · vitest 184 全绿（新增 export 7 + seam 8 + agent-brief 1）· vite build 通过 · edge 转发 <code>deploy --dry-run</code> 4.41 KiB 可部署。</li>
+      <li><strong>对抗审查</strong> — #14 由独立 Claude 子代理以「推翻」立场审，无 critical/major，媒体键安全双向证明；发现的 C1 预览回跳 / C2 缺失提示 / E 测试缺口已修。</li>
+      <li><strong>真机实测（导出）</strong> — 造段视频喂进 IndexedDB：导出节点显示 3/3，Modal 顺序连播 + 跳播 + 末段边界全通过。</li>
+      <li><strong>真机实测（接缝）</strong> — 节点 0/2 → 打开 Modal（4 播放器 / 2 勾选）→ 勾选保存 → 2/2 + 已通过 → 重载持久化存活。</li>
+    </ul>
+    <div class="callout" style="margin-top:20px">插曲：派 Codex 做 #14 时它在本机后台卡死 44 分钟（Windows 上读文件稳定卡死）、零产出。杀掉后 Claude 接手自实现，仍走完整对抗审查+验收。</div>
+  </section>
+
+  <section id="s-backlog" data-nav="二期待办">
+    <div class="sec-head"><span class="num">04</span><h2>二期待办（未来范围，需你拍板）</h2></div>
+    <table class="data">
+      <thead><tr><th>项</th><th>依赖 / 决策</th></tr></thead>
+      <tbody>
+        <tr><td>成片拼接导出</td><td>ffmpeg.wasm vs 后端转码（Open Q5）——本期降级为逐段下载</td></tr>
+        <tr><td>repair-tail 段内拼接</td><td>只重生成段尾几秒并回并，同样依赖 ffmpeg 决策</td></tr>
+        <tr><td>T11 代理计费模型</td><td>若改「创始人代理计费」：注入你的 key + 用户级限额 + 审计，需平台 KV + 你确认额度</td></tr>
+        <tr><td>避雷词表更新机制</td><td>随即梦规则更新的流程：手动季检 or 社区源</td></tr>
+        <tr><td>C 路线：粗版一键生成对接</td><td>先摸清粗版产物格式与代码库位置（Open Q3）</td></tr>
+        <tr><td>E2E 自动化(playwright)</td><td>一期用 /qa 人工验收；用户量起来后自动化</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="s-timeline" data-nav="全链时间线">
+    <div class="sec-head"><span class="num">05</span><h2>一期全链时间线</h2></div>
+    <div class="milestones">
+      <div class="milestone"><div class="when">阶段 1 / 1.5</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>文本骨架 + 支配度闭环</h3><p>七态状态机、失效传播、级联重生成；改一处下游自动重生成不崩。</p></div></div>
+      <div class="milestone"><div class="when">阶段 2</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>视觉层</h3><p>资产锚点卡池、故事板页九宫格、首帧「只上色不改构图」+ 定点修。</p></div></div>
+      <div class="milestone"><div class="when">阶段 3</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>视频层 + cano 适配</h3><p>九宫格直出、段视频版本管理、taskId 刷新恢复；cano 方言实测出真实 6s 视频。</p></div></div>
+      <div class="milestone"><div class="when">阶段 4</div><div class="dot-col"><div class="dot done"></div><div class="line"></div></div><div class="body"><h3>收尾</h3><p>成片导出 + 接缝检查 + Agent 方法论注入；砍 #13 配音。</p></div></div>
+      <div class="milestone"><div class="when">T11</div><div class="dot-col"><div class="dot"></div></div><div class="body"><h3>对外部署（待你上线）</h3><p>转发核心已备好、dry-run 验证；差 wrangler login + deploy。</p></div></div>
+    </div>
+  </section>
+
+  <footer>
+    Generated by Claude · 2026-07-13 · 分支 <code>toonflow-t10-video</code> · PR #1 · 本页为 document-release 交付手册
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  var root = document.documentElement, btn = $(".theme-btn");
+  function applyTheme(t) { root.setAttribute("data-theme", t); if (btn) btn.textContent = t === "dark" ? "☀️" : "🌙"; }
+  var saved = null; try { saved = localStorage.getItem("doc-theme"); } catch (e) {}
+  var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+  if (btn) btn.addEventListener("click", function () { var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark"; applyTheme(next); try { localStorage.setItem("doc-theme", next); } catch (e) {} });
+  var toc = $(".docnav .toc"), secs = $$("section[data-nav]"), links = [];
+  if (toc && secs.length) {
+    secs.forEach(function (sec) { if (!sec.id) return; var a = document.createElement("a"); a.href = "#" + sec.id; a.textContent = sec.getAttribute("data-nav"); toc.appendChild(a); links.push(a); });
+    var spy = function () { var y = window.scrollY + 90, cur = null; secs.forEach(function (sec) { if (sec.offsetTop <= y) cur = sec.id; }); links.forEach(function (a) { a.classList.toggle("active", a.getAttribute("href") === "#" + cur); }); };
+    window.addEventListener("scroll", spy, { passive: true }); spy();
+  }
+  $$("table.data.sortable").forEach(function (tbl) {
+    var ths = $$("thead th", tbl), tbody = $("tbody", tbl);
+    ths.forEach(function (th, i) {
+      th.addEventListener("click", function () {
+        var asc = !th.classList.contains("asc");
+        ths.forEach(function (h) { h.classList.remove("asc", "desc"); });
+        th.classList.add(asc ? "asc" : "desc");
+        var rows = $$("tr", tbody);
+        rows.sort(function (a, b) {
+          var x = (a.children[i] ? a.children[i].textContent : "").trim(), y = (b.children[i] ? b.children[i].textContent : "").trim();
+          var nx = parseFloat(x.replace(/[^0-9.\-]/g, "")), ny = parseFloat(y.replace(/[^0-9.\-]/g, ""));
+          var num = !isNaN(nx) && !isNaN(ny) && x !== "" && y !== "";
+          var cmp = num ? nx - ny : x.localeCompare(y, "zh");
+          return asc ? cmp : -cmp;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  });
+  var input = $(".docnav .search"), count = $(".docnav .search-count"), page = $(".page"), hits = [], idx = -1;
+  function clearMarks() { $$("mark.dochit", page).forEach(function (m) { var t = document.createTextNode(m.textContent); m.parentNode.replaceChild(t, m); m.parentNode.normalize(); }); hits = []; idx = -1; }
+  function highlight(term) {
+    clearMarks();
+    if (!term || term.length < 2) { if (count) count.textContent = ""; return; }
+    var rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT, { acceptNode: function (n) { if (!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT; var p = n.parentNode.nodeName; if (p === "SCRIPT" || p === "STYLE" || p === "MARK") return NodeFilter.FILTER_REJECT; return rx.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; } });
+    var nodes = [], n; while ((n = walker.nextNode())) nodes.push(n);
+    nodes.forEach(function (node) {
+      var frag = document.createDocumentFragment(), last = 0, s = node.nodeValue, m; rx.lastIndex = 0;
+      while ((m = rx.exec(s))) { if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index))); var mk = document.createElement("mark"); mk.className = "dochit"; mk.textContent = m[0]; frag.appendChild(mk); hits.push(mk); last = m.index + m[0].length; if (m[0].length === 0) rx.lastIndex++; }
+      if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+    if (count) count.textContent = hits.length ? "0/" + hits.length : "0"; if (hits.length) jump(0);
+  }
+  function jump(i) { if (!hits.length) return; if (idx >= 0 && hits[idx]) hits[idx].classList.remove("current"); idx = (i + hits.length) % hits.length; hits[idx].classList.add("current"); hits[idx].scrollIntoView({ block: "center", behavior: "smooth" }); if (count) count.textContent = (idx + 1) + "/" + hits.length; }
+  if (input) {
+    var deb;
+    input.addEventListener("input", function () { clearTimeout(deb); var v = input.value; deb = setTimeout(function () { highlight(v.trim()); }, 180); });
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); jump(idx + (e.shiftKey ? -1 : 1)); } if (e.key === "Escape") { input.value = ""; clearMarks(); if (count) count.textContent = ""; } });
+  }
+})();
+</script>
+</body>
+</html>
