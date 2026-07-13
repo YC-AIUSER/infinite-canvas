@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Tag, Upload, theme } from "antd";
 import { ImageIcon, ImagePlus, Pencil, Plus, Trash2, UploadIcon } from "lucide-react";
 import { nanoid } from "nanoid";
 
 import { parseEntityHints } from "@/lib/toonflow/node-runtime";
 import { validateAssetCards, type AssetCard } from "@/lib/toonflow/schema";
-import { resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import type { CanvasNodeData } from "@/types/canvas";
 
 const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
@@ -93,6 +93,9 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     const hints = useMemo(() => parseEntityHints(scriptText), [scriptText]);
     const entityListText = useMemo(() => extractEntityListText(scriptText), [scriptText]);
 
+    // 记录本会话内经上传/生成新建的锚点图 storageKey——取消时全清、保存时清掉未进入最终卡池的(被替换的),防 image_files 泄漏。
+    const sessionKeysRef = useRef<Set<string>>(new Set());
+
     useEffect(() => {
         if (!open) return;
         setCards(node?.metadata?.toonflow?.output?.payload.cards?.map((card) => ({ ...card })) ?? []);
@@ -100,6 +103,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
         setEditingCardId(null);
         setGeneratingCardIds(new Set());
         setUploadingCardIds(new Set());
+        sessionKeysRef.current = new Set();
     }, [open, node?.id]);
 
     const parentCards = cards.filter((card) => card.cardType === "character");
@@ -141,6 +145,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     };
 
     const updateCardStorageKey = (cardId: string, storageKey: string) => {
+        sessionKeysRef.current.add(storageKey);
         setCards((current) => current.map((card) => (card.cardId === cardId ? { ...card, storageKey } : card)));
         setDraft((current) => (current?.cardId === cardId ? { ...current, storageKey } : current));
     };
@@ -182,6 +187,18 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
         }
     };
 
+    // 本会话新建但未进入最终卡池的锚点图(取消=全部,保存=被替换掉的)即刻清理;session key 均为本会话 nanoid 新建、不与他处共享,删除安全。
+    const cleanupSessionKeys = (keptKeys: Set<string>) => {
+        const orphaned = Array.from(sessionKeysRef.current).filter((key) => !keptKeys.has(key));
+        sessionKeysRef.current = new Set(keptKeys);
+        if (orphaned.length) void deleteStoredImages(orphaned);
+    };
+
+    const handleCancel = () => {
+        cleanupSessionKeys(new Set());
+        onCancel();
+    };
+
     const handleSaveCards = () => {
         if (!node) return;
         const issues = validateAssetCards(cards);
@@ -189,6 +206,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
             message.error(issues[0]);
             return;
         }
+        cleanupSessionKeys(new Set(cards.map((card) => card.storageKey).filter((key): key is string => Boolean(key))));
         onSave(node.id, cards);
     };
 
@@ -198,10 +216,10 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
             open={open}
             width={1040}
             centered
-            onCancel={onCancel}
+            onCancel={handleCancel}
             footer={
                 <div className="flex justify-end gap-2">
-                    <Button onClick={onCancel}>取消</Button>
+                    <Button onClick={handleCancel}>取消</Button>
                     <Button type="primary" onClick={handleSaveCards}>
                         保存卡池
                     </Button>
