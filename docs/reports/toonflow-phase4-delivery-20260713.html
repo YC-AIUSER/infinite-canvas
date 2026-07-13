@@ -105,8 +105,8 @@ footer { margin-top:64px; padding-top:24px; border-top:1px solid var(--gray-300)
 
   <div class="summary-band">
     <div class="stat-card"><div class="stat-num">4/4</div><div class="stat-label">阶段完成</div><div class="stat-delta up">阶段 1–4 全链</div></div>
-    <div class="stat-card"><div class="stat-num">184</div><div class="stat-label">单测全绿</div><div class="stat-delta up">tsc 0 · build 通过</div></div>
-    <div class="stat-card"><div class="stat-num">7</div><div class="stat-label">本次提交(已push)</div><div class="stat-delta flat">PR #1 已更新</div></div>
+    <div class="stat-card"><div class="stat-num">185</div><div class="stat-label">单测全绿</div><div class="stat-delta up">tsc 0 · build 通过</div></div>
+    <div class="stat-card"><div class="stat-num">11</div><div class="stat-label">本次提交(已push)</div><div class="stat-delta flat">PR #1 已更新</div></div>
     <div class="stat-card warn"><div class="stat-num">3</div><div class="stat-label">待你收尾</div><div class="stat-delta">需你的凭据/决策</div></div>
   </div>
 
@@ -136,7 +136,8 @@ footer { margin-top:64px; padding-top:24px; border-top:1px solid var(--gray-300)
         <tr><td>#12 接缝检查</td><td>相邻段并排播放器 + 连续性人工勾选，全勾即通过、可跳过（不调 AI，按段对+版本记录）</td><td><span class="badge green">已交付</span></td><td><code>5f9312e</code></td></tr>
         <tr><td>决议 8B Agent 注入</td><td>canvas-agent 注入九宫格直出 / 禁首尾帧方法论，guard 测试锁单源一致</td><td><span class="badge green">已交付</span></td><td><code>d50d256</code></td></tr>
         <tr><td>#13 配音</td><td>裁掉（视频原生有声，单独配音多余且冲突）</td><td><span class="badge gray">已裁</span></td><td>—</td></tr>
-        <tr><td>T11 生产转发</td><td>edge-relay 核心 + 安全加固（token 门/上游白名单/来源校验）+ CF 配置</td><td><span class="badge orange">待部署</span></td><td><code>c966358</code></td></tr>
+        <tr><td>T11 生产转发</td><td>edge-relay 核心 + 安全加固（token 门/上游白名单/来源校验）+ CF 配置（Cloudflare Workers + 用户自带 key）</td><td><span class="badge orange">待部署</span></td><td><code>c966358</code></td></tr>
+        <tr><td>音频卡（人声参考）· 增强</td><td>资产卡池新增音频卡：上传人声参考 → 接入视频生成参考音频。火山 Seedance 直连生效；cano 待其音频接口修复（字段名待核）。每段参考音频 2–15 秒、引导音色非逐字配音。</td><td><span class="badge green">已交付</span></td><td><code>5534abd</code></td></tr>
       </tbody>
     </table>
   </section>
@@ -144,7 +145,7 @@ footer { margin-top:64px; padding-top:24px; border-top:1px solid var(--gray-300)
   <section id="s-verify" data-nav="验收证据">
     <div class="sec-head"><span class="num">03</span><h2>验收证据（非口头）</h2></div>
     <ul class="highlights">
-      <li><strong>静态验证</strong> — tsc 0 错 · vitest 184 全绿（新增 export 7 + seam 8 + agent-brief 1）· vite build 通过 · edge 转发 <code>deploy --dry-run</code> 4.41 KiB 可部署。</li>
+      <li><strong>静态验证</strong> — tsc 0 错 · vitest 185 全绿（新增 export 7 + seam 8 + agent-brief 1 + 音频卡分流）· vite build 通过 · edge 转发 <code>deploy --dry-run</code> 4.41 KiB 可部署。</li>
       <li><strong>对抗审查</strong> — #14 由独立 Claude 子代理以「推翻」立场审，无 critical/major，媒体键安全双向证明；发现的 C1 预览回跳 / C2 缺失提示 / E 测试缺口已修。</li>
       <li><strong>真机实测（导出）</strong> — 造段视频喂进 IndexedDB：导出节点显示 3/3，Modal 顺序连播 + 跳播 + 末段边界全通过。</li>
       <li><strong>真机实测（接缝）</strong> — 节点 0/2 → 打开 Modal（4 播放器 / 2 勾选）→ 勾选保存 → 2/2 + 已通过 → 重载持久化存活。</li>
