@@ -6,9 +6,9 @@
 
 > 4 critical 已修(C1 版本快照前移/C2 僵尸实例覆盖守卫/C3 首帧构图锁读取失败中止/C4 删媒体前全局引用过滤),M5/M6/M8-limit/m3/M4 已修。以下为核实后延后/不做项,均非正确性 critical。
 >
-> 2026-07-13 续修:M9/M8/M7 已修,M10 部分补强(见下)。另查清并修复"30+节点卡10-30秒"性能问题——真根因是渲染记忆化失效(非存储序列化,推翻了原假设),已加 CanvasNode memo 比较器,实测 4-8× 提速;原"创始人裁决存储重构"降级为观察项(报告 docs/reports/storage-perf-investigation.html)。
+> 2026-07-13 续修:M9/M8/M7/M2 已修,M10 部分补强(见下)。**至此 T9 遗留 critical/M 正确性项全部处置完毕**,剩 M1(过度标 stale=安全侧,非错误)、格子数校验(方法论已接受风险)、M10 测试规格化(打磨项)三个非正确性项。另查清并修复"30+节点卡10-30秒"性能问题——真根因是渲染记忆化失效(非存储序列化,推翻了原假设),已加 CanvasNode memo 比较器,实测 4-8× 提速;原"创始人裁决存储重构"降级为观察项(报告 docs/reports/storage-perf-investigation.html)。
 
-- [ ] **M2 段同步计划非事务** — InstanceSyncPlan 无分镜版本/内容摘要,弹窗确认时用旧计划套最新 nodesRef,取消不回退不记待同步。真问题但需给 plan 加版本戳+确认时重算比对,改动面较大。缓解:当前首次同步免确认、结构变化才弹窗,竞态窗口小。起点:instances.ts planInstanceSync + project.tsx 确认回调。**← 唯一剩下的 M 项,待评估**
+- [x] **M2 段同步计划非事务** — 已修(2026-07-13):不再套旧计划,确认时用最新 nodesRef 重算整份计划并与用户所见结构比对(instances.ts resolveConfirmedSync 纯函数)——一致→应用重算后的 fresh plan(彻底断掉旧计划耦合);已变→用最新计划重新弹窗+toast「分镜表已更新」让用户再确认(用户拍板选①所见即所得);已无事可做→关窗。比原设想的「只加版本戳」更稳,连实例侧增删的竞态一并 catch。+3 不变量测试(apply/represent/dismiss 三分支),156 单测绿 tsc 0 错。
 - [x] **M7 资产卡 Blob 泄漏** — 已修(e67a499):弹窗加 sessionKeysRef 跟踪本会话上传/生成的 key,取消全清、保存清被替换的。残留:`open` 被父级程序化置 false(非取消/保存)的路径仍靠全局兜底扫。
 - [x] **M8 图像回退不清被裁版本媒体** — 已修(caf200f):applyRollback 改返回 {nodes, orphanedKeys},用最终状态反查引用集算孤儿,handler 清理;+2 不变量测试。
 - [ ] **M1 段实例同步过度标 stale** — 保留段有产出实例一律标 stale,不比分镜表版本/镜头内容。过度标 stale 是安全侧(多重生成一次),非错误。可选优化:按 upstreamVersions 比对豁免未变段。起点:instances.ts planInstanceSync toStale 计算。

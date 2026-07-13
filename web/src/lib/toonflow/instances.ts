@@ -92,6 +92,27 @@ export function planInstanceSync(nodes: CanvasNodeData[], storyboardNodeId: stri
     return { storyboardNodeId, segments, toCreate, toStale, toArchive, reindex, isFirstSync: !hasAnyInstances };
 }
 
+export function isInstanceSyncActionable(plan: InstanceSyncPlan | null): plan is InstanceSyncPlan {
+    return Boolean(plan && (plan.toCreate.length || plan.toArchive.length || plan.toStale.length || plan.reindex.length));
+}
+
+function instanceSyncSignature(plan: InstanceSyncPlan): string {
+    return JSON.stringify([plan.storyboardNodeId, plan.toCreate, plan.toStale, plan.toArchive, plan.reindex]);
+}
+
+export type ConfirmedSyncResolution =
+    | { action: "apply"; plan: InstanceSyncPlan }
+    | { action: "represent"; plan: InstanceSyncPlan }
+    | { action: "dismiss" };
+
+// 确认弹窗开着时状态可能已变(分镜表被改/实例被增删),用最新状态重算并与用户看到的那份比对:
+// 一致→按用户所见应用;已变→用新计划重新弹窗让用户再确认;已无事可做→关闭。
+export function resolveConfirmedSync(confirmed: InstanceSyncPlan, fresh: InstanceSyncPlan | null): ConfirmedSyncResolution {
+    if (!isInstanceSyncActionable(fresh)) return { action: "dismiss" };
+    if (instanceSyncSignature(confirmed) === instanceSyncSignature(fresh)) return { action: "apply", plan: fresh };
+    return { action: "represent", plan: fresh };
+}
+
 function instanceTitle(root: CanvasNodeData, segmentIndex: number) {
     return `${root.title} · 段${segmentIndex + 1}`;
 }
