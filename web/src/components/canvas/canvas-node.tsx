@@ -12,6 +12,50 @@ import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-refer
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
 
+const EMPTY_MENTION_REFS: CanvasResourceReference[] = [];
+
+// 决定 CanvasNode 渲染输出的全部"值型"props;函数型 props(render*/on*)刻意排除。
+const CANVAS_NODE_COMPARE_KEYS = [
+    "data",
+    "scale",
+    "isSelected",
+    "isRelated",
+    "isFocusRelated",
+    "isConnectionTarget",
+    "isConnecting",
+    "editRequestNonce",
+    "showPanel",
+    "showImageInfo",
+    "resourceLabel",
+    "cascadeLocked",
+    "isRunning",
+    "configInputsSignature",
+    "batchCount",
+    "groupChildCount",
+    "isGroupDropTarget",
+    "batchExpanded",
+    "batchClosing",
+    "batchOpening",
+    "batchRecovering",
+    "batchMotion",
+] as const;
+
+// 父级(整页画布)每次渲染都会为每个 CanvasNode 新建 render*/on* 闭包,默认浅比较会因此对全部可见节点失效
+// (拖 1 个节点就重渲染 30 个)。这里改为只比较值型 props、忽略函数型 props——函数行为稳定(读 ref/setState),
+// 该重渲染的条件已由值型 props(含 cascadeLocked/isRunning/inputSummary 等外部动态状态)完整覆盖。
+function areCanvasNodePropsEqual(prev: CanvasNodeProps, next: CanvasNodeProps) {
+    for (const key of CANVAS_NODE_COMPARE_KEYS) {
+        if (prev[key] !== next[key]) return false;
+    }
+    const prevRefs = prev.mentionReferences ?? EMPTY_MENTION_REFS;
+    const nextRefs = next.mentionReferences ?? EMPTY_MENTION_REFS;
+    if (prevRefs.length !== nextRefs.length) return false;
+    for (let index = 0; index < prevRefs.length; index += 1) {
+        if (prevRefs[index] !== nextRefs[index]) return false;
+    }
+    return true;
+}
+
 type CanvasNodeProps = {
     data: CanvasNodeData;
     scale: number;
@@ -25,6 +69,11 @@ type CanvasNodeProps = {
     showImageInfo: boolean;
     resourceLabel?: CanvasResourceReference;
     mentionReferences?: CanvasResourceReference[];
+    // 以下三个动态值仅用于驱动 memo 比较器(render* 闭包读的是父级闭包内的最新值),
+    // 保证这些外部 per-node 状态变化时该节点会重渲染。
+    cascadeLocked?: boolean;
+    isRunning?: boolean;
+    configInputsSignature?: string;
     renderPanel?: (node: CanvasNodeData) => ReactNode;
     renderNodeContent?: (node: CanvasNodeData) => ReactNode;
     batchCount?: number;
@@ -406,7 +455,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             {showPanel && !isGroup && renderPanel ? <div className="absolute left-1/2 top-full z-[70] w-[500px] -translate-x-1/2 pt-4">{renderPanel(data)}</div> : null}
         </div>
     );
-});
+}, areCanvasNodePropsEqual);
 
 function NodeContent(props: NodeContentRendererProps) {
     if (props.node.metadata?.toonflow && props.renderNodeContent) return props.renderNodeContent(props.node);

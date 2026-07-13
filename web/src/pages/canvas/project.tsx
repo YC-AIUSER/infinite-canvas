@@ -6,11 +6,11 @@ import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
+import { createVideoGenerationTask, pollVideoTaskUntilDone, requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
-import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { collectImageStorageKeys, deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
+import { collectMediaStorageKeys, deleteStoredMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -19,7 +19,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
-import { App, Button, Dropdown, Modal } from "antd";
+import { App, Button, Dropdown, Input, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
@@ -43,7 +43,19 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
+import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
+import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
+import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
+import { ToonflowExportModal } from "@/components/canvas/toonflow-export-modal";
+import { ToonflowSeamCheckModal } from "@/components/canvas/toonflow-seam-check-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
+import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
+import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
+import type { AssetCard } from "@/lib/toonflow/schema";
+import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
+import { runCascade } from "@/lib/toonflow/cascade";
+import { cascadeOrder } from "@/lib/toonflow/state-machine";
 import { skillCards } from "@/pages/skills/skills-data";
 import { buildSkillFlowOps } from "@/lib/canvas/skill-flow";
 import {
@@ -58,6 +70,7 @@ import {
     type ContextMenuState,
     type Position,
     type SelectionBox,
+    type ToonflowNodeMetadata,
     type ViewportTransform,
 } from "@/types/canvas";
 import type { ReferenceImage } from "@/types/image";
@@ -90,6 +103,15 @@ type CanvasGenerationRequest = {
     originNodeId: string;
     runningNodeId: string;
     controller: AbortController;
+};
+
+type ToonflowCascadeProgress = {
+    phase: "running" | "review";
+    current: number;
+    total: number;
+    nodeIds: string[];
+    reviewNodeIds: string[];
+    cancelling: boolean;
 };
 
 const VIDEO_NODE_MAX_WIDTH = 420;
@@ -276,6 +298,9 @@ function InfiniteCanvasPage() {
 
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
+    // 供 resume 副作用读取最新配置而不进依赖数组:避免改配置触发 effect 重跑+cleanup 误 abort 在途恢复。
+    const effectiveConfigRef = useRef(effectiveConfig);
+    effectiveConfigRef.current = effectiveConfig;
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
@@ -323,6 +348,16 @@ function InfiniteCanvasPage() {
     const [superResolveNodeId, setSuperResolveNodeId] = useState<string | null>(null);
     const [angleNodeId, setAngleNodeId] = useState<string | null>(null);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
+    const [toonflowEditNodeId, setToonflowEditNodeId] = useState<string | null>(null);
+    const [toonflowAssetCardsNodeId, setToonflowAssetCardsNodeId] = useState<string | null>(null);
+    const [toonflowHistoryNodeId, setToonflowHistoryNodeId] = useState<string | null>(null);
+    const [toonflowRepairNodeId, setToonflowRepairNodeId] = useState<string | null>(null);
+    const [toonflowRepairNote, setToonflowRepairNote] = useState("");
+    const [toonflowExportNodeId, setToonflowExportNodeId] = useState<string | null>(null);
+    const [toonflowSeamNodeId, setToonflowSeamNodeId] = useState<string | null>(null);
+    const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
+    const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
+    const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
@@ -343,6 +378,9 @@ function InfiniteCanvasPage() {
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
     const skillInsertedRef = useRef(false);
+    const cascadeCancelledRef = useRef(false);
+    const cascadeRunningRef = useRef(false);
+    const resumedVideoTaskIdsRef = useRef(new Set<string>());
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -413,8 +451,11 @@ function InfiniteCanvasPage() {
         }
 
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            nodesRef.current = restoredNodes;
+            connectionsRef.current = project.connections;
             setNodes(restoredNodes);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
@@ -674,6 +715,15 @@ function InfiniteCanvasPage() {
     const superResolveNode = superResolveNodeId ? nodeById.get(superResolveNodeId) || null : null;
     const angleNode = angleNodeId ? nodeById.get(angleNodeId) || null : null;
     const previewNode = previewNodeId ? nodeById.get(previewNodeId) || null : null;
+    const toonflowEditNode = toonflowEditNodeId ? nodeById.get(toonflowEditNodeId) || null : null;
+    const toonflowAssetCardsNode = toonflowAssetCardsNodeId ? nodeById.get(toonflowAssetCardsNodeId) || null : null;
+    const toonflowHistoryNode = toonflowHistoryNodeId ? nodeById.get(toonflowHistoryNodeId) || null : null;
+    const toonflowRepairNode = toonflowRepairNodeId ? nodeById.get(toonflowRepairNodeId) || null : null;
+    const toonflowAssetScriptText = useMemo(() => {
+        if (!toonflowAssetCardsNode) return "";
+        const scriptConnection = connections.find((connection) => connection.toNodeId === toonflowAssetCardsNode.id && nodeById.get(connection.fromNodeId)?.metadata?.toonflow?.kind === "script");
+        return scriptConnection ? nodeById.get(scriptConnection.fromNodeId)?.metadata?.toonflow?.output?.payload.text ?? "" : "";
+    }, [connections, nodeById, toonflowAssetCardsNode]);
     const hasMultipleSelectedNodes = selectedNodeIds.size > 1;
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
     const batchChildCountById = useMemo(() => {
@@ -683,6 +733,13 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [nodes]);
+    // #14 成片导出:汇总已通过的视频工作台段实例(全画布扫一次,随 nodes 变化重算),供导出节点显示"X/Y 段已通过"与成片 Modal。
+    const exportCollection = useMemo(() => collectExportSegments(nodes), [nodes]);
+    // #12 接缝检查:相邻已通过段配对 + 该接缝节点已检进度。
+    const seamNode = useMemo(() => nodes.find((node) => node.metadata?.toonflow?.kind === "seam-check"), [nodes]);
+    const seamBoundaries = useMemo(() => collectSeamBoundaries(nodes), [nodes]);
+    const seamReviews = useMemo(() => parseSeamReviews(seamNode), [seamNode]);
+    const seamSummary = useMemo(() => seamReviewSummary(nodes, seamNode), [nodes, seamNode]);
     const groupChildCountById = useMemo(() => {
         const map = new Map<string, number>();
         nodes.forEach((node) => {
@@ -2419,6 +2476,612 @@ function InfiniteCanvasPage() {
         generateNodeRef.current = handleGenerateNode;
     }, [handleGenerateNode]);
 
+    const runToonflowNodeGeneration = useCallback(
+        async (nodeId: string): Promise<{ ok: boolean; error?: string }> => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            if (!sourceNode?.metadata?.toonflow) return { ok: false, error: "未找到 Toonflow 节点" };
+            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, "text");
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return { ok: false, error: "请先完成 AI 配置" };
+            }
+
+            const { finalPrompt, washHits } = buildToonflowGeneration(nodesRef.current, connectionsRef.current, nodeId);
+            if (washHits.length) message.warning(`已自动软化 ${washHits.length} 个避雷词`);
+
+            const washReport = { hits: washHits, at: new Date().toISOString() };
+            const preparedNodes = applyRegenerate(nodesRef.current, connectionsRef.current, nodeId).map<CanvasNodeData>((node) => {
+                if (node.id === nodeId) {
+                    return { ...node, metadata: { ...node.metadata, prompt: finalPrompt, model: generationConfig.model } };
+                }
+                if (node.metadata?.toonflow?.kind === "compliance") {
+                    return { ...node, metadata: { ...node.metadata, toonflow: { ...node.metadata.toonflow, washReport } } };
+                }
+                return node;
+            });
+            nodesRef.current = preparedNodes;
+            setNodes(preparedNodes);
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
+
+            try {
+                const upstreamVersions = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
+                let resultNode = preparedNode;
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: finalPrompt }], () => {}, { signal: controller.signal });
+                    resultNode = applyGenerationSuccess(preparedNode, rawText, washHits, upstreamVersions);
+                    const shouldRetryStoryboard = resultNode.metadata?.toonflow?.kind === "storyboard-table" && resultNode.metadata.toonflow.status === "failed" && attempt === 0;
+                    if (!shouldRetryStoryboard) break;
+                }
+                const generationFailed = resultNode.metadata?.toonflow?.status === "failed";
+                // 权威 ref+快照写入:级联串行背靠背调用时,函数式 setNodes 的 updater
+                // 可能尚未被 React 执行,下一节点基于 nodesRef 的准备快照会把本次结果覆盖
+                // (实测:级联中空间合同的"待验收"被分镜表的准备快照冲回"生成中")。
+                let next = nodesRef.current.map((node) => (node.id === nodeId ? resultNode : node));
+                if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                nodesRef.current = next;
+                setNodes(next);
+                const error = resultNode.metadata?.toonflow?.status === "failed" ? resultNode.metadata.toonflow.output?.error : undefined;
+                if (error) message.error(error);
+                return error ? { ok: false, error } : { ok: true };
+            } catch (error) {
+                if (isGenerationCanceled(error)) return { ok: false, error: "生成已取消" };
+                const errorDetails = error instanceof Error ? error.message : "生成失败";
+                message.error(errorDetails);
+                const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                nodesRef.current = next;
+                setNodes(next);
+                return { ok: false, error: errorDetails };
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
+    const runToonflowInstanceGeneration = useCallback(
+        async (nodeId: string, note?: string) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            const sourceToonflow = sourceNode?.metadata?.toonflow;
+            if (!sourceNode || !sourceToonflow) return;
+            const isVideo = sourceToonflow.kind === "video-workbench";
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, isVideo ? "video" : "image"), count: "1" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            let generation: ReturnType<typeof buildToonflowImageGeneration>;
+            let videoGeneration: ReturnType<typeof buildToonflowVideoGeneration> | null = null;
+            try {
+                if (isVideo) {
+                    videoGeneration = buildToonflowVideoGeneration(nodesRef.current, connectionsRef.current, nodeId, note);
+                    generation = videoGeneration;
+                } else {
+                    generation = buildToonflowImageGeneration(nodesRef.current, connectionsRef.current, nodeId, note);
+                }
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : `${isVideo ? "视频" : "图像"}生成准备失败`);
+                return;
+            }
+
+            generation.warnings.forEach((warning) => message.warning(warning));
+            if (generation.washHits.length) message.warning(`已自动软化 ${generation.washHits.length} 个避雷词`);
+
+            const washReport = { hits: generation.washHits, at: new Date().toISOString() };
+            const preparedNodes = applyRegenerate(nodesRef.current, connectionsRef.current, nodeId).map<CanvasNodeData>((node) => {
+                if (node.id === nodeId) {
+                    return { ...node, metadata: { ...node.metadata, prompt: generation.finalPrompt, model: generationConfig.model } };
+                }
+                if (node.metadata?.toonflow?.kind === "compliance") {
+                    return { ...node, metadata: { ...node.metadata, toonflow: { ...node.metadata.toonflow, washReport } } };
+                }
+                return node;
+            });
+            // 上游版本快照必须在任何异步读取/API 请求前捕获，避免晚到结果被误记为基于生成期间的新版本。
+            const upstreamSnapshot = computeUpstreamVersions(preparedNodes, connectionsRef.current, nodeId);
+            nodesRef.current = preparedNodes;
+            setNodes(preparedNodes);
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            let videoTaskId: string | undefined;
+            let videoStorageKey: string | undefined;
+
+            try {
+                const resolvedReferences = await Promise.all(
+                    generation.referenceKeys.map(async (storageKey, index): Promise<ReferenceImage | null> => {
+                        try {
+                            const dataUrl = await imageToDataUrl({ storageKey });
+                            if (!dataUrl) return null;
+                            return {
+                                id: storageKey,
+                                name: `参考图-${index + 1}.png`,
+                                type: dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png",
+                                dataUrl,
+                                storageKey,
+                            };
+                        } catch {
+                            return null;
+                        }
+                    }),
+                );
+                const references = resolvedReferences.filter((reference): reference is ReferenceImage => Boolean(reference));
+                // C3: 构图锁等强制参考图任一读取失败必须中止,不得降级为文生图或仅凭资产卡(首帧只上色不改构图)。
+                const resolvedKeys = new Set(references.map((reference) => reference.storageKey));
+                if (generation.mandatoryKeys.some((key) => !resolvedKeys.has(key))) {
+                    throw new Error(`构图锁参考图读取失败，已中止生成（${isVideo ? "视频必须基于故事板页九宫格" : "首帧必须基于故事板页线稿"}）`);
+                }
+                const failedReferenceCount = generation.referenceKeys.length - references.length;
+                if (failedReferenceCount) message.warning(`${failedReferenceCount} 张参考图读取失败`);
+
+                let storageKey: string;
+                if (videoGeneration) {
+                    // 音频卡→参考音频(人声):storageKey 指向 media_files 音频,video 服务按 provider 处理(火山 Seedance 生效,cano 待其音频接口)。
+                    const audioReferences = videoGeneration.audioReferenceKeys.map((key) => ({ id: key, name: key, type: "audio/mpeg", url: "", storageKey: key }));
+                    const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], audioReferences, { signal: controller.signal });
+                    videoTaskId = task.id;
+                    resumedVideoTaskIdsRef.current.add(task.id);
+                    const pendingNodes = nodesRef.current.map((node) =>
+                        node.id === nodeId
+                            ? setPendingVideoTask(node, {
+                                  taskId: task.id,
+                                  provider: task.provider,
+                                  model: task.model,
+                                  upstreamSnapshot,
+                                  shotPrompts: videoGeneration.shotPrompts,
+                                  washHits: generation.washHits,
+                                  startedAt: new Date().toISOString(),
+                              })
+                            : node,
+                    );
+                    nodesRef.current = pendingNodes;
+                    setNodes(pendingNodes);
+                    const videoResult = await pollVideoTaskUntilDone(generationConfig, task, { signal: controller.signal });
+                    const uploaded = await storeGeneratedVideo(videoResult);
+                    if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
+                    storageKey = uploaded.storageKey;
+                    videoStorageKey = uploaded.storageKey;
+                } else {
+                    const image = references.length
+                        ? await requestEdit(generationConfig, generation.finalPrompt, references, undefined, { signal: controller.signal }).then((items) => items[0])
+                        : await requestGeneration(generationConfig, generation.finalPrompt, { signal: controller.signal }).then((items) => items[0]);
+                    if (!image?.dataUrl) throw new Error("图像接口没有返回图片");
+                    storageKey = (await uploadImage(image.dataUrl)).storageKey;
+                }
+
+                // C2: 生成期间该实例可能被归档/删除/重排/被新一轮生成接管,晚到结果不能整体覆盖当前节点(否则产生无根僵尸实例、丢失归档标记与新序号)。
+                const currentNode = nodesRef.current.find((node) => node.id === nodeId);
+                const currentToonflow = currentNode?.metadata?.toonflow;
+                if (
+                    !currentNode ||
+                    currentToonflow?.archived ||
+                    currentToonflow?.status !== "generating" ||
+                    currentToonflow.kind !== sourceToonflow.kind ||
+                    currentToonflow.segmentId !== sourceToonflow.segmentId ||
+                    (videoGeneration && currentToonflow.pendingVideoTask?.taskId !== videoTaskId)
+                ) {
+                    if (videoTaskId) {
+                        const taskId = videoTaskId;
+                        const discardedNodes = nodesRef.current.map((node) => (node.id === nodeId ? clearPendingVideoTask(node, taskId) : node));
+                        nodesRef.current = discardedNodes;
+                        setNodes(discardedNodes);
+                    }
+                    if (isVideo) void deleteStoredMedia([storageKey]);
+                    else void deleteStoredImages([storageKey]);
+                    message.warning("该实例在生成期间已变化，本次结果已丢弃");
+                    return;
+                }
+
+                const resultNode = videoTaskId ? clearPendingVideoTask(currentNode, videoTaskId) : currentNode;
+                const result = videoGeneration
+                    ? applyVideoGenerationSuccess(resultNode, [storageKey], videoGeneration.shotPrompts, generation.washHits, upstreamSnapshot, videoTaskId)
+                    : applyImageGenerationSuccess(resultNode, [storageKey], generation.washHits, upstreamSnapshot);
+                const generationFailed = result.node.metadata?.toonflow?.status === "failed";
+                let next = nodesRef.current.map((node) => (node.id === nodeId ? result.node : node));
+                if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                nodesRef.current = next;
+                setNodes(next);
+                videoStorageKey = undefined; // 已落库并被节点引用,不再是孤儿
+
+                // C4: 删除被裁历史的图前,排除仍被其他节点/副本引用的键(复制节点共享 storageKey,误删会让副本白屏)。
+                const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                const orphaned = splitMediaKeysByStore(result.orphanedKeys.filter((key) => !referencedKeys.has(key)));
+                try {
+                    await Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]);
+                } catch {
+                    message.warning("历史媒体清理失败");
+                }
+            } catch (error) {
+                // 已上传但未被节点引用的视频(setNodes 提交前抛异常)是孤儿,需删除(与 resume 路径对称,防 media_files 泄漏)。
+                if (videoStorageKey) void deleteStoredMedia([videoStorageKey]);
+                if (isGenerationCanceled(error)) {
+                    if (videoTaskId) {
+                        const taskId = videoTaskId;
+                        const next = nodesRef.current.map((node) =>
+                            node.id === nodeId && node.metadata?.toonflow?.pendingVideoTask?.taskId === taskId ? applyGenerationFailure(clearPendingVideoTask(node, taskId), "生成已取消") : node,
+                        );
+                        nodesRef.current = next;
+                        setNodes(next);
+                    }
+                    return;
+                }
+                const errorDetails = error instanceof Error ? error.message : "生成失败";
+                message.error(errorDetails);
+                const next = nodesRef.current.map((node) => {
+                    if (node.id !== nodeId) return node;
+                    if (videoTaskId && node.metadata?.toonflow?.pendingVideoTask?.taskId !== videoTaskId) return node;
+                    return applyGenerationFailure(videoTaskId ? clearPendingVideoTask(node, videoTaskId) : node, errorDetails);
+                });
+                nodesRef.current = next;
+                setNodes(next);
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        const controllers: AbortController[] = [];
+        const resumableNodes = nodesRef.current.filter(
+            (node) => node.metadata?.toonflow?.kind === "video-workbench" && node.metadata.toonflow.status === "generating" && node.metadata.toonflow.pendingVideoTask,
+        );
+        resumableNodes.forEach((resumableNode) => {
+            const pendingTask = resumableNode.metadata?.toonflow?.pendingVideoTask;
+            if (!pendingTask || resumedVideoTaskIdsRef.current.has(pendingTask.taskId)) return;
+            const currentNode = nodesRef.current.find((node) => node.id === resumableNode.id);
+            const currentToonflow = currentNode?.metadata?.toonflow;
+            if (
+                !currentNode ||
+                currentToonflow?.kind !== "video-workbench" ||
+                currentToonflow.status !== "generating" ||
+                currentToonflow.archived ||
+                currentToonflow.pendingVideoTask?.taskId !== pendingTask.taskId
+            )
+                return;
+
+            resumedVideoTaskIdsRef.current.add(pendingTask.taskId);
+            // 注册 controller,使「停止生成」(stopGenerationByRunningId)能中断已恢复的轮询;controllers 收集用于卸载/切项目时统一 abort。
+            const controller = startGenerationRequest(currentNode.id, currentNode.id, currentNode.id);
+            controllers.push(controller);
+            void (async () => {
+                let storageKey: string | undefined;
+                try {
+                    const generationConfig = { ...buildGenerationConfig(effectiveConfigRef.current, currentNode, "video"), count: "1" };
+                    const videoResult = await pollVideoTaskUntilDone(
+                        generationConfig,
+                        { id: pendingTask.taskId, provider: pendingTask.provider, model: pendingTask.model },
+                        { signal: controller.signal },
+                    );
+                    const uploaded = await storeGeneratedVideo(videoResult);
+                    if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
+                    storageKey = uploaded.storageKey;
+
+                    const latestNode = nodesRef.current.find((node) => node.id === currentNode.id);
+                    const latestToonflow = latestNode?.metadata?.toonflow;
+                    if (
+                        !latestNode ||
+                        latestToonflow?.kind !== "video-workbench" ||
+                        latestToonflow.status !== "generating" ||
+                        latestToonflow.archived ||
+                        latestToonflow.segmentId !== currentToonflow.segmentId ||
+                        latestToonflow.pendingVideoTask?.taskId !== pendingTask.taskId
+                    ) {
+                        const currentNodes = nodesRef.current;
+                        const discardedNodes = currentNodes.map((node) => (node.id === currentNode.id ? clearPendingVideoTask(node, pendingTask.taskId) : node));
+                        if (discardedNodes.some((node, index) => node !== currentNodes[index])) {
+                            nodesRef.current = discardedNodes;
+                            setNodes(discardedNodes);
+                        }
+                        try {
+                            await deleteStoredMedia([storageKey]);
+                        } catch {
+                            message.warning("已丢弃视频的本地文件清理失败");
+                        }
+                        return;
+                    }
+
+                    // 用建任务时持久化的 shotPrompts/washHits,不重算 buildToonflowVideoGeneration(避免期间分镜表变动导致漂移,或抛错把已计费视频丢弃)。
+                    const result = applyVideoGenerationSuccess(
+                        clearPendingVideoTask(latestNode, pendingTask.taskId),
+                        [storageKey],
+                        pendingTask.shotPrompts ?? {},
+                        pendingTask.washHits ?? [],
+                        pendingTask.upstreamSnapshot,
+                        pendingTask.taskId,
+                    );
+                    const generationFailed = result.node.metadata?.toonflow?.status === "failed";
+                    let next = nodesRef.current.map((node) => (node.id === currentNode.id ? result.node : node));
+                    if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, currentNode.id);
+                    nodesRef.current = next;
+                    setNodes(next);
+                    storageKey = undefined; // 已引用,非孤儿
+
+                    const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                    const orphaned = splitMediaKeysByStore(result.orphanedKeys.filter((key) => !referencedKeys.has(key)));
+                    try {
+                        await Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]);
+                    } catch {
+                        message.warning("历史媒体清理失败");
+                    }
+                } catch (error) {
+                    const canceled = isGenerationCanceled(error);
+                    const errorDetails = canceled ? "生成已取消" : error instanceof Error ? error.message : "视频任务恢复失败";
+                    const currentNodes = nodesRef.current;
+                    let failed = false;
+                    const next = currentNodes.map((node) => {
+                        if (node.id !== currentNode.id || node.metadata?.toonflow?.pendingVideoTask?.taskId !== pendingTask.taskId) return node;
+                        failed = true;
+                        return applyGenerationFailure(clearPendingVideoTask(node, pendingTask.taskId), errorDetails);
+                    });
+                    if (failed) {
+                        nodesRef.current = next;
+                        setNodes(next);
+                        if (!canceled) message.error(errorDetails);
+                    }
+                    if (storageKey) {
+                        try {
+                            await deleteStoredMedia([storageKey]);
+                        } catch {
+                            message.warning("失败视频的本地文件清理失败");
+                        }
+                    }
+                } finally {
+                    finishGenerationRequest(currentNode.id, controller);
+                }
+            })();
+        });
+        return () => {
+            controllers.forEach((abortController) => abortController.abort());
+        };
+    }, [message, projectLoaded, startGenerationRequest, finishGenerationRequest]);
+
+    const handleToonflowGenerate = useCallback(
+        async (nodeId: string) => {
+            const toonflow = nodesRef.current.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.segmentId && (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench")) {
+                await runToonflowInstanceGeneration(nodeId);
+                return;
+            }
+            await runToonflowNodeGeneration(nodeId);
+        },
+        [runToonflowInstanceGeneration, runToonflowNodeGeneration],
+    );
+
+    const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
+        const next = applyInstanceSync(nodesRef.current, connectionsRef.current, plan, () => nanoid());
+        nodesRef.current = next.nodes;
+        connectionsRef.current = next.connections;
+        setNodes(next.nodes);
+        setConnections(next.connections);
+    }, []);
+
+    const syncStoryboardInstances = useCallback(
+        (nodeId: string) => {
+            const plan = planInstanceSync(nodesRef.current, nodeId);
+            if (!plan || (!plan.toCreate.length && !plan.toArchive.length && !plan.toStale.length && !plan.reindex.length)) return;
+            if (plan.isFirstSync || (!plan.toCreate.length && !plan.toArchive.length)) {
+                applyStoryboardInstancePlan(plan);
+                return;
+            }
+            setToonflowSegmentSyncPlan(plan);
+        },
+        [applyStoryboardInstancePlan],
+    );
+
+    const handleToonflowApprove = useCallback(
+        (nodeId: string) => {
+            const next = applyApprove(nodesRef.current, connectionsRef.current, nodeId);
+            nodesRef.current = next;
+            setNodes(next);
+            const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+        },
+        [syncStoryboardInstances],
+    );
+
+    // #12 接缝检查:保存勾选(全勾即 approved)/ 跳过。
+    const handleToonflowSeamSave = useCallback((nodeId: string, reviews: SeamReview[]) => {
+        const next = applySeamReviewSave(nodesRef.current, nodeId, reviews);
+        nodesRef.current = next;
+        setNodes(next);
+        setToonflowSeamNodeId(null);
+    }, []);
+
+    const handleToonflowSeamSkip = useCallback((nodeId: string) => {
+        const next = applySeamSkip(nodesRef.current, nodeId);
+        nodesRef.current = next;
+        setNodes(next);
+    }, []);
+
+    const handleToonflowEditSave = useCallback((nodeId: string, text: string) => {
+        setNodes((prev) => {
+            const next = applyEditSave(prev, connectionsRef.current, nodeId, text);
+            nodesRef.current = next;
+            return next;
+        });
+        setToonflowEditNodeId(null);
+    }, []);
+
+    const handleToonflowAssetCardsSave = useCallback((nodeId: string, cards: AssetCard[]) => {
+        const next = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
+        nodesRef.current = next;
+        setNodes(next);
+        setToonflowAssetCardsNodeId(null);
+    }, []);
+
+    const handleToonflowAssetCardGenerate = useCallback(
+        async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            if (sourceNode?.metadata?.toonflow?.kind !== "assets") throw new Error("未找到资产库节点");
+            // 音频卡是上传的人声参考,不走 AI 图像生成(也收窄类型:下方 buildAssetCardPrompt 仅接受视觉卡类型)。
+            if (card.cardType === "audio") {
+                message.warning("音频卡是上传的人声参考，不支持 AI 生成，请直接上传音频");
+                return undefined;
+            }
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "image"), count: "1" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return undefined;
+            }
+
+            const savedCards = sourceNode.metadata.toonflow.output?.payload.cards ?? [];
+            const isDerived = card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit";
+            const parentCard = isDerived && card.parentCardId
+                ? allCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character") ?? savedCards.find((item) => item.cardId === card.parentCardId && item.cardType === "character")
+                : undefined;
+            // M4: 衍生卡必须以父角色卡图为参考(创始人规则)——缺父图直接拦截,不降级为无参考生成(会漂移)。form 形态卡不受此限。
+            if (isDerived && !parentCard?.storageKey) {
+                message.warning(`请先为父角色卡${parentCard ? `「${parentCard.name}」` : ""}生成锚点图，衍生卡才能以它为参考`);
+                return undefined;
+            }
+            const referenceCard = card.cardType === "form" ? (card.storageKey ? card : undefined) : isDerived ? parentCard : card.storageKey ? card : undefined;
+            const prompt = card.cardType === "form" ? buildAssetCardPrompt(card) : buildAssetCardPrompt(card, parentCard ? { name: parentCard.name, anchor: parentCard.anchor } : undefined);
+            const { washed, hits } = washPrompt(prompt);
+            if (hits.length) message.warning(`已自动软化 ${hits.length} 个避雷词`);
+            const image = referenceCard?.storageKey
+                ? await imageToDataUrl({ storageKey: referenceCard.storageKey }).then(async (dataUrl) => {
+                      if (!dataUrl) throw new Error("锚点参考图读取失败");
+                      const type = dataUrl.match(/^data:([^;]+)/)?.[1] || "image/png";
+                      return requestEdit(generationConfig, washed, [{ id: referenceCard.cardId, name: `${referenceCard.name}.png`, type, dataUrl, storageKey: referenceCard.storageKey }], undefined).then((items) => items[0]);
+                  })
+                : await requestGeneration(generationConfig, washed).then((items) => items[0]);
+            if (!image?.dataUrl) throw new Error("图像接口没有返回锚点图");
+            return (await uploadImage(image.dataUrl)).storageKey;
+        },
+        [effectiveConfig, isAiConfigReady, message, openConfigDialog],
+    );
+
+    const handleToonflowRollback = useCallback(
+        (nodeId: string, version: number) => {
+            const { nodes: next, orphanedKeys } = applyRollback(nodesRef.current, connectionsRef.current, nodeId, version);
+            nodesRef.current = next;
+            setNodes(next);
+            setToonflowHistoryNodeId(null);
+            const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+            // 先落画布状态,再清回退时被裁旧版本的孤儿媒体(排除仍被引用的键,防误删共享 Blob;失败最多留孤儿由全局兜底扫)。
+            if (orphanedKeys.length) {
+                const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                const orphaned = splitMediaKeysByStore(orphanedKeys.filter((key) => !referencedKeys.has(key)));
+                void Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]).catch(() => message.warning("历史图像清理失败"));
+            }
+        },
+        [syncStoryboardInstances],
+    );
+
+    const handleDeleteArchivedInstance = useCallback(async (nodeId: string) => {
+        // 先落画布状态再清媒体:媒体清理失败最多留下孤儿 key,反序会出现节点引用已删媒体。
+        const next = deleteArchivedInstance(nodesRef.current, connectionsRef.current, nodeId);
+        nodesRef.current = next.nodes;
+        connectionsRef.current = next.connections;
+        setNodes(next.nodes);
+        setConnections(next.connections);
+        // C4: 排除删除后仍被其他节点/副本引用的键,避免误删共享 Blob。
+        const referencedKeys = new Set<string>([...collectImageStorageKeys(next.nodes), ...collectMediaStorageKeys(next.nodes)]);
+        const mediaKeys = splitMediaKeysByStore(next.mediaKeys.filter((key) => !referencedKeys.has(key)));
+        await Promise.all([deleteStoredImages(mediaKeys.imageKeys), deleteStoredMedia(mediaKeys.mediaKeys)]);
+    }, []);
+
+    const handleToonflowAdopt = useCallback((nodeId: string) => {
+        setNodes((prev) => {
+            const next = applyAdoptStale(prev, connectionsRef.current, nodeId);
+            nodesRef.current = next;
+            return next;
+        });
+    }, []);
+
+    const handleCancelToonflowCascade = useCallback(() => {
+        cascadeCancelledRef.current = true;
+        setToonflowCascadeProgress((current) => (current?.phase === "running" ? { ...current, cancelling: true } : current));
+    }, []);
+
+    const handleToonflowCascade = useCallback(
+        async (nodeId: string) => {
+            if (cascadeRunningRef.current) return;
+            const graph = buildTextCascadeGraph(nodesRef.current, connectionsRef.current);
+            let orderedIds: string[];
+            try {
+                orderedIds = cascadeOrder(graph.nodes, graph.edges, nodeId);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "级联拓扑计算失败");
+                return;
+            }
+            // 根节点本体不重生成——"向下重生成"的核心场景是用户刚编辑/验收完根节点让下游跟上;
+            // 若把根也重跑,用户的手工修改会被 AI 覆盖。
+            const nodeIds = orderedIds.filter((id) => id !== nodeId);
+            if (!nodeIds.length) {
+                message.info("该节点没有可级联的下游文本节点");
+                return;
+            }
+
+            cascadeRunningRef.current = true;
+            cascadeCancelledRef.current = false;
+            setCascadeLockedNodeIds(new Set(orderedIds));
+            setToonflowCascadeProgress({ phase: "running", current: 1, total: nodeIds.length, nodeIds, reviewNodeIds: [], cancelling: false });
+
+            try {
+                const result = await runCascade({
+                    ...graph,
+                    rootId: nodeId,
+                    executor: async (currentNodeId) => (currentNodeId === nodeId ? { ok: true } : runToonflowNodeGeneration(currentNodeId)),
+                    isCancelled: () => cascadeCancelledRef.current,
+                    confirmCostGate: async () => true,
+                    onNodeStart: (currentNodeId) => {
+                        if (currentNodeId === nodeId) return;
+                        const current = nodeIds.indexOf(currentNodeId) + 1;
+                        setToonflowCascadeProgress((progress) => (progress?.phase === "running" ? { ...progress, current } : progress));
+                    },
+                });
+
+                const completedCount = result.completed.filter((id) => id !== nodeId).length;
+                if (result.cancelled) {
+                    setToonflowCascadeProgress(null);
+                    message.info(`级联已取消，已完成 ${completedCount} 个节点`);
+                    return;
+                }
+
+                const reviewNodeIds = nodeIds.filter((currentNodeId) => nodesRef.current.find((node) => node.id === currentNodeId)?.metadata?.toonflow?.status === "review");
+                if (reviewNodeIds.length >= 2) {
+                    setToonflowCascadeProgress({ phase: "review", current: nodeIds.length, total: nodeIds.length, nodeIds, reviewNodeIds, cancelling: false });
+                } else {
+                    setToonflowCascadeProgress(null);
+                }
+
+                if (result.failed.length) {
+                    message.warning(`级联完成：${completedCount} 个成功，${result.failed.length} 个失败`);
+                } else {
+                    message.success(`级联重生成完成，共 ${completedCount} 个节点`);
+                }
+            } catch (error) {
+                setToonflowCascadeProgress(null);
+                message.error(error instanceof Error ? error.message : "级联重生成失败");
+            } finally {
+                cascadeRunningRef.current = false;
+                cascadeCancelledRef.current = false;
+                setCascadeLockedNodeIds(new Set());
+            }
+        },
+        [message, runToonflowNodeGeneration],
+    );
+
+    const handleApproveToonflowChain = useCallback(() => {
+        const reviewNodeIds = toonflowCascadeProgress?.phase === "review" ? toonflowCascadeProgress.reviewNodeIds : [];
+        const result = approveChain(nodesRef.current, connectionsRef.current, reviewNodeIds);
+        nodesRef.current = result.nodes;
+        setNodes(result.nodes);
+        reviewNodeIds.forEach((nodeId) => {
+            const toonflow = result.nodes.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+        });
+        setToonflowCascadeProgress(null);
+        message.success(`已通过 ${result.approvedCount} 个节点`);
+    }, [message, syncStoryboardInstances, toonflowCascadeProgress]);
+
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
@@ -2751,6 +3414,9 @@ function InfiniteCanvasPage() {
                             showImageInfo={showImageInfo}
                             resourceLabel={resourceReferenceByNodeId.get(node.id)}
                             mentionReferences={mentionReferencesByNodeId.get(node.id) || []}
+                            cascadeLocked={cascadeLockedNodeIds.has(node.id)}
+                            isRunning={runningNodeId === node.id}
+                            configInputsSignature={((summary) => `${summary.textCount}|${summary.imageCount}|${summary.videoCount}|${summary.audioCount}`)(getInputSummary(configInputsById.get(node.id) || []))}
                             renderPanel={(panelNode) =>
                                 panelNode.type === CanvasNodeType.Config ? (
                                     <CanvasConfigComposer
@@ -2777,7 +3443,31 @@ function InfiniteCanvasPage() {
                             }
                             renderNodeContent={(contentNode) =>
                                 contentNode.metadata?.toonflow ? (
-                                    <ToonflowNodeContent node={contentNode} />
+                                    <ToonflowNodeContent
+                                        node={contentNode}
+                                        cascadeLocked={cascadeLockedNodeIds.has(contentNode.id)}
+                                        batchCount={batchChildCountById.get(contentNode.id) || 0}
+                                        batchExpanded={Boolean(contentNode.metadata?.imageBatchExpanded)}
+                                        onGenerate={(nodeId) => void handleToonflowGenerate(nodeId)}
+                                        onApprove={handleToonflowApprove}
+                                        onEdit={setToonflowEditNodeId}
+                                        onCascade={(nodeId) => void handleToonflowCascade(nodeId)}
+                                        onHistory={setToonflowHistoryNodeId}
+                                        onRepair={setToonflowRepairNodeId}
+                                        onOpenAssetCards={setToonflowAssetCardsNodeId}
+                                        onAdopt={handleToonflowAdopt}
+                                        onDeleteArchived={(nodeId) => void handleDeleteArchivedInstance(nodeId)}
+                                        onOpenExport={setToonflowExportNodeId}
+                                        exportSummary={
+                                            contentNode.metadata?.toonflow?.kind === "export"
+                                                ? { approvedCount: exportCollection.approvedCount, totalSegments: exportCollection.totalSegments }
+                                                : undefined
+                                        }
+                                        onOpenSeam={setToonflowSeamNodeId}
+                                        onSeamSkip={handleToonflowSeamSkip}
+                                        seamSummary={contentNode.metadata?.toonflow?.kind === "seam-check" ? seamSummary : undefined}
+                                        onToggleBatch={toggleBatchExpanded}
+                                    />
                                 ) : (
                                     <CanvasConfigNodePanel
                                         node={contentNode}
@@ -2913,6 +3603,93 @@ function InfiniteCanvasPage() {
                 <input ref={imageInputRef} type="file" accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
+
+                <ToonflowEditModal open={Boolean(toonflowEditNode)} node={toonflowEditNode} onSave={handleToonflowEditSave} onCancel={() => setToonflowEditNodeId(null)} />
+
+                <ToonflowAssetCardModal
+                    open={Boolean(toonflowAssetCardsNode)}
+                    node={toonflowAssetCardsNode}
+                    scriptText={toonflowAssetScriptText}
+                    onSave={handleToonflowAssetCardsSave}
+                    onGenerateCard={handleToonflowAssetCardGenerate}
+                    onCancel={() => setToonflowAssetCardsNodeId(null)}
+                />
+
+                <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
+
+                <ToonflowExportModal open={Boolean(toonflowExportNodeId)} collection={exportCollection} onCancel={() => setToonflowExportNodeId(null)} />
+
+                <ToonflowSeamCheckModal
+                    open={Boolean(toonflowSeamNodeId)}
+                    boundaries={seamBoundaries}
+                    initialReviews={seamReviews}
+                    onSave={(reviews) => {
+                        if (toonflowSeamNodeId) handleToonflowSeamSave(toonflowSeamNodeId, reviews);
+                    }}
+                    onCancel={() => setToonflowSeamNodeId(null)}
+                />
+
+                <Modal
+                    title={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "单镜修改（整段重生成）" : "定点修"}
+                    open={Boolean(toonflowRepairNode)}
+                    okText={`确认生成（将调用 1 次${toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "视频" : "图像"}生成）`}
+                    cancelText="取消"
+                    onOk={() => {
+                        const nodeId = toonflowRepairNodeId;
+                        const note = toonflowRepairNote.trim();
+                        setToonflowRepairNodeId(null);
+                        setToonflowRepairNote("");
+                        if (nodeId) void runToonflowInstanceGeneration(nodeId, note);
+                    }}
+                    onCancel={() => {
+                        setToonflowRepairNodeId(null);
+                        setToonflowRepairNote("");
+                    }}
+                >
+                    <p className="mb-3 text-sm opacity-65">{toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "只描述要改的单镜；提交后会按本段完整镜头脚本整段重生成" : "只描述要改的这一处，其余画面保持不变"}</p>
+                    <Input.TextArea
+                        value={toonflowRepairNote}
+                        autoSize={{ minRows: 3, maxRows: 7 }}
+                        placeholder={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "例如：只调整第 2 镜为固定机位，其余镜头、角色和光线保持不变" : "例如：只调整第 2 帧人物手势，其余构图、角色和光线不变"}
+                        onChange={(event) => setToonflowRepairNote(event.target.value)}
+                    />
+                </Modal>
+
+                <ToonflowSegmentSyncModal
+                    open={Boolean(toonflowSegmentSyncPlan)}
+                    plan={toonflowSegmentSyncPlan}
+                    nodes={nodes}
+                    onConfirm={() => {
+                        if (toonflowSegmentSyncPlan) applyStoryboardInstancePlan(toonflowSegmentSyncPlan);
+                        setToonflowSegmentSyncPlan(null);
+                    }}
+                    onCancel={() => setToonflowSegmentSyncPlan(null)}
+                />
+
+                {toonflowCascadeProgress ? (
+                    <div className="fixed left-1/2 top-16 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-black/10 bg-white px-4 py-2 shadow-lg dark:border-white/15 dark:bg-neutral-900">
+                        {toonflowCascadeProgress.phase === "running" ? (
+                            <>
+                                <span className="text-sm">
+                                    级联重生成中(第 {toonflowCascadeProgress.current}/{toonflowCascadeProgress.total} 个)…
+                                </span>
+                                <Button size="small" danger disabled={toonflowCascadeProgress.cancelling} onClick={handleCancelToonflowCascade}>
+                                    {toonflowCascadeProgress.cancelling ? "取消中…" : "取消级联"}
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <span className="text-sm">级联完成,{toonflowCascadeProgress.reviewNodeIds.length} 个节点待验收</span>
+                                <Button size="small" type="primary" onClick={handleApproveToonflowChain}>
+                                    全链通过
+                                </Button>
+                                <Button size="small" onClick={() => setToonflowCascadeProgress(null)}>
+                                    稍后逐个验收
+                                </Button>
+                            </>
+                        )}
+                    </div>
+                ) : null}
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode!, crop)} /> : null}
 
@@ -3379,6 +4156,20 @@ function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
     return nodes.map((node) => (node.metadata?.status === "loading" ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } } : node));
 }
 
+function setPendingVideoTask(node: CanvasNodeData, pendingVideoTask: ToonflowNodeMetadata["pendingVideoTask"]): CanvasNodeData {
+    const toonflow = node.metadata?.toonflow;
+    if (!toonflow) return node;
+    return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow, pendingVideoTask } } };
+}
+
+function clearPendingVideoTask(node: CanvasNodeData, taskId: string): CanvasNodeData {
+    const toonflow = node.metadata?.toonflow;
+    if (toonflow?.pendingVideoTask?.taskId !== taskId) return node;
+    const nextToonflow = { ...toonflow };
+    delete nextToonflow.pendingVideoTask;
+    return { ...node, metadata: { ...node.metadata, toonflow: nextToonflow } };
+}
+
 function isGenerationCanceled(error: unknown) {
     return error instanceof Error && (error.message === "请求已取消" || error.name === "AbortError");
 }
@@ -3415,6 +4206,7 @@ function isAudioFile(file: File) {
 }
 
 function isHiddenBatchChild(node: CanvasNodeData, nodes: CanvasNodeData[], collapsingBatchIds?: Set<string>) {
+    if (node.metadata?.toonflow?.archived) return false;
     const rootId = node.metadata?.batchRootId;
     if (!rootId) return false;
     const root = nodes.find((item) => item.id === rootId);

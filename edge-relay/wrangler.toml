@@ -1,0 +1,12 @@
+# Cloudflare Workers 部署配置（已选定：Cloudflare Workers + 用户自带 key）。
+# 部署：npm i -g wrangler → wrangler secret put RELAY_ACCESS_TOKEN → wrangler deploy
+name = "toonflow-relay"
+main = "cloudflare-worker.ts"
+compatibility_date = "2026-07-13"
+
+# 非机密变量（机密的 RELAY_ACCESS_TOKEN 用 `wrangler secret put`，不要写在这里）。
+[vars]
+# 允许转发到的上游 AI 网关主机，逗号分隔。按你实际用的渠道填（示例含 cano 视频 + 常见文本/图像网关）。
+RELAY_ALLOWED_TARGET_HOSTS = "cano.gewuzhihui.com"
+# 允许的浏览器来源，填你的内测站点域名（如 https://你的用户名.github.io）。留空=不校验（仅调试用，勿留空上线）。
+RELAY_ALLOWED_ORIGINS = ""

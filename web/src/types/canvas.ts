@@ -1,3 +1,5 @@
+import type { NodeOutput, NodeStatus } from "@/lib/toonflow/schema";
+
 export type Position = {
     x: number;
     y: number;
@@ -37,7 +39,7 @@ export type ToonflowNodeKind =
     | "seam-check"
     | "audio-mix"
     | "export";
-export type ToonflowNodeStageStatus = "未开始" | "待生成" | "生成中" | "生成失败" | "待验收" | "已通过" | "已跳过";
+export type ToonflowNodeStageStatus = NodeStatus;
 
 export type ToonflowNodeMetadata = {
     kind: ToonflowNodeKind;
@@ -45,8 +47,27 @@ export type ToonflowNodeMetadata = {
     status: ToonflowNodeStageStatus;
     summary: string;
     checks: string[];
+    segmentId?: string;
+    segmentIndex?: number;
+    archived?: boolean;
     outputs?: string[];
     accent?: string;
+    output?: NodeOutput;
+    history?: NodeOutput[];
+    pendingVideoTask?: {
+        taskId: string;
+        provider: "openai" | "seedance" | "cano";
+        model: string;
+        upstreamSnapshot: Record<string, number>;
+        // 建任务时的逐格 shotPrompts 与洗词记录一并持久化:刷新恢复时直接落库,不重算(避免期间分镜表变动导致重算漂移或抛错丢弃已计费视频)。
+        shotPrompts: Record<string, string>;
+        washHits: Array<{ term: string; replacement: string }>;
+        startedAt: string;
+    };
+    washReport?: {
+        hits: Array<{ term: string; replacement: string }>;
+        at: string;
+    };
 };
 
 export type CanvasNodeMetadata = {

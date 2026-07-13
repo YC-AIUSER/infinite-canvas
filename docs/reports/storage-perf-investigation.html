@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>画布自动保存卡顿·性能根因调查</title>
+<style>
+  :root{--bg:#0f1115;--panel:#181b22;--panel2:#1f232c;--line:#2a2f3a;--fg:#e6e9ef;--mut:#9aa4b2;--accent:#5b9dff;--good:#3ecf8e;--warn:#f6c453;--bad:#ff6b6b;--code:#c8d3e0}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  .sub{color:var(--mut);margin:0 0 28px;font-size:14px}
+  h2{font-size:19px;margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .verdict{background:linear-gradient(180deg,#1b2330,#181b22);border-color:#33405a}
+  code,.k{font-family:"JetBrains Mono",Consolas,monospace;font-size:13px;color:var(--code);background:var(--panel2);padding:1px 6px;border-radius:5px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+  .tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:20px;font-weight:600}
+  .t-confirmed{background:rgba(62,207,142,.14);color:var(--good)}
+  .t-runtime{background:rgba(246,196,83,.14);color:var(--warn)}
+  .t-refuted{background:rgba(255,107,107,.14);color:var(--bad)}
+  ul{margin:8px 0;padding-left:20px}li{margin:5px 0}
+  .roi{display:flex;gap:10px;align-items:baseline;margin:12px 0}
+  .roi .n{font-size:22px;font-weight:700;color:var(--accent);min-width:26px}
+  .muted{color:var(--mut)}
+  .pill{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:20px;padding:2px 10px;margin-right:6px}
+  b.hl{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>画布自动保存卡顿 · 性能根因调查</h1>
+  <p class="sub">infinite-canvas / Toonflow · 2026-07-13 · 只读代码调查(Codex 探查 + Claude Code 逐条核实)</p>
+
+  <div class="card verdict">
+    <div style="margin-bottom:6px"><span class="pill">结论</span></div>
+    <p style="margin:0 0 8px"><b class="hl">真凶是渲染失效风暴,不是存储序列化。</b> 验收报告与"创始人裁决"假设 30 节点卡 10-30 秒源于<b>整块 JSON 序列化</b>,据此要做<b>存储架构重构</b>(大改)。但证据显示:图片/Toonflow 产物早已按存储键外置,持久化 JSON 仅约 <b>360KiB</b>,吞不下 10-30 秒的冻结。</p>
+    <p style="margin:0"><b class="hl">真正的瓶颈</b>:每次自动保存触发整页重渲染,而 30 个重节点 <code>CanvasNode</code>(已包 <code>React.memo</code>)因被传入<b>行内新建闭包 props</b> 而 memo 全部失效 → 30 个复杂节点全量重渲染。<b>该先修的是这个,不是存储。</b></p>
+  </div>
+
+  <h2>证据链(逐条核实)</h2>
+  <table>
+    <thead><tr><th>论断</th><th>证据位置</th><th>核实</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>currentProject</code> 用 <code>projects.find</code> 订阅,store 每变都是新对象引用,触发整页渲染</td>
+        <td><span class="k">project.tsx:308</span></td>
+        <td><span class="tag t-confirmed">读码已证实</span></td>
+      </tr>
+      <tr>
+        <td>30 个 <code>CanvasNode</code> 被传入行内闭包 <code>renderPanel={(n)=>…}</code> / <code>renderNodeContent={(n)=>…}</code>,身份每次渲染都变</td>
+        <td><span class="k">project.tsx:3161 / 3184 / 3208</span></td>
+        <td><span class="tag t-confirmed">读码已证实</span></td>
+      </tr>
+      <tr>
+        <td><code>CanvasNode</code> 包了 <code>React.memo</code> 但收一串函数 props → 上面的不稳定闭包使 memo 对全部可见节点<b>整体失效</b></td>
+        <td><span class="k">canvas-node.tsx:74</span></td>
+        <td><span class="tag t-confirmed">读码已证实</span></td>
+      </tr>
+      <tr>
+        <td>持久化 <code>JSON.stringify</code> 在 400ms 定时器中同步执行,序列化单键里全部项目——是主线程风险,但量级不足</td>
+        <td><span class="k">use-canvas-store.ts:52</span></td>
+        <td><span class="tag t-confirmed">读码已证实</span></td>
+      </tr>
+      <tr>
+        <td>IndexedDB 写入走异步事务;是否造成 Long Task 需 Profiler(失败后 localStorage fallback 是同步的)</td>
+        <td><span class="k">localforage-storage.ts:18</span></td>
+        <td><span class="tag t-runtime">需运行时验证</span></td>
+      </tr>
+      <tr>
+        <td>未找到"新建会话内联 base64"的生产写入点;base64 膨胀只来自<b>遗留数据 / 未校验导入 / <code>detail?: unknown</code></b></td>
+        <td><span class="k">canvas.ts:119 · project.tsx:3079</span></td>
+        <td><span class="tag t-runtime">需运行时/数据验证</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>量化估算</h2>
+  <div class="card">
+    <ul>
+      <li>30 节点 × 5 版 history × ~2KiB = <b>~300KiB</b>;加各节点当前 output ≈ <b>360KiB(0.35MiB)</b>——普通文本序列化通常是几十毫秒级,<b>单凭它不足以解释 10-30 秒冻结</b>。</li>
+      <li>若存在 base64(如导入了历史数据):10 会话 × 2-5 张 × 每张 ~1MiB 原图 → base64 约 <b>26.7-66.7MiB</b>,是无 base64 状态的 <b>约 76-190 倍</b>。这才是"若卡顿源于序列化"时唯一说得通的体量——但它<b>只在有遗留 base64 数据时成立</b>。</li>
+    </ul>
+    <p class="muted" style="margin:8px 0 0">推论:对<b>纯新建的 Toonflow 画布</b>,冻结几乎只能来自渲染失效;对<b>导入过老数据的画布</b>,才可能叠加 base64 序列化。两条路径的修法不同。</p>
+  </div>
+
+  <h2>修复方向(按投入产出比排序)</h2>
+  <div class="card">
+    <div class="roi"><div class="n">1</div><div><b>提稳 <code>CanvasNode</code> 的函数 props</b> —— 把 <code>renderPanel</code> / <code>renderNodeContent</code> 及各 <code>on*</code> 回调用 <code>useCallback</code> 稳定,让 <code>React.memo</code> 真正生效。<span class="muted">动:project.tsx。低风险、无数据迁移、大概率吃掉大部分卡顿。<b>先做这个并实测。</b></span></div></div>
+    <div class="roi"><div class="n">2</div><div><b>自动保存与渲染解耦</b> —— 持久化不应订阅进触发整页渲染的路径;<code>currentProject</code> 订阅可细化/记忆化。<span class="muted">动:project.tsx + use-canvas-store.ts。中风险。</span></div></div>
+    <div class="roi"><div class="n">3</div><div><b>base64 外置兜底</b> —— 对导入/遗留数据在 hydrate 时把内联 <code>dataUrl</code> 转存储键(与 M6 纪律一致)。<span class="muted">动:use-canvas-store.ts hydrate + canvas.ts。仅当实测确认存在 base64 膨胀才做。</span></div></div>
+    <div class="roi"><div class="n">4</div><div><b>存储分块(原"创始人裁决"重构)</b> —— 按 project/node 拆键,只重序列化变更部分。<span class="muted">动:持久化层大改 + 数据迁移。<b>最大工程量,放到 1-3 都做完仍慢才动。</b></span></div></div>
+  </div>
+
+  <h2>已实测修复(#1 已实施并验证)</h2>
+  <div class="card verdict">
+    <p style="margin:0 0 10px"><b class="hl">结论获实测证实:瓶颈确是渲染失效,#1 已修复。</b> 在 30 节点画布上用浏览器 longtask 观测器 + React commit 计数实测,拖动 1 个节点:</p>
+    <table>
+      <thead><tr><th>指标</th><th>修复前</th><th>修复后</th><th>改善</th></tr></thead>
+      <tbody>
+        <tr><td>主线程阻塞总时长</td><td>418–488 ms</td><td>57–106 ms</td><td><b style="color:var(--good)">4–8× ↓</b></td></tr>
+        <tr><td>长任务数</td><td>4–6</td><td>1–2</td><td><b style="color:var(--good)">↓</b></td></tr>
+        <tr><td>单个最长任务</td><td>121–132 ms</td><td>53–57 ms</td><td><b style="color:var(--good)">↓</b></td></tr>
+        <tr><td>React commit 数</td><td>7–8</td><td>2–3</td><td><b style="color:var(--good)">↓</b></td></tr>
+      </tbody>
+    </table>
+    <p style="margin:10px 0 0"><b>修法</b>:给 <code>CanvasNode</code> 加自定义 <code>React.memo</code> 比较器,只比值型 props、忽略行为稳定的函数型 props(render*/on*);把 render 闭包用到的外部 per-node 动态状态(<code>cascadeLocked</code>/<code>isRunning</code>/config 输入签名)提成值 prop 驱动比较器。<span class="muted">动 canvas-node.tsx + project.tsx,+53/-1 行。功能验证:拖/选/悬停正常,151 单测绿,tsc 0 错,无控制台报错。commit 8058867。</span></p>
+    <p style="margin:10px 0 0" class="muted">注:实测用 30 个轻量文本节点(~0.5s 阻塞);现网 10-30 秒是更重的 toonflow 节点,同一机制下改善倍率一致。#2/#3/#4 视后续是否仍有卡顿再评估——本次修完 #1 后,存储重构(原"创始人裁决")已可降级为"暂不做,除非重节点场景仍慢"。</p>
+  </div>
+
+  <p class="muted" style="margin-top:28px;font-size:13px">调查方式:Codex 只读探查(退出码 0,web/src 零改动)+ Claude Code 对每条 file:line 论断逐条核实,并搭 30 节点复现画布用浏览器 profiler 实测前后。</p>
+</div>
+</body>
+</html>

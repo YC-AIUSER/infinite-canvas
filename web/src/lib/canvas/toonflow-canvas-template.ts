@@ -155,9 +155,9 @@ const templateNodes: ToonflowTemplateNode[] = [
         type: CanvasNodeType.Video,
         title: "成片 / 导出",
         stage: "交付",
-        summary: "汇总已选视频、音频轨道、拼接结果和下载出口。",
-        checks: ["片段已选", "音画同步", "导出可下载"],
-        outputs: ["最终成片"],
+        summary: "汇总已通过的段视频，顺序预览、逐段下载、打包 ZIP（本期不拼接）。",
+        checks: ["段已就绪", "顺序可预览", "可下载/打包"],
+        outputs: ["分段成片包"],
         accent: "#334155",
     },
 ];
@@ -191,7 +191,7 @@ export function buildToonflowCanvasTemplate() {
                 toonflow: {
                     kind: item.kind,
                     stage: item.stage,
-                    status: index === 0 ? "待生成" : "未开始",
+                    status: "empty",
                     summary: item.summary,
                     checks: item.checks,
                     outputs: item.outputs,

@@ -22,8 +22,8 @@ type SeedanceTask = {
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string };
+export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; taskId?: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "cano"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -39,11 +39,15 @@ function aiHeaders(config: AiConfig, contentType?: string) {
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
-    const delayMs = task.provider === "seedance" ? 5000 : 2500;
+    return pollVideoTaskUntilDone(config, task, options);
+}
+
+export async function pollVideoTaskUntilDone(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
+    const delayMs = task.provider === "openai" ? 2500 : 5000;
     for (let attempt = 0; attempt < 120; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const state = await pollVideoGenerationTask(config, task, options);
-        if (state.status === "completed") return state.result;
+        if (state.status === "completed") return { ...state.result, taskId: task.id };
         if (state.status === "failed") throw new Error(state.error);
         if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
         await delay(delayMs, options?.signal);
@@ -55,6 +59,10 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const selectedModel = (config.model || config.videoModel).trim();
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     assertVideoConfig(requestConfig, requestConfig.model);
+    // cano(格物智绘)是独立方言:模型名同样含 "seedance" 会被误判进火山 Seedance 路径,故先按 baseUrl 识别。
+    if (isCanoVideoConfig(requestConfig)) {
+        return createCanoTask(requestConfig, selectedModel, prompt, references, audioReferences, options);
+    }
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
     }
@@ -67,6 +75,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);
+    if (task.provider === "cano") return pollCanoTask(requestConfig, task, options);
     return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
 }
 
@@ -115,6 +124,90 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务查询失败"));
+    }
+}
+
+// cano(格物智绘)视频方言:POST /videos/generations(multipart,异步)→ 轮询 GET /jobs/:id。
+function isCanoVideoConfig(config: Pick<AiConfig, "baseUrl">) {
+    return /cano\.gewuzhihui\.com/i.test(config.baseUrl || "");
+}
+
+function canoVideoRatio(size: string) {
+    const ratio = normalizeSeedanceRatio(size);
+    return ratio === "adaptive" ? "16:9" : ratio;
+}
+
+function canoVideoDuration(value: string) {
+    const duration = normalizeSeedanceDuration(value);
+    return duration === -1 ? 5 : duration;
+}
+
+type CanoJobData = { id?: string; status?: string; error?: { message?: string } | string; msg?: string; message?: string; videos?: Array<{ url?: string }> };
+// cano 用 {success, data|error} 信封包裹(与 /models 一致);兼容个别扁平响应。
+type CanoEnvelope = CanoJobData & { success?: boolean; data?: CanoJobData | null; error?: { message?: string } | string };
+
+function unwrapCano(payload: CanoEnvelope): CanoJobData {
+    return payload && typeof payload === "object" && "data" in payload && payload.data ? payload.data : payload;
+}
+
+function canoErrorMessage(payload: CanoEnvelope): string {
+    // cano 的失败原因既可能在信封顶层 error(HTTP 级 success:false),也可能在 data 内(success:true 但 data.status=FAILED)。
+    const data = unwrapCano(payload);
+    return (
+        readApiErrorMessage((payload as { error?: unknown })?.error) ||
+        readApiErrorMessage((data as { error?: unknown })?.error) ||
+        readApiErrorMessage(data)
+    );
+}
+
+async function createCanoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    const body = new FormData();
+    body.append("model", modelOptionName(model));
+    body.append("type", references.length ? "multimodal2video" : "text2video");
+    body.append("prompt", prompt);
+    body.append("duration", String(canoVideoDuration(config.videoSeconds)));
+    body.append("ratio", canoVideoRatio(config.size));
+    const files = await Promise.all(
+        references.slice(0, 9).map(async (image) => {
+            const dataUrl = await imageToDataUrl(image);
+            if (!dataUrl) throw new Error("参考图读取失败，请换一张图片或重新上传");
+            return dataUrlToFile({ ...image, dataUrl });
+        }),
+    );
+    files.forEach((file) => body.append("images", file));
+    // 参考音频(人声):cano 音频接口 2026-07-13 承诺次日修复,字段名/格式待核实,暂按 images 模式用 "audios";
+    // 仅在有音频卡时附加,不影响现有纯图请求。拿到 cano 音频 API 文档后核对字段名与是否需要 base64/URL。
+    for (const audio of audioReferences.slice(0, 9)) {
+        if (!audio.storageKey) continue;
+        const blob = await getMediaBlob(audio.storageKey);
+        if (blob) body.append("audios", new File([blob], `${audio.storageKey.replace(/[^a-zA-Z0-9]/g, "_")}.mp3`, { type: blob.type || "audio/mpeg" }));
+    }
+    try {
+        const payload = (await axios.post<CanoEnvelope>(aiApiUrl(config, "/videos/generations"), body, { headers: aiHeaders(config), signal: options?.signal })).data;
+        if (payload?.success === false) throw new Error(canoErrorMessage(payload) || "Cano 视频任务创建失败");
+        const created = unwrapCano(payload);
+        if (!created?.id) throw new Error(canoErrorMessage(payload) || "Cano 视频接口没有返回任务 ID");
+        return { id: created.id, provider: "cano", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Cano 视频任务创建失败"));
+    }
+}
+
+async function pollCanoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    try {
+        const payload = (await axios.get<CanoEnvelope>(aiApiUrl(config, `/jobs/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config), signal: options?.signal })).data;
+        if (payload?.success === false) return { status: "failed", error: canoErrorMessage(payload) || "Cano 视频生成失败" };
+        const job = unwrapCano(payload);
+        const status = (job.status || "").toUpperCase();
+        if (status === "SUCCEEDED") {
+            const url = job.videos?.find((video) => typeof video.url === "string" && video.url)?.url;
+            if (!url) return { status: "failed", error: "Cano 任务成功但没有返回视频 URL" };
+            return { status: "completed", result: await videoResultFromUrl(url, options) };
+        }
+        if (status === "FAILED" || status === "CANCELLED") return { status: "failed", error: canoErrorMessage(payload) || "Cano 视频生成失败" };
+        return { status: "pending" };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Cano 视频任务查询失败"));
     }
 }
 

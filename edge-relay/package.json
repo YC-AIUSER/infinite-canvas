@@ -1,0 +1,14 @@
+{
+  "name": "toonflow-edge-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Toonflow 生产版 CORS 转发（Cloudflare Workers）。部署见 README。",
+  "type": "module",
+  "scripts": {
+    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
