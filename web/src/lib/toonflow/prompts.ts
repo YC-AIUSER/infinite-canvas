@@ -200,6 +200,52 @@ ${anchors}
 角色外观与配色、场景光线、道具形态必须按锚点上色。画面禁止台词文字、字幕、水印和 logo。${correction}`;
 }
 
+// 视频工作台，方法论源 ai-short-drama：九宫格页第一参考、原生多镜头直出、prompt 与格子逐一 1:1、禁首尾帧续接。
+export function buildVideoWorkbenchPrompt(input: {
+    rows: StoryboardRow[];
+    shotContracts: ShotContract[];
+    actionContracts: ActionContract[];
+    anchors: string[];
+    note?: string;
+}): { prompt: string; shotPrompts: Record<string, string> } {
+    const shotContractById = new Map(input.shotContracts.map((contract) => [contract.shotId, contract]));
+    const actionContractById = new Map(input.actionContracts.map((contract) => [contract.shotId, contract]));
+    const rows = [...input.rows].sort((left, right) => left.shotNo - right.shotNo);
+    const shotPrompts: Record<string, string> = {};
+    const panels = rows.map((row, index) => {
+        const shotContract = shotContractById.get(row.shotId);
+        const actionContract = actionContractById.get(row.shotId);
+        const parts = [`景别：${row.scale}`, `机位角度：${row.angle}`, `动作：${row.action}`];
+        if (actionContract) parts.push(`关键瞬间：${actionContract.process}`, `以物理后果结束：${actionContract.consequence}`);
+        if (shotContract) {
+            if (shotContract.movement) parts.push(`运镜：${shotContract.movement}${shotContract.speed ? `（${shotContract.speed}）` : ""}`);
+            parts.push(`落点构图：${shotContract.endpoint}`);
+            if (shotContract.inOut.include.length) parts.push(`必须入画：${shotContract.inOut.include.join("、")}`);
+            if (shotContract.inOut.exclude.length) parts.push(`必须排除：${shotContract.inOut.exclude.join("、")}`);
+        }
+        const shotPrompt = parts.join("；");
+        shotPrompts[row.shotId] = shotPrompt;
+        return `第${index + 1}镜（shotNo ${row.shotNo}）：${shotPrompt}`;
+    });
+    const anchors = input.anchors.length ? input.anchors.map((anchor) => `- ${anchor}`).join("\n") : "（无资产锚点）";
+    const correction = input.note
+        ? `\n\n【本次调整】\n只调整以下这一处：${input.note}\n其余镜头与参考保持一致。`
+        : "";
+
+    return {
+        prompt: `以输入的该段故事板页九宫格为第一构图参考、该段首帧组为上色与一致性锚点，原生多镜头直出该段视频（约 12-15 秒）。共 ${rows.length} 个镜头，与故事板格子逐一 1:1，按 shotNo 顺序衔接；不合并镜头、不新增机位，禁止首尾帧续接或硬拼。
+
+【逐镜脚本（与格子 1:1）】
+${panels.join("\n")}
+
+【一致性锚点（逐字遵守）】
+${anchors}
+
+衔接规则：同一角色保持同一屏幕侧，摄影机不跨越 180°轴线；每镜一个动作并以物理后果改变结束状态。画面禁止字幕、水印和 logo。${correction}`,
+        shotPrompts,
+    };
+}
+
 /*
  * 编译顺序（数组左侧优先级最高）：
  * inputs -> [节点优先级数组] -> 去空白/补充未知输入 -> 拼接上下文

@@ -11,6 +11,7 @@ import {
     buildSpaceContractPrompt,
     buildStoryboardPagePrompt,
     buildStoryboardTablePrompt,
+    buildVideoWorkbenchPrompt,
     washPrompt,
 } from "./prompts";
 import {
@@ -20,6 +21,7 @@ import {
     StoryboardRowSchema,
     VERSION_LIMIT_IMAGE,
     VERSION_LIMIT_TEXT,
+    VERSION_LIMIT_VIDEO,
     migrateToonflowStatus,
     parseModelJson,
     type ActionContract,
@@ -233,6 +235,59 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
     return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings };
 }
 
+export type ToonflowVideoGeneration = ToonflowImageGeneration & { shotPrompts: Record<string, string> };
+
+export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, note?: string): ToonflowVideoGeneration {
+    void connections;
+    const target = nodes.find((node) => node.id === nodeId);
+    const targetToonflow = target?.metadata?.toonflow;
+    if (!target || !targetToonflow?.segmentId || targetToonflow.kind !== "video-workbench") {
+        throw new Error("当前节点不支持 Toonflow 视频生成");
+    }
+
+    const table = nodes.find((node) => node.metadata?.toonflow?.kind === "storyboard-table")?.metadata?.toonflow?.output?.payload.table;
+    const rows = (table ?? []).filter((row) => row.segmentId === targetToonflow.segmentId).sort((left, right) => left.shotNo - right.shotNo);
+    if (!rows.length) throw new Error("分镜表中找不到该段镜头");
+
+    const warnings: string[] = [];
+    const shotIds = new Set(rows.map((row) => row.shotId));
+    const shotContracts = segmentContracts<ShotContract>(nodes, "shot-contract", ShotContractSchema, shotIds, warnings);
+    const actionContracts = segmentContracts<ActionContract>(nodes, "action-contract", ActionContractSchema, shotIds, warnings);
+    const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
+    const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
+    const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
+    const cards = allAssetCards
+        .filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey))
+        .sort((left, right) => {
+            const leftKey = assetCardSortKey(left, characterOrder);
+            const rightKey = assetCardSortKey(right, characterOrder);
+            return leftKey[0] - rightKey[0] || leftKey[1] - rightKey[1] || leftKey[2] - rightKey[2];
+        });
+    const assetKeys = cards.map((card) => card.storageKey);
+
+    // 排除已归档实例:分镜表回退使旧段重现时,同 segmentId 会同时存在归档与活跃两个实例,命中归档会拿到过期产物。
+    const activeSegmentImageKey = (kind: "storyboard-page" | "keyframes") =>
+        nodes.find(
+            (node) =>
+                node.metadata?.toonflow?.kind === kind &&
+                node.metadata.toonflow.segmentId === targetToonflow.segmentId &&
+                !node.metadata.toonflow.archived,
+        )?.metadata?.toonflow?.output?.payload.imageKeys?.[0];
+
+    const storyboardKey = activeSegmentImageKey("storyboard-page");
+    if (!storyboardKey) throw new Error("请先生成该段故事板页");
+    const keyframesKey = activeSegmentImageKey("keyframes");
+    if (!keyframesKey) warnings.push("该段尚无首帧组,视频上色一致性可能漂移,建议先生成首帧");
+
+    const { prompt, shotPrompts } = buildVideoWorkbenchPrompt({ rows, shotContracts, actionContracts, anchors: cards.map((card) => formatAssetCard(card, parentNameById)), note });
+    const referenceKeys = [storyboardKey, ...(keyframesKey ? [keyframesKey] : []), ...assetKeys];
+    // 九宫格故事板页是视频的第一构图参考,读取失败必须中止:失去多镜头直出的构图锁会退化为文生视频。
+    const mandatoryKeys = [storyboardKey];
+
+    const { washed, hits } = washPrompt(prompt);
+    return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings, shotPrompts };
+}
+
 function generationMeta(node: CanvasNodeData, _washHits: WashHit[]) {
     const sentPrompt = node.metadata?.prompt || "";
     return {
@@ -364,6 +419,51 @@ export function applyImageGenerationSuccess(
         payload: { imageKeys: [...storageKeys] },
         upstreamVersions: upstreamVersions ?? previous?.upstreamVersions ?? {},
         generationMeta: generationMeta(node, washHits),
+        generatedAt: new Date().toISOString(),
+    };
+
+    return {
+        node: {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                status: "success",
+                errorDetails: undefined,
+                toonflow: { ...toonflow, status: output.status, output, history },
+            },
+        },
+        orphanedKeys,
+    };
+}
+
+export function applyVideoGenerationSuccess(
+    node: CanvasNodeData,
+    storageKeys: string[],
+    shotPrompts: Record<string, string>,
+    washHits: Array<{ term: string; replacement: string }>,
+    upstreamVersions?: Record<string, number>,
+    taskId?: string,
+): { node: CanvasNodeData; orphanedKeys: string[] } {
+    const toonflow = node.metadata?.toonflow;
+    if (!toonflow?.segmentId || toonflow.kind !== "video-workbench") {
+        return { node, orphanedKeys: [] };
+    }
+
+    const previous = toonflow.output;
+    const allHistory = previous ? [...(toonflow.history ?? []), previous] : [...(toonflow.history ?? [])];
+    const history = allHistory.slice(-VERSION_LIMIT_VIDEO);
+    const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - VERSION_LIMIT_VIDEO));
+    const referencedKeys = new Set([...storageKeys, ...history.flatMap((output) => output.payload.videoKeys ?? [])]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((output) => output.payload.videoKeys ?? []))).filter((key) => !referencedKeys.has(key));
+    const meta = generationMeta(node, washHits);
+    const output: NodeOutput = {
+        nodeId: node.id,
+        kind: toonflow.kind,
+        version: (previous?.version ?? 0) + 1,
+        status: onGenerateSuccess(toonflow.status),
+        payload: { videoKeys: [...storageKeys], shotPrompts },
+        upstreamVersions: upstreamVersions ?? previous?.upstreamVersions ?? {},
+        generationMeta: taskId ? { ...meta, taskId } : meta,
         generatedAt: new Date().toISOString(),
     };
 
@@ -516,10 +616,19 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
 
 const IMAGE_HISTORY_KINDS: ReadonlySet<ToonflowNodeKind> = new Set(["storyboard-page", "keyframes"]);
 
-/** 图像类节点历史上限 5、文本类 10——回退等路径复用此函数,避免图像误用文本上限累积超额版本。 */
+/** 各类节点历史上限:视频 3、图像 5、文本 10。回退/编辑/生成成功各路径统一走此函数,避免误用他类上限累积超额版本。 */
+function historyLimitForKind(kind: ToonflowNodeKind) {
+    if (kind === "video-workbench") return VERSION_LIMIT_VIDEO;
+    return IMAGE_HISTORY_KINDS.has(kind) ? VERSION_LIMIT_IMAGE : VERSION_LIMIT_TEXT;
+}
+
+/** 节点产出里受版本管理的媒体键:视频类取 videoKeys、其余(图像)取 imageKeys。裁历史算孤儿时按类取键,防跨类漏清。 */
+function historyMediaKeys(output: NodeOutput, kind: ToonflowNodeKind): string[] {
+    return kind === "video-workbench" ? (output.payload.videoKeys ?? []) : (output.payload.imageKeys ?? []);
+}
+
 function appendHistory(history: NodeOutput[] | undefined, output: NodeOutput, kind: ToonflowNodeKind) {
-    const limit = IMAGE_HISTORY_KINDS.has(kind) ? VERSION_LIMIT_IMAGE : VERSION_LIMIT_TEXT;
-    return [...(history ?? []), output].slice(-limit);
+    return [...(history ?? []), output].slice(-historyLimitForKind(kind));
 }
 
 export function applyAssetCardsSave(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, cards: AssetCard[]): CanvasNodeData[] {
@@ -633,14 +742,14 @@ export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnec
     if (!target || !toonflow || !currentOutput || !historical) return { nodes, orphanedKeys: [] };
 
     const output: NodeOutput = { ...rollbackToVersion(currentOutput, historical).next, generatedAt: new Date().toISOString() };
-    // appendHistory 会从头部裁掉超版本上限的旧历史;被裁历史里独有的媒体键成孤儿,需返回给调用方清理(否则 image_files 泄漏)。
-    const limit = IMAGE_HISTORY_KINDS.has(toonflow.kind) ? VERSION_LIMIT_IMAGE : VERSION_LIMIT_TEXT;
+    // appendHistory 会从头部裁掉超版本上限的旧历史;被裁历史里独有的媒体键成孤儿,需返回给调用方清理(否则 image_files/media_files 泄漏)。
+    const limit = historyLimitForKind(toonflow.kind);
     const allHistory = [...(toonflow.history ?? []), currentOutput];
     const history = allHistory.slice(-limit);
     const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - limit));
     // 用最终状态(恢复的 output + 保留的 history)反查引用集,任何仍被引用的键都不算孤儿,防误删共享 Blob。
-    const referencedKeys = new Set<string>([...(output.payload.imageKeys ?? []), ...history.flatMap((item) => item.payload.imageKeys ?? [])]);
-    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((item) => item.payload.imageKeys ?? []))).filter((key) => !referencedKeys.has(key));
+    const referencedKeys = new Set<string>([...historyMediaKeys(output, toonflow.kind), ...history.flatMap((item) => historyMediaKeys(item, toonflow.kind))]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((item) => historyMediaKeys(item, toonflow.kind)))).filter((key) => !referencedKeys.has(key));
 
     const next = nodes.map<CanvasNodeData>((node) =>
         node.id === nodeId
