@@ -3181,6 +3181,9 @@ function InfiniteCanvasPage() {
                             showImageInfo={showImageInfo}
                             resourceLabel={resourceReferenceByNodeId.get(node.id)}
                             mentionReferences={mentionReferencesByNodeId.get(node.id) || []}
+                            cascadeLocked={cascadeLockedNodeIds.has(node.id)}
+                            isRunning={runningNodeId === node.id}
+                            configInputsSignature={((summary) => `${summary.textCount}|${summary.imageCount}|${summary.videoCount}|${summary.audioCount}`)(getInputSummary(configInputsById.get(node.id) || []))}
                             renderPanel={(panelNode) =>
                                 panelNode.type === CanvasNodeType.Config ? (
                                     <CanvasConfigComposer
