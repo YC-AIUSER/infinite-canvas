@@ -133,6 +133,19 @@ export type AssetCard = z.infer<typeof AssetCardSchema>;
 export function validateAssetCards(cards: AssetCard[]): string[] {
     const cardById = new Map(cards.map((card) => [card.cardId, card]));
     const issues: string[] = [];
+    // 重复 cardId 会让 cardById(取最后项)与按名/按图的取首项逻辑指向不同对象,先拦下。
+    const seenCardIds = new Set<string>();
+    const reportedDuplicates = new Set<string>();
+    for (const card of cards) {
+        if (seenCardIds.has(card.cardId)) {
+            if (!reportedDuplicates.has(card.cardId)) {
+                issues.push(`资产卡 cardId“${card.cardId}”重复,请确保每张卡的 cardId 唯一`);
+                reportedDuplicates.add(card.cardId);
+            }
+        } else {
+            seenCardIds.add(card.cardId);
+        }
+    }
     for (const card of cards) {
         const requiresParent = card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit";
         if (!requiresParent && card.cardType !== "form") continue;

@@ -188,6 +188,15 @@ describe("validateAssetCards", () => {
             ]),
         ).toEqual([]);
     });
+
+    it("报告重复 cardId 且每个重复键只报一次", () => {
+        const issues = validateAssetCards([
+            cards[0],
+            { cardId: "card-1", cardType: "prop", name: "撞车道具", anchor: "青铜剑" },
+            { cardId: "card-1", cardType: "scene", name: "再撞一次", anchor: "青砖院墙" },
+        ]);
+        expect(issues.filter((issue) => issue.includes("重复"))).toEqual([expect.stringContaining("card-1")]);
+    });
 });
 
 describe("buildAssetCardPrompt", () => {
