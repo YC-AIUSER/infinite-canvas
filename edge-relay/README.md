@@ -35,11 +35,26 @@ wrangler deploy
 ### Vercel Edge
 把 `vercel-edge.ts` 放到 Vercel 项目的 `api/relay/[...path].ts`，在 Settings → Environment Variables 配三个 env，`vercel deploy`。
 
-## ⚠️ 两个待你拍板的决策（决定最终形态）
+## ✅ 已选定方案：Cloudflare Workers + 用户自带 key
 
-1. **部署到哪**：Cloudflare Workers / Vercel / 自有服务器。三者转发核心通用，只是入口与 env 配法不同。
-2. **key 模型**：
-   - **用户自带 key**（当前核心已支持）：转发用户自己的 key，你零成本、零滥用风险，但用户体验略差（要各自配 key）。
-   - **创始人代理计费**：注入你的服务商 key + 按用户限额 + 审计。**涉及你的 key 与账单，且需平台状态存储（Cloudflare KV / Vercel KV / Redis）**，属增量工作。`relay-core.ts` 末尾的 `PROXY-BILLING` 注释已列出改造点；选这条我再接着做。
+创始人把选择权交给 Claude，基于「非技术创始人 + 避免动创始人 key/账单 + 零滥用风险」选定：
 
-> 未决策前，本转发核心即可支撑「用户自带 key」的内测；选定后按上表落地即可上线。
+- **平台 = Cloudflare Workers**：免费额度大、边缘快、单文件部署，独立于前端静态托管（可配现有 GitHub Pages 站点）。配置见本目录 `wrangler.toml`。
+- **key 模型 = 用户自带 key**：转发只做代理，不注入创始人 key。转发核心已直接支持，无需额外代码。
+
+### 上线三步（需要你的 Cloudflare 账号，免费）
+```
+npm i -g wrangler
+cd edge-relay
+# 1) 编辑 wrangler.toml：把 RELAY_ALLOWED_ORIGINS 填成你的内测站点域名，RELAY_ALLOWED_TARGET_HOSTS 填你用的上游网关
+# 2) 设访问 token（发给内测用户，前端请求带 header x-relay-token）
+wrangler secret put RELAY_ACCESS_TOKEN
+# 3) 部署
+wrangler deploy
+```
+部署后拿到 `https://toonflow-relay.<你的子域>.workers.dev`，前端渠道 Base URL 用 `https://toonflow-relay.<...>.workers.dev/relay/https://上游/api/v1`。
+
+> 实际部署与设 secret 需要你的 Cloudflare 登录，这步只能你来跑（`wrangler login` + 上面三步）。
+
+### 若日后改「创始人代理计费」
+注入你的 key + 用户级限额 + 审计，需 Cloudflare KV/Durable Objects + 你确认额度策略（涉及你的 key 与账单）。`relay-core.ts` 末尾 `PROXY-BILLING` 注释已列改造点，届时告诉我即可。
