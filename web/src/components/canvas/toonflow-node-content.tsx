@@ -43,6 +43,8 @@ type ToonflowNodeContentProps = {
     onOpenAssetCards?: (nodeId: string) => void;
     onAdopt?: (nodeId: string) => void;
     onDeleteArchived?: (nodeId: string) => void;
+    onOpenExport?: (nodeId: string) => void;
+    exportSummary?: { approvedCount: number; totalSegments: number };
     batchCount?: number;
     batchExpanded?: boolean;
     onToggleBatch?: (nodeId: string) => void;
@@ -100,14 +102,24 @@ function InstanceVideo({ storageKey, name, background, borderColor }: { storageK
     );
 }
 
-export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
+export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, onOpenExport, exportSummary, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const toonflow = node.metadata?.toonflow;
     if (!toonflow) return null;
 
     const accent = toonflow.accent || theme.node.activeStroke;
-    const statusColor = statusTone[toonflow.status] || theme.node.muted;
+    const isExport = toonflow.kind === "export";
+    // 导出节点是终端节点,不做 approved 存储仪式:显示状态实时由已通过段数推导(全就绪=已通过/部分=待导出/无=未开始),存储状态保持 empty。
+    const displayStatus: ToonflowNodeStageStatus =
+        isExport && exportSummary
+            ? exportSummary.totalSegments > 0 && exportSummary.approvedCount >= exportSummary.totalSegments
+                ? "approved"
+                : exportSummary.approvedCount > 0
+                  ? "review"
+                  : "empty"
+            : toonflow.status;
+    const statusColor = statusTone[displayStatus] || theme.node.muted;
     const isActionable = actionableKinds.has(toonflow.kind);
     const isInstance = (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench") && Boolean(toonflow.segmentId);
     const instanceImageKey = toonflow.output?.payload.imageKeys?.[0];
@@ -162,7 +174,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                         </span>
                     ) : null}
                     <span className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: `${statusColor}18`, color: statusColor }}>
-                        {statusLabel[toonflow.status]}
+                        {statusLabel[displayStatus]}
                     </span>
                 </div>
             </div>
@@ -205,6 +217,31 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                         <span className="opacity-65">无避雷词命中</span>
                     )}
                 </div>
+            ) : isExport ? (
+                <div className="mt-2 flex min-h-0 flex-1 flex-col">
+                    <div className="rounded-md px-3 py-2.5" style={{ background: theme.node.fill }}>
+                        <div className="flex items-baseline gap-1.5">
+                            <span className="text-2xl font-semibold leading-none" style={{ color: statusColor }}>
+                                {exportSummary?.approvedCount ?? 0}
+                            </span>
+                            <span className="text-sm opacity-55">/ {exportSummary?.totalSegments ?? 0} 段已通过</span>
+                        </div>
+                        <p className="mt-1.5 text-xs opacity-60">顺序预览 · 逐段下载 · 打包 ZIP（本期不拼接）</p>
+                    </div>
+                    <div className="mt-auto flex justify-end pt-2" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                        <Button
+                            size="small"
+                            type="primary"
+                            disabled={!exportSummary?.approvedCount}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onOpenExport?.(node.id);
+                            }}
+                        >
+                            打开成片
+                        </Button>
+                    </div>
+                </div>
             ) : (
                 <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-1.5">
                     {toonflow.checks.slice(0, isActionable ? 2 : 3).map((item) => (
@@ -222,7 +259,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                 </div>
             )}
 
-            {!isActionable && toonflow.kind !== "compliance" && toonflow.outputs?.length ? (
+            {!isActionable && !isExport && toonflow.kind !== "compliance" && toonflow.outputs?.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                     {toonflow.outputs.slice(0, 2).map((item) => (
                         <span key={item} className="rounded-md px-2 py-1 text-[11px] font-medium" style={{ background: `${accent}16`, color: accent }}>

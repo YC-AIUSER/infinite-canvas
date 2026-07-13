@@ -46,9 +46,10 @@ import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
+import { ToonflowExportModal } from "@/components/canvas/toonflow-export-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
-import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore } from "@/lib/toonflow/node-runtime";
 import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
 import type { AssetCard } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
@@ -351,6 +352,7 @@ function InfiniteCanvasPage() {
     const [toonflowHistoryNodeId, setToonflowHistoryNodeId] = useState<string | null>(null);
     const [toonflowRepairNodeId, setToonflowRepairNodeId] = useState<string | null>(null);
     const [toonflowRepairNote, setToonflowRepairNote] = useState("");
+    const [toonflowExportNodeId, setToonflowExportNodeId] = useState<string | null>(null);
     const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
     const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
     const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
@@ -729,6 +731,8 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [nodes]);
+    // #14 成片导出:汇总已通过的视频工作台段实例(全画布扫一次,随 nodes 变化重算),供导出节点显示"X/Y 段已通过"与成片 Modal。
+    const exportCollection = useMemo(() => collectExportSegments(nodes), [nodes]);
     const groupChildCountById = useMemo(() => {
         const map = new Map<string, number>();
         nodes.forEach((node) => {
@@ -3425,6 +3429,12 @@ function InfiniteCanvasPage() {
                                         onOpenAssetCards={setToonflowAssetCardsNodeId}
                                         onAdopt={handleToonflowAdopt}
                                         onDeleteArchived={(nodeId) => void handleDeleteArchivedInstance(nodeId)}
+                                        onOpenExport={setToonflowExportNodeId}
+                                        exportSummary={
+                                            contentNode.metadata?.toonflow?.kind === "export"
+                                                ? { approvedCount: exportCollection.approvedCount, totalSegments: exportCollection.totalSegments }
+                                                : undefined
+                                        }
                                         onToggleBatch={toggleBatchExpanded}
                                     />
                                 ) : (
@@ -3575,6 +3585,8 @@ function InfiniteCanvasPage() {
                 />
 
                 <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
+
+                <ToonflowExportModal open={Boolean(toonflowExportNodeId)} collection={exportCollection} onCancel={() => setToonflowExportNodeId(null)} />
 
                 <Modal
                     title={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "单镜修改（整段重生成）" : "定点修"}

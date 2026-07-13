@@ -635,6 +635,48 @@ function appendHistory(history: NodeOutput[] | undefined, output: NodeOutput, ki
     return [...(history ?? []), output].slice(-historyLimitForKind(kind));
 }
 
+export type ExportSegment = {
+    segmentId: string;
+    segmentIndex: number;
+    title: string;
+    videoKey: string;
+    version: number;
+};
+
+export type ExportCollection = {
+    /** 已通过且有视频的段,按段序升序;供 #14 成片导出顺序预览/逐段下载/打包。 */
+    segments: ExportSegment[];
+    /** 视频工作台的段总数(未归档,含未通过),用于"X/Y 段已通过"。 */
+    totalSegments: number;
+    /** 已通过段数,即 segments.length。 */
+    approvedCount: number;
+};
+
+/** 汇总"已通过"的视频工作台段实例产出,供 #14 成片导出节点顺序预览/逐段下载/打包。
+ *  只认未归档 video-workbench 段实例:已通过且有 videoKey 的进 segments(按段序);同段多实例取最新版本(防御,正常每段一实例)。 */
+export function collectExportSegments(nodes: CanvasNodeData[]): ExportCollection {
+    const segmentIds = new Set<string>();
+    const bySegment = new Map<string, ExportSegment>();
+    for (const node of nodes) {
+        const toonflow = node.metadata?.toonflow;
+        if (!toonflow || toonflow.kind !== "video-workbench" || !toonflow.segmentId || toonflow.archived) continue;
+        segmentIds.add(toonflow.segmentId);
+        const videoKey = toonflow.output?.payload.videoKeys?.[0];
+        if (toonflow.status !== "approved" || !videoKey) continue;
+        const candidate: ExportSegment = {
+            segmentId: toonflow.segmentId,
+            segmentIndex: toonflow.segmentIndex ?? 0,
+            title: node.title,
+            videoKey,
+            version: toonflow.output!.version,
+        };
+        const existing = bySegment.get(candidate.segmentId);
+        if (!existing || candidate.version > existing.version) bySegment.set(candidate.segmentId, candidate);
+    }
+    const segments = [...bySegment.values()].sort((left, right) => left.segmentIndex - right.segmentIndex);
+    return { segments, totalSegments: segmentIds.size, approvedCount: segments.length };
+}
+
 export function applyAssetCardsSave(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, cards: AssetCard[]): CanvasNodeData[] {
     const target = nodes.find((node) => node.id === nodeId);
     const toonflow = target?.metadata?.toonflow;
