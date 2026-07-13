@@ -151,7 +151,13 @@ function unwrapCano(payload: CanoEnvelope): CanoJobData {
 }
 
 function canoErrorMessage(payload: CanoEnvelope): string {
-    return readApiErrorMessage((payload as { error?: unknown })?.error) || readApiErrorMessage(payload);
+    // cano 的失败原因既可能在信封顶层 error(HTTP 级 success:false),也可能在 data 内(success:true 但 data.status=FAILED)。
+    const data = unwrapCano(payload);
+    return (
+        readApiErrorMessage((payload as { error?: unknown })?.error) ||
+        readApiErrorMessage((data as { error?: unknown })?.error) ||
+        readApiErrorMessage(data)
+    );
 }
 
 async function createCanoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
@@ -161,7 +167,13 @@ async function createCanoTask(config: AiConfig, model: string, prompt: string, r
     body.append("prompt", prompt);
     body.append("duration", String(canoVideoDuration(config.videoSeconds)));
     body.append("ratio", canoVideoRatio(config.size));
-    const files = await Promise.all(references.slice(0, 9).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const files = await Promise.all(
+        references.slice(0, 9).map(async (image) => {
+            const dataUrl = await imageToDataUrl(image);
+            if (!dataUrl) throw new Error("参考图读取失败，请换一张图片或重新上传");
+            return dataUrlToFile({ ...image, dataUrl });
+        }),
+    );
     files.forEach((file) => body.append("images", file));
     try {
         const payload = (await axios.post<CanoEnvelope>(aiApiUrl(config, "/videos/generations"), body, { headers: aiHeaders(config), signal: options?.signal })).data;

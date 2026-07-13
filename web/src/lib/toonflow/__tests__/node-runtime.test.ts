@@ -219,6 +219,8 @@ describe("状态动作与 hydrate", () => {
             provider: "seedance",
             model: "seedance-2.0",
             upstreamSnapshot: { storyboard: 3 },
+            shotPrompts: { "seg-a-shot-1": "镜1" },
+            washHits: [],
             startedAt: "2026-07-13T00:00:00.000Z",
         };
         const result = hydrateToonflowProject([target]);
@@ -238,6 +240,23 @@ describe("状态动作与 hydrate", () => {
         const result = hydrateToonflowProject([target]);
         expect(result[0].metadata?.toonflow?.status).toBe("failed");
         expect(result[0].metadata?.errorDetails).toContain("页面已刷新");
+    });
+
+    it("hydrate 对已归档的生成中视频节点降级为 failed 并剥离 pendingVideoTask(不留僵尸态)", () => {
+        const target = node("video", "video-workbench", "", "generating");
+        target.metadata!.toonflow!.archived = true;
+        target.metadata!.toonflow!.pendingVideoTask = {
+            taskId: "task-z",
+            provider: "cano",
+            model: "seedance-2.0-mini-720p",
+            upstreamSnapshot: {},
+            shotPrompts: {},
+            washHits: [],
+            startedAt: "2026-07-13T00:00:00.000Z",
+        };
+        const result = hydrateToonflowProject([target]);
+        expect(result[0].metadata?.toonflow?.status).toBe("failed");
+        expect(result[0].metadata?.toonflow?.pendingVideoTask).toBeUndefined();
     });
 
     it("迁移旧中文状态且重复 hydrate 保持幂等", () => {

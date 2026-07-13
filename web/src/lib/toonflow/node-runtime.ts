@@ -596,20 +596,23 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
     return nodes.map((node) => {
         const toonflow = node.metadata?.toonflow;
         if (!toonflow) return node;
-        // 页面刷新/崩溃时，仅保留已有 provider taskId 的视频任务继续恢复；其余生成降级为 failed 可重试。
+        // 页面刷新/崩溃时，仅保留"活跃(未归档)视频节点 + 已有 provider taskId"继续恢复;其余生成降级为 failed 可重试。
         const migrated = hydratedStatus(toonflow.status);
-        const recoverableVideoTask = migrated === "generating" && toonflow.kind === "video-workbench" && Boolean(toonflow.pendingVideoTask);
+        const recoverableVideoTask = migrated === "generating" && toonflow.kind === "video-workbench" && !toonflow.archived && Boolean(toonflow.pendingVideoTask);
         const status = migrated === "generating" && !recoverableVideoTask ? "failed" : migrated;
+        // 不可恢复的节点不留 pendingVideoTask 残留(归档/非视频/降级为 failed 的),避免脏数据与后续误恢复。
+        const pendingVideoTask = recoverableVideoTask ? toonflow.pendingVideoTask : undefined;
+        const pendingChanged = pendingVideoTask !== toonflow.pendingVideoTask;
         const output = toonflow.output ? migrateOutputStatus(toonflow.output) : toonflow.output;
         const migratedHistory = toonflow.history?.map(migrateOutputStatus);
         const historyChanged = Boolean(migratedHistory?.some((item, index) => item !== toonflow.history?.[index]));
-        if (status === toonflow.status && output === toonflow.output && !historyChanged) return node;
+        if (status === toonflow.status && output === toonflow.output && !historyChanged && !pendingChanged) return node;
         return {
             ...node,
             metadata: {
                 ...node.metadata,
                 errorDetails: status === "failed" && migrated === "generating" ? "生成被中断(页面已刷新),请重试" : node.metadata?.errorDetails,
-                toonflow: { ...toonflow, status, output, history: historyChanged ? migratedHistory : toonflow.history },
+                toonflow: { ...toonflow, status, output, history: historyChanged ? migratedHistory : toonflow.history, pendingVideoTask },
             },
         };
     });
@@ -623,9 +626,9 @@ function historyLimitForKind(kind: ToonflowNodeKind) {
     return IMAGE_HISTORY_KINDS.has(kind) ? VERSION_LIMIT_IMAGE : VERSION_LIMIT_TEXT;
 }
 
-/** 节点产出里受版本管理的媒体键:视频类取 videoKeys、其余(图像)取 imageKeys。裁历史算孤儿时按类取键,防跨类漏清。 */
-function historyMediaKeys(output: NodeOutput, kind: ToonflowNodeKind): string[] {
-    return kind === "video-workbench" ? (output.payload.videoKeys ?? []) : (output.payload.imageKeys ?? []);
+/** 节点产出里受版本管理的媒体键:收全 image/video/audio 三类(每类节点只存自己那类,收全对现有类等价且不漏 audio)。裁历史算孤儿时用,防跨类漏清。 */
+function historyMediaKeys(output: NodeOutput): string[] {
+    return [...(output.payload.imageKeys ?? []), ...(output.payload.videoKeys ?? []), ...(output.payload.audioKeys ?? [])];
 }
 
 function appendHistory(history: NodeOutput[] | undefined, output: NodeOutput, kind: ToonflowNodeKind) {
@@ -749,8 +752,8 @@ export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnec
     const history = allHistory.slice(-limit);
     const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - limit));
     // 用最终状态(恢复的 output + 保留的 history)反查引用集,任何仍被引用的键都不算孤儿,防误删共享 Blob。
-    const referencedKeys = new Set<string>([...historyMediaKeys(output, toonflow.kind), ...history.flatMap((item) => historyMediaKeys(item, toonflow.kind))]);
-    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((item) => historyMediaKeys(item, toonflow.kind)))).filter((key) => !referencedKeys.has(key));
+    const referencedKeys = new Set<string>([...historyMediaKeys(output), ...history.flatMap((item) => historyMediaKeys(item))]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((item) => historyMediaKeys(item)))).filter((key) => !referencedKeys.has(key));
 
     const next = nodes.map<CanvasNodeData>((node) =>
         node.id === nodeId

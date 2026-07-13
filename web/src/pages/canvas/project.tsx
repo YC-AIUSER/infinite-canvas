@@ -296,6 +296,9 @@ function InfiniteCanvasPage() {
 
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
+    // 供 resume 副作用读取最新配置而不进依赖数组:避免改配置触发 effect 重跑+cleanup 误 abort 在途恢复。
+    const effectiveConfigRef = useRef(effectiveConfig);
+    effectiveConfigRef.current = effectiveConfig;
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
@@ -2573,6 +2576,7 @@ function InfiniteCanvasPage() {
             setRunningNodeId(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
             let videoTaskId: string | undefined;
+            let videoStorageKey: string | undefined;
 
             try {
                 const resolvedReferences = await Promise.all(
@@ -2613,6 +2617,8 @@ function InfiniteCanvasPage() {
                                   provider: task.provider,
                                   model: task.model,
                                   upstreamSnapshot,
+                                  shotPrompts: videoGeneration.shotPrompts,
+                                  washHits: generation.washHits,
                                   startedAt: new Date().toISOString(),
                               })
                             : node,
@@ -2623,6 +2629,7 @@ function InfiniteCanvasPage() {
                     const uploaded = await storeGeneratedVideo(videoResult);
                     if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
                     storageKey = uploaded.storageKey;
+                    videoStorageKey = uploaded.storageKey;
                 } else {
                     const image = references.length
                         ? await requestEdit(generationConfig, generation.finalPrompt, references, undefined, { signal: controller.signal }).then((items) => items[0])
@@ -2663,6 +2670,7 @@ function InfiniteCanvasPage() {
                 if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
                 nodesRef.current = next;
                 setNodes(next);
+                videoStorageKey = undefined; // 已落库并被节点引用,不再是孤儿
 
                 // C4: 删除被裁历史的图前,排除仍被其他节点/副本引用的键(复制节点共享 storageKey,误删会让副本白屏)。
                 const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
@@ -2673,6 +2681,8 @@ function InfiniteCanvasPage() {
                     message.warning("历史媒体清理失败");
                 }
             } catch (error) {
+                // 已上传但未被节点引用的视频(setNodes 提交前抛异常)是孤儿,需删除(与 resume 路径对称,防 media_files 泄漏)。
+                if (videoStorageKey) void deleteStoredMedia([videoStorageKey]);
                 if (isGenerationCanceled(error)) {
                     if (videoTaskId) {
                         const taskId = videoTaskId;
@@ -2703,6 +2713,7 @@ function InfiniteCanvasPage() {
 
     useEffect(() => {
         if (!projectLoaded) return;
+        const controllers: AbortController[] = [];
         const resumableNodes = nodesRef.current.filter(
             (node) => node.metadata?.toonflow?.kind === "video-workbench" && node.metadata.toonflow.status === "generating" && node.metadata.toonflow.pendingVideoTask,
         );
@@ -2721,15 +2732,17 @@ function InfiniteCanvasPage() {
                 return;
 
             resumedVideoTaskIdsRef.current.add(pendingTask.taskId);
+            // 注册 controller,使「停止生成」(stopGenerationByRunningId)能中断已恢复的轮询;controllers 收集用于卸载/切项目时统一 abort。
+            const controller = startGenerationRequest(currentNode.id, currentNode.id, currentNode.id);
+            controllers.push(controller);
             void (async () => {
                 let storageKey: string | undefined;
                 try {
-                    const generationConfig = { ...buildGenerationConfig(effectiveConfig, currentNode, "video"), count: "1" };
-                    const videoGeneration = buildToonflowVideoGeneration(nodesRef.current, connectionsRef.current, currentNode.id);
+                    const generationConfig = { ...buildGenerationConfig(effectiveConfigRef.current, currentNode, "video"), count: "1" };
                     const videoResult = await pollVideoTaskUntilDone(
                         generationConfig,
                         { id: pendingTask.taskId, provider: pendingTask.provider, model: pendingTask.model },
-                        {},
+                        { signal: controller.signal },
                     );
                     const uploaded = await storeGeneratedVideo(videoResult);
                     if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
@@ -2759,11 +2772,12 @@ function InfiniteCanvasPage() {
                         return;
                     }
 
+                    // 用建任务时持久化的 shotPrompts/washHits,不重算 buildToonflowVideoGeneration(避免期间分镜表变动导致漂移,或抛错把已计费视频丢弃)。
                     const result = applyVideoGenerationSuccess(
                         clearPendingVideoTask(latestNode, pendingTask.taskId),
                         [storageKey],
-                        videoGeneration.shotPrompts,
-                        videoGeneration.washHits,
+                        pendingTask.shotPrompts ?? {},
+                        pendingTask.washHits ?? [],
                         pendingTask.upstreamSnapshot,
                         pendingTask.taskId,
                     );
@@ -2772,6 +2786,7 @@ function InfiniteCanvasPage() {
                     if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, currentNode.id);
                     nodesRef.current = next;
                     setNodes(next);
+                    storageKey = undefined; // 已引用,非孤儿
 
                     const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
                     const orphaned = splitMediaKeysByStore(result.orphanedKeys.filter((key) => !referencedKeys.has(key)));
@@ -2781,7 +2796,8 @@ function InfiniteCanvasPage() {
                         message.warning("历史媒体清理失败");
                     }
                 } catch (error) {
-                    const errorDetails = error instanceof Error ? error.message : "视频任务恢复失败";
+                    const canceled = isGenerationCanceled(error);
+                    const errorDetails = canceled ? "生成已取消" : error instanceof Error ? error.message : "视频任务恢复失败";
                     const currentNodes = nodesRef.current;
                     let failed = false;
                     const next = currentNodes.map((node) => {
@@ -2792,7 +2808,7 @@ function InfiniteCanvasPage() {
                     if (failed) {
                         nodesRef.current = next;
                         setNodes(next);
-                        message.error(errorDetails);
+                        if (!canceled) message.error(errorDetails);
                     }
                     if (storageKey) {
                         try {
@@ -2801,10 +2817,15 @@ function InfiniteCanvasPage() {
                             message.warning("失败视频的本地文件清理失败");
                         }
                     }
+                } finally {
+                    finishGenerationRequest(currentNode.id, controller);
                 }
             })();
         });
-    }, [effectiveConfig, message, projectLoaded]);
+        return () => {
+            controllers.forEach((abortController) => abortController.abort());
+        };
+    }, [message, projectLoaded, startGenerationRequest, finishGenerationRequest]);
 
     const handleToonflowGenerate = useCallback(
         async (nodeId: string) => {
