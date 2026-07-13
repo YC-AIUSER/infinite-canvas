@@ -5,14 +5,16 @@
 ## T9 阶段2 对抗审查遗留(2026-07-12,Codex adversarial review 后 Claude 处置)
 
 > 4 critical 已修(C1 版本快照前移/C2 僵尸实例覆盖守卫/C3 首帧构图锁读取失败中止/C4 删媒体前全局引用过滤),M5/M6/M8-limit/m3/M4 已修。以下为核实后延后/不做项,均非正确性 critical。
+>
+> 2026-07-13 续修:M9/M8/M7 已修,M10 部分补强(见下)。另查清并修复"30+节点卡10-30秒"性能问题——真根因是渲染记忆化失效(非存储序列化,推翻了原假设),已加 CanvasNode memo 比较器,实测 4-8× 提速;原"创始人裁决存储重构"降级为观察项(报告 docs/reports/storage-perf-investigation.html)。
 
-- [ ] **M2 段同步计划非事务** — InstanceSyncPlan 无分镜版本/内容摘要,弹窗确认时用旧计划套最新 nodesRef,取消不回退不记待同步。真问题但需给 plan 加版本戳+确认时重算比对,改动面较大。缓解:当前首次同步免确认、结构变化才弹窗,竞态窗口小。起点:instances.ts planInstanceSync + project.tsx 确认回调。
-- [ ] **M7 资产卡 Blob 泄漏** — 弹窗取消/删卡/历史裁掉的图不即时清 image_files。缓解:asset store 操作时 cleanupUnusedImages 会兜底扫全局孤儿。起点:toonflow-asset-card-modal.tsx 关闭清理 + applyAssetCardsSave 裁剪孤儿。
-- [ ] **M8 图像回退不清被裁版本媒体** — appendHistory 上限已修为图像5版(bug 是原误用文本10),但回退路径 applyRollback 不返回 orphaned、handler 不清媒体。上限已封顶增长,仅剩泄漏。起点:applyRollback 返回 orphanedKeys + handleToonflowRollback 清理。
+- [ ] **M2 段同步计划非事务** — InstanceSyncPlan 无分镜版本/内容摘要,弹窗确认时用旧计划套最新 nodesRef,取消不回退不记待同步。真问题但需给 plan 加版本戳+确认时重算比对,改动面较大。缓解:当前首次同步免确认、结构变化才弹窗,竞态窗口小。起点:instances.ts planInstanceSync + project.tsx 确认回调。**← 唯一剩下的 M 项,待评估**
+- [x] **M7 资产卡 Blob 泄漏** — 已修(e67a499):弹窗加 sessionKeysRef 跟踪本会话上传/生成的 key,取消全清、保存清被替换的。残留:`open` 被父级程序化置 false(非取消/保存)的路径仍靠全局兜底扫。
+- [x] **M8 图像回退不清被裁版本媒体** — 已修(caf200f):applyRollback 改返回 {nodes, orphanedKeys},用最终状态反查引用集算孤儿,handler 清理;+2 不变量测试。
 - [ ] **M1 段实例同步过度标 stale** — 保留段有产出实例一律标 stale,不比分镜表版本/镜头内容。过度标 stale 是安全侧(多重生成一次),非错误。可选优化:按 upstreamVersions 比对豁免未变段。起点:instances.ts planInstanceSync toStale 计算。
-- [ ] **M9 cardId 冲突未校验** — 重复 cardId 时父名 Map 取最后项、父图 find 取第一项,可能指向不同对象。低概率(cardId 由 nanoid 生成)。起点:validateAssetCards 加重复检测。
+- [x] **M9 cardId 冲突未校验** — 已修(4cf14f0):validateAssetCards 加重复 cardId 检测(每键只报一次)+不变量测试。
 - [ ] **格子数=行数无结果校验(major)** — "格子=镜头"只写进 prompt,模型返回图不做格子数/合并检测。受 P3"不加量化指标"裁决约束,属方法论已接受风险,靠 prompt 控制。二期若上视觉分析可加。
-- [ ] **测试规格化补强(M10)** — 已为 C3/M5/M6 补规格不变量测试;审查指出的 state-machine/segments/instances 若干"验证实现行为"用例仍待改为验证不变量。起点:各 __tests__ 逐个过。
+- [ ] **测试规格化补强(M10)** — 已为 C3/M5/M6/M8/M9 补规格不变量测试;审查指出的 state-machine/segments/instances 若干"验证实现行为"用例仍待改为验证不变量。起点:各 __tests__ 逐个过。
 
 ## Toonflow 二期
 
