@@ -596,9 +596,10 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
     return nodes.map((node) => {
         const toonflow = node.metadata?.toonflow;
         if (!toonflow) return node;
-        // 页面刷新/崩溃时 generating 无法恢复(文本生成无 provider taskId),降级为 failed 可重试。
+        // 页面刷新/崩溃时，仅保留已有 provider taskId 的视频任务继续恢复；其余生成降级为 failed 可重试。
         const migrated = hydratedStatus(toonflow.status);
-        const status = migrated === "generating" ? "failed" : migrated;
+        const recoverableVideoTask = migrated === "generating" && toonflow.kind === "video-workbench" && Boolean(toonflow.pendingVideoTask);
+        const status = migrated === "generating" && !recoverableVideoTask ? "failed" : migrated;
         const output = toonflow.output ? migrateOutputStatus(toonflow.output) : toonflow.output;
         const migratedHistory = toonflow.history?.map(migrateOutputStatus);
         const historyChanged = Boolean(migratedHistory?.some((item, index) => item !== toonflow.history?.[index]));

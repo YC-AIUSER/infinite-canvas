@@ -6,7 +6,7 @@ import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
+import { createVideoGenerationTask, pollVideoTaskUntilDone, requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
@@ -68,6 +68,7 @@ import {
     type ContextMenuState,
     type Position,
     type SelectionBox,
+    type ToonflowNodeMetadata,
     type ViewportTransform,
 } from "@/types/canvas";
 import type { ReferenceImage } from "@/types/image";
@@ -372,6 +373,7 @@ function InfiniteCanvasPage() {
     const skillInsertedRef = useRef(false);
     const cascadeCancelledRef = useRef(false);
     const cascadeRunningRef = useRef(false);
+    const resumedVideoTaskIdsRef = useRef(new Set<string>());
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -445,6 +447,8 @@ function InfiniteCanvasPage() {
             const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
             const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            nodesRef.current = restoredNodes;
+            connectionsRef.current = project.connections;
             setNodes(restoredNodes);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
@@ -2568,6 +2572,7 @@ function InfiniteCanvasPage() {
             setNodes(preparedNodes);
             setRunningNodeId(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            let videoTaskId: string | undefined;
 
             try {
                 const resolvedReferences = await Promise.all(
@@ -2597,13 +2602,27 @@ function InfiniteCanvasPage() {
                 if (failedReferenceCount) message.warning(`${failedReferenceCount} 张参考图读取失败`);
 
                 let storageKey: string;
-                let taskId: string | undefined;
                 if (videoGeneration) {
-                    const videoResult = await requestVideoGeneration(generationConfig, generation.finalPrompt, references, [], [], { signal: controller.signal });
+                    const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], [], { signal: controller.signal });
+                    videoTaskId = task.id;
+                    resumedVideoTaskIdsRef.current.add(task.id);
+                    const pendingNodes = nodesRef.current.map((node) =>
+                        node.id === nodeId
+                            ? setPendingVideoTask(node, {
+                                  taskId: task.id,
+                                  provider: task.provider,
+                                  model: task.model,
+                                  upstreamSnapshot,
+                                  startedAt: new Date().toISOString(),
+                              })
+                            : node,
+                    );
+                    nodesRef.current = pendingNodes;
+                    setNodes(pendingNodes);
+                    const videoResult = await pollVideoTaskUntilDone(generationConfig, task, { signal: controller.signal });
                     const uploaded = await storeGeneratedVideo(videoResult);
                     if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
                     storageKey = uploaded.storageKey;
-                    taskId = videoResult.taskId;
                 } else {
                     const image = references.length
                         ? await requestEdit(generationConfig, generation.finalPrompt, references, undefined, { signal: controller.signal }).then((items) => items[0])
@@ -2615,16 +2634,30 @@ function InfiniteCanvasPage() {
                 // C2: 生成期间该实例可能被归档/删除/重排/被新一轮生成接管,晚到结果不能整体覆盖当前节点(否则产生无根僵尸实例、丢失归档标记与新序号)。
                 const currentNode = nodesRef.current.find((node) => node.id === nodeId);
                 const currentToonflow = currentNode?.metadata?.toonflow;
-                if (!currentNode || currentToonflow?.archived || currentToonflow?.status !== "generating" || currentToonflow.kind !== sourceToonflow.kind || currentToonflow.segmentId !== sourceToonflow.segmentId) {
+                if (
+                    !currentNode ||
+                    currentToonflow?.archived ||
+                    currentToonflow?.status !== "generating" ||
+                    currentToonflow.kind !== sourceToonflow.kind ||
+                    currentToonflow.segmentId !== sourceToonflow.segmentId ||
+                    (videoGeneration && currentToonflow.pendingVideoTask?.taskId !== videoTaskId)
+                ) {
+                    if (videoTaskId) {
+                        const taskId = videoTaskId;
+                        const discardedNodes = nodesRef.current.map((node) => (node.id === nodeId ? clearPendingVideoTask(node, taskId) : node));
+                        nodesRef.current = discardedNodes;
+                        setNodes(discardedNodes);
+                    }
                     if (isVideo) void deleteStoredMedia([storageKey]);
                     else void deleteStoredImages([storageKey]);
                     message.warning("该实例在生成期间已变化，本次结果已丢弃");
                     return;
                 }
 
+                const resultNode = videoTaskId ? clearPendingVideoTask(currentNode, videoTaskId) : currentNode;
                 const result = videoGeneration
-                    ? applyVideoGenerationSuccess(currentNode, [storageKey], videoGeneration.shotPrompts, generation.washHits, upstreamSnapshot, taskId)
-                    : applyImageGenerationSuccess(currentNode, [storageKey], generation.washHits, upstreamSnapshot);
+                    ? applyVideoGenerationSuccess(resultNode, [storageKey], videoGeneration.shotPrompts, generation.washHits, upstreamSnapshot, videoTaskId)
+                    : applyImageGenerationSuccess(resultNode, [storageKey], generation.washHits, upstreamSnapshot);
                 const generationFailed = result.node.metadata?.toonflow?.status === "failed";
                 let next = nodesRef.current.map((node) => (node.id === nodeId ? result.node : node));
                 if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
@@ -2640,10 +2673,24 @@ function InfiniteCanvasPage() {
                     message.warning("历史媒体清理失败");
                 }
             } catch (error) {
-                if (isGenerationCanceled(error)) return;
+                if (isGenerationCanceled(error)) {
+                    if (videoTaskId) {
+                        const taskId = videoTaskId;
+                        const next = nodesRef.current.map((node) =>
+                            node.id === nodeId && node.metadata?.toonflow?.pendingVideoTask?.taskId === taskId ? applyGenerationFailure(clearPendingVideoTask(node, taskId), "生成已取消") : node,
+                        );
+                        nodesRef.current = next;
+                        setNodes(next);
+                    }
+                    return;
+                }
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
-                const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                const next = nodesRef.current.map((node) => {
+                    if (node.id !== nodeId) return node;
+                    if (videoTaskId && node.metadata?.toonflow?.pendingVideoTask?.taskId !== videoTaskId) return node;
+                    return applyGenerationFailure(videoTaskId ? clearPendingVideoTask(node, videoTaskId) : node, errorDetails);
+                });
                 nodesRef.current = next;
                 setNodes(next);
             } finally {
@@ -2653,6 +2700,111 @@ function InfiniteCanvasPage() {
         },
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        const resumableNodes = nodesRef.current.filter(
+            (node) => node.metadata?.toonflow?.kind === "video-workbench" && node.metadata.toonflow.status === "generating" && node.metadata.toonflow.pendingVideoTask,
+        );
+        resumableNodes.forEach((resumableNode) => {
+            const pendingTask = resumableNode.metadata?.toonflow?.pendingVideoTask;
+            if (!pendingTask || resumedVideoTaskIdsRef.current.has(pendingTask.taskId)) return;
+            const currentNode = nodesRef.current.find((node) => node.id === resumableNode.id);
+            const currentToonflow = currentNode?.metadata?.toonflow;
+            if (
+                !currentNode ||
+                currentToonflow?.kind !== "video-workbench" ||
+                currentToonflow.status !== "generating" ||
+                currentToonflow.archived ||
+                currentToonflow.pendingVideoTask?.taskId !== pendingTask.taskId
+            )
+                return;
+
+            resumedVideoTaskIdsRef.current.add(pendingTask.taskId);
+            void (async () => {
+                let storageKey: string | undefined;
+                try {
+                    const generationConfig = { ...buildGenerationConfig(effectiveConfig, currentNode, "video"), count: "1" };
+                    const videoGeneration = buildToonflowVideoGeneration(nodesRef.current, connectionsRef.current, currentNode.id);
+                    const videoResult = await pollVideoTaskUntilDone(
+                        generationConfig,
+                        { id: pendingTask.taskId, provider: pendingTask.provider, model: pendingTask.model },
+                        {},
+                    );
+                    const uploaded = await storeGeneratedVideo(videoResult);
+                    if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
+                    storageKey = uploaded.storageKey;
+
+                    const latestNode = nodesRef.current.find((node) => node.id === currentNode.id);
+                    const latestToonflow = latestNode?.metadata?.toonflow;
+                    if (
+                        !latestNode ||
+                        latestToonflow?.kind !== "video-workbench" ||
+                        latestToonflow.status !== "generating" ||
+                        latestToonflow.archived ||
+                        latestToonflow.segmentId !== currentToonflow.segmentId ||
+                        latestToonflow.pendingVideoTask?.taskId !== pendingTask.taskId
+                    ) {
+                        const currentNodes = nodesRef.current;
+                        const discardedNodes = currentNodes.map((node) => (node.id === currentNode.id ? clearPendingVideoTask(node, pendingTask.taskId) : node));
+                        if (discardedNodes.some((node, index) => node !== currentNodes[index])) {
+                            nodesRef.current = discardedNodes;
+                            setNodes(discardedNodes);
+                        }
+                        try {
+                            await deleteStoredMedia([storageKey]);
+                        } catch {
+                            message.warning("已丢弃视频的本地文件清理失败");
+                        }
+                        return;
+                    }
+
+                    const result = applyVideoGenerationSuccess(
+                        clearPendingVideoTask(latestNode, pendingTask.taskId),
+                        [storageKey],
+                        videoGeneration.shotPrompts,
+                        videoGeneration.washHits,
+                        pendingTask.upstreamSnapshot,
+                        pendingTask.taskId,
+                    );
+                    const generationFailed = result.node.metadata?.toonflow?.status === "failed";
+                    let next = nodesRef.current.map((node) => (node.id === currentNode.id ? result.node : node));
+                    if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, currentNode.id);
+                    nodesRef.current = next;
+                    setNodes(next);
+
+                    const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                    const orphaned = splitMediaKeysByStore(result.orphanedKeys.filter((key) => !referencedKeys.has(key)));
+                    try {
+                        await Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]);
+                    } catch {
+                        message.warning("历史媒体清理失败");
+                    }
+                } catch (error) {
+                    const errorDetails = error instanceof Error ? error.message : "视频任务恢复失败";
+                    const currentNodes = nodesRef.current;
+                    let failed = false;
+                    const next = currentNodes.map((node) => {
+                        if (node.id !== currentNode.id || node.metadata?.toonflow?.pendingVideoTask?.taskId !== pendingTask.taskId) return node;
+                        failed = true;
+                        return applyGenerationFailure(clearPendingVideoTask(node, pendingTask.taskId), errorDetails);
+                    });
+                    if (failed) {
+                        nodesRef.current = next;
+                        setNodes(next);
+                        message.error(errorDetails);
+                    }
+                    if (storageKey) {
+                        try {
+                            await deleteStoredMedia([storageKey]);
+                        } catch {
+                            message.warning("失败视频的本地文件清理失败");
+                        }
+                    }
+                }
+            })();
+        });
+    }, [effectiveConfig, message, projectLoaded]);
 
     const handleToonflowGenerate = useCallback(
         async (nodeId: string) => {
@@ -3928,6 +4080,20 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
 
 function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
     return nodes.map((node) => (node.metadata?.status === "loading" ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } } : node));
+}
+
+function setPendingVideoTask(node: CanvasNodeData, pendingVideoTask: ToonflowNodeMetadata["pendingVideoTask"]): CanvasNodeData {
+    const toonflow = node.metadata?.toonflow;
+    if (!toonflow) return node;
+    return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow, pendingVideoTask } } };
+}
+
+function clearPendingVideoTask(node: CanvasNodeData, taskId: string): CanvasNodeData {
+    const toonflow = node.metadata?.toonflow;
+    if (toonflow?.pendingVideoTask?.taskId !== taskId) return node;
+    const nextToonflow = { ...toonflow };
+    delete nextToonflow.pendingVideoTask;
+    return { ...node, metadata: { ...node.metadata, toonflow: nextToonflow } };
 }
 
 function isGenerationCanceled(error: unknown) {

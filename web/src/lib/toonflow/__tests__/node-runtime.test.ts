@@ -212,6 +212,34 @@ describe("状态动作与 hydrate", () => {
         expect(result.metadata?.toonflow?.output?.upstreamVersions).toEqual({ project: 4 });
     });
 
+    it("hydrate 保留带 pendingVideoTask 的生成中视频节点", () => {
+        const target = node("video", "video-workbench", "", "generating");
+        target.metadata!.toonflow!.pendingVideoTask = {
+            taskId: "task-1",
+            provider: "seedance",
+            model: "seedance-2.0",
+            upstreamSnapshot: { storyboard: 3 },
+            startedAt: "2026-07-13T00:00:00.000Z",
+        };
+        const result = hydrateToonflowProject([target]);
+        expect(result[0]).toBe(target);
+        expect(result[0].metadata?.toonflow?.status).toBe("generating");
+    });
+
+    it("hydrate 将无 pendingVideoTask 的生成中视频节点降级为 failed", () => {
+        const target = node("video", "video-workbench", "", "generating");
+        const result = hydrateToonflowProject([target]);
+        expect(result[0].metadata?.toonflow?.status).toBe("failed");
+        expect(result[0].metadata?.errorDetails).toContain("页面已刷新");
+    });
+
+    it("hydrate 继续将生成中文本节点降级为 failed", () => {
+        const target = node("script", "script", "", "generating");
+        const result = hydrateToonflowProject([target]);
+        expect(result[0].metadata?.toonflow?.status).toBe("failed");
+        expect(result[0].metadata?.errorDetails).toContain("页面已刷新");
+    });
+
     it("迁移旧中文状态且重复 hydrate 保持幂等", () => {
         const target = node("script", "script");
         Object.assign(target.metadata!.toonflow!, { status: "待验收" });

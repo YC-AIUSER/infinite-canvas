@@ -54,6 +54,13 @@ export type ToonflowNodeMetadata = {
     accent?: string;
     output?: NodeOutput;
     history?: NodeOutput[];
+    pendingVideoTask?: {
+        taskId: string;
+        provider: "openai" | "seedance";
+        model: string;
+        upstreamSnapshot: Record<string, number>;
+        startedAt: string;
+    };
     washReport?: {
         hits: Array<{ term: string; replacement: string }>;
         at: string;
