@@ -47,9 +47,10 @@ import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
 import { ToonflowExportModal } from "@/components/canvas/toonflow-export-modal";
+import { ToonflowSeamCheckModal } from "@/components/canvas/toonflow-seam-check-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
-import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
 import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
 import type { AssetCard } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
@@ -353,6 +354,7 @@ function InfiniteCanvasPage() {
     const [toonflowRepairNodeId, setToonflowRepairNodeId] = useState<string | null>(null);
     const [toonflowRepairNote, setToonflowRepairNote] = useState("");
     const [toonflowExportNodeId, setToonflowExportNodeId] = useState<string | null>(null);
+    const [toonflowSeamNodeId, setToonflowSeamNodeId] = useState<string | null>(null);
     const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
     const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
     const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
@@ -733,6 +735,11 @@ function InfiniteCanvasPage() {
     }, [nodes]);
     // #14 成片导出:汇总已通过的视频工作台段实例(全画布扫一次,随 nodes 变化重算),供导出节点显示"X/Y 段已通过"与成片 Modal。
     const exportCollection = useMemo(() => collectExportSegments(nodes), [nodes]);
+    // #12 接缝检查:相邻已通过段配对 + 该接缝节点已检进度。
+    const seamNode = useMemo(() => nodes.find((node) => node.metadata?.toonflow?.kind === "seam-check"), [nodes]);
+    const seamBoundaries = useMemo(() => collectSeamBoundaries(nodes), [nodes]);
+    const seamReviews = useMemo(() => parseSeamReviews(seamNode), [seamNode]);
+    const seamSummary = useMemo(() => seamReviewSummary(nodes, seamNode), [nodes, seamNode]);
     const groupChildCountById = useMemo(() => {
         const map = new Map<string, number>();
         nodes.forEach((node) => {
@@ -2875,6 +2882,20 @@ function InfiniteCanvasPage() {
         [syncStoryboardInstances],
     );
 
+    // #12 接缝检查:保存勾选(全勾即 approved)/ 跳过。
+    const handleToonflowSeamSave = useCallback((nodeId: string, reviews: SeamReview[]) => {
+        const next = applySeamReviewSave(nodesRef.current, nodeId, reviews);
+        nodesRef.current = next;
+        setNodes(next);
+        setToonflowSeamNodeId(null);
+    }, []);
+
+    const handleToonflowSeamSkip = useCallback((nodeId: string) => {
+        const next = applySeamSkip(nodesRef.current, nodeId);
+        nodesRef.current = next;
+        setNodes(next);
+    }, []);
+
     const handleToonflowEditSave = useCallback((nodeId: string, text: string) => {
         setNodes((prev) => {
             const next = applyEditSave(prev, connectionsRef.current, nodeId, text);
@@ -3435,6 +3456,9 @@ function InfiniteCanvasPage() {
                                                 ? { approvedCount: exportCollection.approvedCount, totalSegments: exportCollection.totalSegments }
                                                 : undefined
                                         }
+                                        onOpenSeam={setToonflowSeamNodeId}
+                                        onSeamSkip={handleToonflowSeamSkip}
+                                        seamSummary={contentNode.metadata?.toonflow?.kind === "seam-check" ? seamSummary : undefined}
                                         onToggleBatch={toggleBatchExpanded}
                                     />
                                 ) : (
@@ -3587,6 +3611,16 @@ function InfiniteCanvasPage() {
                 <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
 
                 <ToonflowExportModal open={Boolean(toonflowExportNodeId)} collection={exportCollection} onCancel={() => setToonflowExportNodeId(null)} />
+
+                <ToonflowSeamCheckModal
+                    open={Boolean(toonflowSeamNodeId)}
+                    boundaries={seamBoundaries}
+                    initialReviews={seamReviews}
+                    onSave={(reviews) => {
+                        if (toonflowSeamNodeId) handleToonflowSeamSave(toonflowSeamNodeId, reviews);
+                    }}
+                    onCancel={() => setToonflowSeamNodeId(null)}
+                />
 
                 <Modal
                     title={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "单镜修改（整段重生成）" : "定点修"}

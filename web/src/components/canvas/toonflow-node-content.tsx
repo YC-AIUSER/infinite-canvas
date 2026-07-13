@@ -45,6 +45,9 @@ type ToonflowNodeContentProps = {
     onDeleteArchived?: (nodeId: string) => void;
     onOpenExport?: (nodeId: string) => void;
     exportSummary?: { approvedCount: number; totalSegments: number };
+    onOpenSeam?: (nodeId: string) => void;
+    onSeamSkip?: (nodeId: string) => void;
+    seamSummary?: { checkedCount: number; total: number };
     batchCount?: number;
     batchExpanded?: boolean;
     onToggleBatch?: (nodeId: string) => void;
@@ -102,7 +105,7 @@ function InstanceVideo({ storageKey, name, background, borderColor }: { storageK
     );
 }
 
-export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, onOpenExport, exportSummary, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
+export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, onOpenExport, exportSummary, onOpenSeam, onSeamSkip, seamSummary, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const toonflow = node.metadata?.toonflow;
@@ -110,6 +113,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
 
     const accent = toonflow.accent || theme.node.activeStroke;
     const isExport = toonflow.kind === "export";
+    const isSeam = toonflow.kind === "seam-check";
     // 导出节点是终端节点,不做 approved 存储仪式:显示状态实时由已通过段数推导(全就绪=已通过/部分=待导出/无=未开始),存储状态保持 empty。
     const displayStatus: ToonflowNodeStageStatus =
         isExport && exportSummary
@@ -242,6 +246,42 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                         </Button>
                     </div>
                 </div>
+            ) : isSeam ? (
+                <div className="mt-2 flex min-h-0 flex-1 flex-col">
+                    <div className="rounded-md px-3 py-2.5" style={{ background: theme.node.fill }}>
+                        <div className="flex items-baseline gap-1.5">
+                            <span className="text-2xl font-semibold leading-none" style={{ color: statusColor }}>
+                                {seamSummary?.checkedCount ?? 0}
+                            </span>
+                            <span className="text-sm opacity-55">/ {seamSummary?.total ?? 0} 接缝已检</span>
+                        </div>
+                        <p className="mt-1.5 text-xs opacity-60">相邻段连续性检查 · 可跳过</p>
+                    </div>
+                    <div className="mt-auto flex justify-end gap-2 pt-2" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                        {toonflow.status !== "approved" && toonflow.status !== "skipped" ? (
+                            <Button
+                                size="small"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onSeamSkip?.(node.id);
+                                }}
+                            >
+                                跳过
+                            </Button>
+                        ) : null}
+                        <Button
+                            size="small"
+                            type="primary"
+                            disabled={!seamSummary?.total}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onOpenSeam?.(node.id);
+                            }}
+                        >
+                            打开检查
+                        </Button>
+                    </div>
+                </div>
             ) : (
                 <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-1.5">
                     {toonflow.checks.slice(0, isActionable ? 2 : 3).map((item) => (
@@ -259,7 +299,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                 </div>
             )}
 
-            {!isActionable && !isExport && toonflow.kind !== "compliance" && toonflow.outputs?.length ? (
+            {!isActionable && !isExport && !isSeam && toonflow.kind !== "compliance" && toonflow.outputs?.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                     {toonflow.outputs.slice(0, 2).map((item) => (
                         <span key={item} className="rounded-md px-2 py-1 text-[11px] font-medium" style={{ background: `${accent}16`, color: accent }}>

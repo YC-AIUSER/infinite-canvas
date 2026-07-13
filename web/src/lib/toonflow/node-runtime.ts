@@ -677,6 +677,96 @@ export function collectExportSegments(nodes: CanvasNodeData[]): ExportCollection
     return { segments, totalSegments: segmentIds.size, approvedCount: segments.length };
 }
 
+export type SeamBoundary = {
+    /** 稳定边界身份:两段 segmentId 拼接。 */
+    key: string;
+    fromSegmentId: string;
+    fromTitle: string;
+    fromVideoKey: string;
+    fromVersion: number;
+    toSegmentId: string;
+    toTitle: string;
+    toVideoKey: string;
+    toVersion: number;
+};
+
+export type SeamReview = { key: string; fromVersion: number; toVersion: number };
+
+/** #12 接缝检查:相邻已通过段两两配对(N 段 → N-1 个接缝),按段序。 */
+export function collectSeamBoundaries(nodes: CanvasNodeData[]): SeamBoundary[] {
+    const segments = collectExportSegments(nodes).segments;
+    const boundaries: SeamBoundary[] = [];
+    for (let index = 0; index < segments.length - 1; index += 1) {
+        const from = segments[index];
+        const to = segments[index + 1];
+        boundaries.push({
+            key: `${from.segmentId}__${to.segmentId}`,
+            fromSegmentId: from.segmentId,
+            fromTitle: from.title,
+            fromVideoKey: from.videoKey,
+            fromVersion: from.version,
+            toSegmentId: to.segmentId,
+            toTitle: to.title,
+            toVideoKey: to.videoKey,
+            toVersion: to.version,
+        });
+    }
+    return boundaries;
+}
+
+/** 接缝节点的已检记录存在 output.payload.text(JSON,复用 text 字段免改 schema)。 */
+export function parseSeamReviews(seamNode: CanvasNodeData | undefined): SeamReview[] {
+    const text = seamNode?.metadata?.toonflow?.output?.payload.text;
+    if (!text) return [];
+    try {
+        const parsed = JSON.parse(text) as { reviewed?: SeamReview[] };
+        return Array.isArray(parsed.reviewed) ? parsed.reviewed : [];
+    } catch {
+        return [];
+    }
+}
+
+/** 一个接缝"已检"当且仅当有 review 记录 key 相同且双方版本都一致——任一段重生成→版本变→该接缝需重检。 */
+export function isSeamChecked(boundary: SeamBoundary, reviews: SeamReview[]): boolean {
+    return reviews.some((review) => review.key === boundary.key && review.fromVersion === boundary.fromVersion && review.toVersion === boundary.toVersion);
+}
+
+export function seamReviewSummary(nodes: CanvasNodeData[], seamNode: CanvasNodeData | undefined): { checkedCount: number; total: number } {
+    const boundaries = collectSeamBoundaries(nodes);
+    const reviews = parseSeamReviews(seamNode);
+    return { checkedCount: boundaries.filter((boundary) => isSeamChecked(boundary, reviews)).length, total: boundaries.length };
+}
+
+/** 保存接缝勾选:全部接缝已检=approved(勾选完成即 approved),部分=review。只存当前版本的已检记录。 */
+export function applySeamReviewSave(nodes: CanvasNodeData[], nodeId: string, reviews: SeamReview[]): CanvasNodeData[] {
+    const boundaries = collectSeamBoundaries(nodes);
+    const allChecked = boundaries.length > 0 && boundaries.every((boundary) => isSeamChecked(boundary, reviews));
+    const status: NodeStatus = allChecked ? "approved" : "review";
+    return nodes.map<CanvasNodeData>((node) => {
+        const toonflow = node.metadata?.toonflow;
+        if (node.id !== nodeId || !toonflow || toonflow.kind !== "seam-check") return node;
+        const output: NodeOutput = {
+            nodeId,
+            kind: "seam-check",
+            version: (toonflow.output?.version ?? 0) + 1,
+            status,
+            payload: { text: JSON.stringify({ reviewed: reviews }) },
+            upstreamVersions: {},
+            generatedAt: new Date().toISOString(),
+        };
+        return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow, status, output } } };
+    });
+}
+
+/** 跳过接缝检查(可跳过白名单):置 skipped,下游透明。 */
+export function applySeamSkip(nodes: CanvasNodeData[], nodeId: string): CanvasNodeData[] {
+    return nodes.map<CanvasNodeData>((node) => {
+        const toonflow = node.metadata?.toonflow;
+        if (node.id !== nodeId || !toonflow || toonflow.kind !== "seam-check") return node;
+        return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow, status: "skipped" } } };
+    });
+}
+
 export function applyAssetCardsSave(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, cards: AssetCard[]): CanvasNodeData[] {
     const target = nodes.find((node) => node.id === nodeId);
     const toonflow = target?.metadata?.toonflow;
