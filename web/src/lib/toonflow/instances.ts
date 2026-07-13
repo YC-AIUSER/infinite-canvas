@@ -1,14 +1,14 @@
 import type { CanvasConnection, CanvasNodeData, ToonflowNodeKind } from "../../types/canvas";
 import { diffSegments, groupRowsBySegment, reconcileInstances, type SegmentInstance, type SegmentPlan } from "./segments";
 
-const INSTANCE_KINDS = ["storyboard-page", "keyframes"] as const;
+const INSTANCE_KINDS = ["storyboard-page", "keyframes", "video-workbench"] as const;
 
 type InstanceKind = (typeof INSTANCE_KINDS)[number];
 
 export type InstanceSyncPlan = {
     storyboardNodeId: string;
     segments: Array<{ segmentId: string; segmentIndex: number; shotCount: number }>;
-    toCreate: Array<{ segmentId: string; segmentIndex: number; kind: "storyboard-page" | "keyframes" }>;
+    toCreate: Array<{ segmentId: string; segmentIndex: number; kind: "storyboard-page" | "keyframes" | "video-workbench" }>;
     toStale: string[];
     toArchive: string[];
     reindex: Array<{ nodeId: string; segmentIndex: number }>;
@@ -38,6 +38,7 @@ function segmentInstances(nodes: CanvasNodeData[]): SegmentInstance[] {
         const instance = bySegment.get(toonflow.segmentId) ?? { segmentId: toonflow.segmentId, nodeIds: {} };
         if (toonflow.kind === "storyboard-page") instance.nodeIds.storyboardPage = node.id;
         if (toonflow.kind === "keyframes") instance.nodeIds.keyframes = node.id;
+        if (toonflow.kind === "video-workbench") instance.nodeIds.video = node.id;
         bySegment.set(toonflow.segmentId, instance);
     }
     return [...bySegment.values()];
@@ -49,7 +50,7 @@ export function planInstanceSync(nodes: CanvasNodeData[], storyboardNodeId: stri
     const rows = output?.payload.table;
     if (storyboard?.metadata?.toonflow?.kind !== "storyboard-table" || storyboard.metadata.toonflow.status !== "approved" || output?.status !== "approved" || !rows) return null;
 
-    if (!findRoot(nodes, "storyboard-page") || !findRoot(nodes, "keyframes")) return null;
+    if (!findRoot(nodes, "storyboard-page") || !findRoot(nodes, "keyframes") || !findRoot(nodes, "video-workbench")) return null;
 
     const groups = groupRowsBySegment(rows);
     const segments = [...groups].map(([segmentId, segmentRows], segmentIndex) => ({ segmentId, segmentIndex, shotCount: segmentRows.length }));
@@ -188,6 +189,9 @@ export function applyInstanceSync(
     for (const instance of instancesBySegment) {
         if (instance.nodeIds.storyboardPage && instance.nodeIds.keyframes) {
             nextConnections = appendConnection(nextConnections, instance.nodeIds.storyboardPage, instance.nodeIds.keyframes, createId);
+        }
+        if (instance.nodeIds.keyframes && instance.nodeIds.video) {
+            nextConnections = appendConnection(nextConnections, instance.nodeIds.keyframes, instance.nodeIds.video, createId);
         }
     }
 

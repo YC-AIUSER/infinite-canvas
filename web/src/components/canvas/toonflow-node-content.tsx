@@ -3,6 +3,7 @@ import { Button, Popconfirm } from "antd";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, Clock3 } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasNodeData, ToonflowNodeStageStatus } from "@/types/canvas";
@@ -73,6 +74,32 @@ function InstanceImage({ storageKey, name, background, borderColor }: { storageK
     );
 }
 
+function InstanceVideo({ storageKey, name, background, borderColor }: { storageKey: string; name: string; background: string; borderColor: string }) {
+    const [url, setUrl] = useState("");
+
+    useEffect(() => {
+        let active = true;
+        setUrl("");
+        void resolveMediaUrl(storageKey).then(
+            (resolved) => {
+                if (active) setUrl(resolved);
+            },
+            () => {
+                if (active) setUrl("");
+            },
+        );
+        return () => {
+            active = false;
+        };
+    }, [storageKey]);
+
+    return (
+        <div className="mt-2 h-24 overflow-hidden rounded-lg border" style={{ background, borderColor }} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+            {url ? <video src={url} aria-label={name} controls muted playsInline preload="metadata" className="h-full w-full object-contain" /> : null}
+        </div>
+    );
+}
+
 export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
@@ -82,8 +109,10 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
     const accent = toonflow.accent || theme.node.activeStroke;
     const statusColor = statusTone[toonflow.status] || theme.node.muted;
     const isActionable = actionableKinds.has(toonflow.kind);
-    const isInstance = (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes") && Boolean(toonflow.segmentId);
+    const isInstance = (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench") && Boolean(toonflow.segmentId);
     const instanceImageKey = toonflow.output?.payload.imageKeys?.[0];
+    const instanceVideoKey = toonflow.output?.payload.videoKeys?.[0];
+    const generationKindLabel = toonflow.kind === "video-workbench" ? "视频" : "图像";
     const error = toonflow.output?.error || node.metadata?.errorDetails;
     const washHits = toonflow.washReport?.hits || [];
     const assetCards = toonflow.output?.payload.cards;
@@ -141,6 +170,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
             <p className="mt-2 line-clamp-1 text-sm leading-5 opacity-70">{toonflow.summary}</p>
 
             {isInstance && instanceImageKey ? <InstanceImage storageKey={instanceImageKey} name={node.title} background={theme.node.fill} borderColor={`${theme.node.muted}30`} /> : null}
+            {isInstance && instanceVideoKey ? <InstanceVideo storageKey={instanceVideoKey} name={node.title} background={theme.node.fill} borderColor={`${theme.node.muted}30`} /> : null}
 
             {assetCardSummary ? (
                 <p className="mt-1 truncate text-xs font-medium opacity-60">
@@ -267,21 +297,21 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                         </Button>
                     ) : null}
                     {toonflow.status === "empty" ? (
-                        <Popconfirm title="将调用 1 次图像生成" okText="确认生成" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
+                        <Popconfirm title={`将调用 1 次${generationKindLabel}生成`} okText="确认生成" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
                             <Button size="small" type="primary" disabled={cascadeLocked}>
                                 生成
                             </Button>
                         </Popconfirm>
                     ) : null}
                     {toonflow.status === "failed" ? (
-                        <Popconfirm title="将调用 1 次图像生成" okText="确认重试" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
+                        <Popconfirm title={`将调用 1 次${generationKindLabel}生成`} okText="确认重试" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
                             <Button size="small" type="primary" disabled={cascadeLocked}>
                                 重试
                             </Button>
                         </Popconfirm>
                     ) : null}
                     {["stale", "review", "approved"].includes(toonflow.status) ? (
-                        <Popconfirm title="将调用 1 次图像生成" okText="确认重生成" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
+                        <Popconfirm title={`将调用 1 次${generationKindLabel}生成`} okText="确认重生成" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
                             <Button size="small" type={toonflow.status === "stale" ? "primary" : "default"} disabled={cascadeLocked}>
                                 重生成
                             </Button>
@@ -311,7 +341,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                             历史
                         </Button>
                     ) : null}
-                    {toonflow.kind === "keyframes" && (toonflow.status === "review" || toonflow.status === "approved") ? (
+                    {(toonflow.kind === "keyframes" || toonflow.kind === "video-workbench") && (toonflow.status === "review" || toonflow.status === "approved") ? (
                         <Button
                             size="small"
                             disabled={cascadeLocked}

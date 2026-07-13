@@ -32,7 +32,7 @@ export function ToonflowSegmentSyncModal({ open, plan, nodes, onConfirm, onCance
     return (
         <Modal title="同步分段实例" open={open} centered okText="确认同步" cancelText="取消" onOk={onConfirm} onCancel={onCancel}>
             <p className="mb-4 text-sm" style={{ color: token.colorTextSecondary }}>
-                分镜表的段结构已变化。确认后会更新故事板页与首帧实例，已有产物不会被删除。
+                分镜表的段结构已变化。确认后会更新故事板页、首帧与视频实例，已有产物不会被删除。
             </p>
             <div className="space-y-4">
                 {addedSegments.length ? (
