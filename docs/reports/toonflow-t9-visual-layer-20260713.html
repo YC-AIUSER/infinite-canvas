@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toonflow 阶段 2 视觉层 · 交付与对抗审查报告</title>
+<style>
+:root{
+  --ivory:#FAF9F5;--slate:#141413;--clay:#D97757;--oat:#E3DACC;--olive:#788C5D;--rust:#B04A3F;
+  --white:#FFFFFF;--gray-100:#F0EEE6;--gray-300:#D1CFC5;--gray-500:#87867F;--gray-700:#3D3D3A;
+  --warning:#C78E3F;--danger:#B04A4A;--info:#5C7CA3;
+  --serif:ui-serif,Georgia,"Noto Serif SC","Source Han Serif SC",serif;
+  --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --radius:12px;--border:1.5px solid var(--gray-300);
+}
+*{box-sizing:border-box;}
+body{margin:0;padding:56px 32px 120px;background:var(--ivory);color:var(--gray-700);font-family:var(--sans);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+.page{max-width:1000px;margin:0 auto;}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gray-500);margin-bottom:12px;}
+h1{font-family:var(--serif);font-weight:500;font-size:36px;line-height:1.15;color:var(--slate);letter-spacing:-.01em;margin:0 0 16px;}
+.lede{font-size:17px;color:var(--gray-500);max-width:760px;margin:0 0 40px;}
+.summary-band{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:56px;}
+@media(max-width:720px){.summary-band{grid-template-columns:repeat(2,1fr);}}
+.stat-card{background:var(--white);border:var(--border);border-radius:var(--radius);padding:20px 22px 18px;}
+.stat-card.warn{border-left:4px solid var(--clay);padding-left:19px;}
+.stat-card.good{border-left:4px solid var(--olive);padding-left:19px;}
+.stat-num{font-family:var(--serif);font-size:42px;font-weight:500;line-height:1;color:var(--slate);margin-bottom:8px;}
+.stat-label{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-500);}
+.stat-delta{font-family:var(--mono);font-size:11px;margin-top:6px;}
+.stat-delta.up{color:var(--olive);}.stat-delta.flat{color:var(--gray-500);}
+section{margin-bottom:56px;}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px;}
+.sec-head .num{font-family:var(--mono);font-size:12px;background:var(--oat);color:var(--slate);padding:3px 9px;border-radius:8px;}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:24px;color:var(--slate);letter-spacing:-.01em;margin:0;}
+.sec-intro{font-size:14px;color:var(--gray-500);max-width:760px;margin-bottom:24px;}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+@media(max-width:640px){.grid{grid-template-columns:1fr;}}
+.card{background:var(--white);border:var(--border);border-radius:var(--radius);padding:20px 24px;box-shadow:0 1px 2px rgba(20,20,19,.06);}
+.card .role{font-size:12px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--clay);margin-bottom:4px;}
+.card h3{font-size:18px;font-weight:500;margin:0 0 8px;color:var(--slate);}
+.card p{margin:0 0 8px;font-size:14px;color:var(--gray-700);}
+table.data{width:100%;border-collapse:separate;border-spacing:0;background:var(--white);border:var(--border);border-radius:var(--radius);overflow:hidden;}
+table.data thead th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-500);background:var(--gray-100);padding:12px 16px;border-bottom:1px solid var(--gray-300);}
+table.data tbody td{padding:13px 16px;border-bottom:1px solid var(--gray-100);font-size:14px;color:var(--gray-700);vertical-align:top;}
+table.data tbody tr:last-child td{border-bottom:none;}
+.tag{display:inline-block;font-family:var(--mono);font-size:11px;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;color:var(--gray-700);margin:2px 2px 0 0;}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;color:var(--white);}
+.badge.green{background:var(--olive);}.badge.orange{background:var(--warning);}.badge.red{background:var(--danger);}.badge.blue{background:var(--info);}.badge.gray{background:var(--gray-500);}
+.pill{font-family:var(--mono);font-size:12px;color:var(--clay);background:var(--oat);padding:2px 8px;border-radius:4px;}
+.highlights{list-style:none;margin:0;padding:0;}
+.highlights li{position:relative;padding:0 0 14px 26px;font-size:15px;color:var(--gray-700);}
+.highlights li::before{content:"";position:absolute;left:6px;top:8px;width:7px;height:7px;border-radius:2px;background:var(--clay);}
+.highlights li strong{color:var(--slate);font-weight:600;}
+details{background:var(--white);border:var(--border);border-radius:var(--radius);margin-bottom:10px;overflow:hidden;}
+details summary{padding:14px 20px;font-weight:500;font-size:15px;color:var(--slate);cursor:pointer;list-style:none;}
+details summary::before{content:"\25B6";font-size:10px;color:var(--clay);margin-right:10px;display:inline-block;transition:transform .15s;}
+details[open] summary::before{transform:rotate(90deg);}
+details .detail-body{padding:0 20px 16px;font-size:14px;color:var(--gray-700);}
+pre{background:var(--gray-100);border:1px solid var(--gray-300);border-radius:8px;padding:14px 18px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--slate);}
+code{font-family:var(--mono);font-size:13px;color:var(--clay);background:var(--oat);padding:1px 6px;border-radius:4px;}
+pre code{background:none;padding:0;color:inherit;}
+.crit-card{background:var(--white);border:var(--border);border-left:4px solid var(--danger);border-radius:var(--radius);padding:18px 22px;margin-bottom:12px;}
+.crit-card .cid{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--danger);}
+.crit-card h3{font-family:var(--serif);font-weight:500;font-size:18px;color:var(--slate);margin:4px 0 10px;}
+.crit-card .row{display:grid;grid-template-columns:64px 1fr;gap:6px 12px;font-size:14px;}
+.crit-card .row .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-500);padding-top:2px;}
+.fix-band{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;}
+@media(max-width:720px){.fix-band{grid-template-columns:1fr;}}
+footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--gray-300);font-size:13px;color:var(--gray-500);}
+@media(max-width:640px){body{padding:32px 16px 64px;}h1{font-size:28px;}.summary-band{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">交付 + 对抗审查报告 · infinite-canvas / Toonflow</div>
+  <h1>阶段 2 视觉层：段实例 · 资产卡池 · 图像生成</h1>
+  <p class="lede">Toonflow 生产画布的节点从"只能生成文字"扩展到"能生成画面"。本报告记录阶段 2 的全部交付、一轮 Codex 对抗性代码审查发现的 4 个 critical 缺陷及其修复，以及核实后延后的遗留项。所有结论均以实测证据为准（自跑测试 / 构建 / 类型检查 / 浏览器实操）。</p>
+
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">7</div><div class="stat-label">交付 commit</div><div class="stat-delta up">全部合入 main</div></div>
+    <div class="stat-card good"><div class="stat-num">150</div><div class="stat-label">单测全绿</div><div class="stat-delta up">+51 vs 阶段1</div></div>
+    <div class="stat-card warn"><div class="stat-num">4</div><div class="stat-label">Critical 已修</div><div class="stat-delta flat">审查发现</div></div>
+    <div class="stat-card"><div class="stat-num">0</div><div class="stat-label">tsc 类型错误</div><div class="stat-delta up">基线清零</div></div>
+  </div>
+
+  <!-- 01 交付概览 -->
+  <section>
+    <div class="sec-head"><span class="num">01</span><h2>做了什么</h2></div>
+    <p class="sec-intro">阶段 2 把画布黑盒里的"视觉生产"三步接上真实生成能力，并按创始人裁决把资产治理扩到七类卡。</p>
+    <ul class="highlights">
+      <li><strong>段实例引擎</strong> — 分镜表验收后，画布自动按段展开"故事板页/首帧"实例节点（每段一张）；段结构变化弹确认框，消失的段归档保产物，段实例组可一键折叠。</li>
+      <li><strong>资产锚点卡池</strong> — 角色/场景/道具集中管理，剧本实体清单一键预填建卡，上传或 AI 生成锚点图，保存进版本管理并向下游传播失效。</li>
+      <li><strong>图像生成</strong> — 故事板页出"N 格黑白线稿（格子=镜头）"，首帧"只上色不改构图"+定点修；图像版本上限 5 版、被裁版本的图自动清理。</li>
+      <li><strong>七类卡治理</strong> — 基础卡（角色/场景/道具）+ 锁外观的衍生卡（动作/表情/服装）+ 独立锚点的形态卡（变身形态不继承父卡外观，防反向漂移）。</li>
+    </ul>
+  </section>
+
+  <!-- 02 交付清单 -->
+  <section>
+    <div class="sec-head"><span class="num">02</span><h2>交付清单（main 提交链）</h2></div>
+    <table class="data">
+      <thead><tr><th>Commit</th><th>内容</th><th>验收</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tag">3a45d23</span> T9a</td><td>段实例引擎：按段展开 #8/#9 实例 + 段结构确认 + 归档 + 折叠</td><td><span class="badge green">107 绿 · 已审</span></td></tr>
+        <tr><td><span class="tag">4d3da7e</span> T9b</td><td>资产锚点卡池：三类基础卡 + 实体清单预填 + 费用确认门</td><td><span class="badge green">115 绿 · 已审</span></td></tr>
+        <tr><td><span class="tag">179f611</span> T9c-engine</td><td>图像生成引擎：故事板页/首帧模板 + 版本裁剪 + 收集器防误删</td><td><span class="badge green">131 绿 · 已审</span></td></tr>
+        <tr><td><span class="tag">27ef50b</span> T9c-ui</td><td>画布接线：实例卡按钮 + 缩略图 + 定点修 + 历史图像预览</td><td><span class="badge green">131 绿 · 浏览器实测</span></td></tr>
+        <tr><td><span class="tag">44ced77</span> T9b-2</td><td>衍生卡：动作/表情挂父卡 + 父图参考防漂移 + 级联删除</td><td><span class="badge green">140 绿 · 已审</span></td></tr>
+        <tr><td><span class="tag">b8cd7c4</span> T9b-3</td><td>服装变体 + 形态卡：换装锁容貌；形态卡独立锚点</td><td><span class="badge green">147 绿 · 已审</span></td></tr>
+        <tr><td><span class="tag">33d53d6</span> T9-fix</td><td>对抗审查修复：4 critical + 5 项 major/minor</td><td><span class="badge green">150 绿 · tsc 零错误</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 03 对抗审查 -->
+  <section>
+    <div class="sec-head"><span class="num">03</span><h2>Codex 对抗审查 —— 为什么这轮必要</h2></div>
+    <p class="sec-intro">此前每批都做了"Claude 审 Codex 产出"（审查者≠制作者），但缺了"Codex 反向审查整体产出"这一步。T9 动了 20+ 文件、两千余行，够格升级对抗审查。Codex 以"推翻它"的立场读全量 diff，交回 <strong>4 critical、10 major、3 minor</strong>；我逐条核实，4 个 critical 全部为真。</p>
+
+    <div class="fix-band">
+      <div class="stat-card warn"><div class="stat-num">4/4</div><div class="stat-label">Critical 核实为真</div></div>
+      <div class="stat-card good"><div class="stat-num">9</div><div class="stat-label">项已修（4C+5M/m）</div></div>
+      <div class="stat-card"><div class="stat-num">7</div><div class="stat-label">项延后（记 TODOS）</div></div>
+    </div>
+
+    <div class="crit-card">
+      <div class="cid">CRITICAL · C1 — 已修</div>
+      <h3>过期产物冒充"最新版本"绕过失效守卫</h3>
+      <div class="row">
+        <div class="k">场景</div><div>分镜表 v1 启动首帧生成 → 请求期间回退分镜表/改资产卡 → 旧输入产物完成后进"待验收"，版本快照记成"基于新版本"，用户误验收过期画面。</div>
+        <div class="k">根因</div><div>版本快照 <code>computeUpstreamVersions</code> 在 <code>uploadImage</code> 之后才算，读的是当时最新状态。</div>
+        <div class="k">修复</div><div>快照改为<strong>异步生成开始前</strong>捕获，锁定"这张图基于哪一版上游"。</div>
+      </div>
+    </div>
+
+    <div class="crit-card">
+      <div class="cid">CRITICAL · C2 — 已修</div>
+      <h3>晚到结果覆盖归档状态，产生"无根僵尸实例"</h3>
+      <div class="row">
+        <div class="k">场景</div><div>某段故事板页生成中 → 分镜表新版本删除该段（置 archived、断连线、移出根子列表）→ 旧请求完成 → 用生成前快照整体覆盖节点，丢掉 archived 标记，但连线/子列表回不来 → 无根归属的僵尸节点。</div>
+        <div class="k">根因</div><div>完成时用生成前捕获的 <code>preparedNode</code> 写回，不检查当前节点是否已变化。</div>
+        <div class="k">修复</div><div>完成时<strong>重新核对当前节点</strong>：已归档/已删除/非生成态则丢弃结果并清理刚上传的孤儿图。</div>
+      </div>
+    </div>
+
+    <div class="crit-card">
+      <div class="cid">CRITICAL · C3 — 已修</div>
+      <h3>首帧构图锁读取失败仍生成，违反"只上色不改构图"</h3>
+      <div class="row">
+        <div class="k">场景</div><div>首帧的故事板页线稿（构图锁）Blob 丢失/损坏 → 只 warning 不中止 → 退化为纯文生图或仅凭资产卡 → 构图完全失控。</div>
+        <div class="k">根因</div><div>参考图读取失败被静默过滤，未区分"可选锚点"与"强制构图锁"。</div>
+        <div class="k">修复</div><div>契约新增 <code>mandatoryKeys</code>：首帧线稿列为强制参考，读取失败<strong>直接中止生成</strong>。</div>
+      </div>
+    </div>
+
+    <div class="crit-card">
+      <div class="cid">CRITICAL · C4 — 已修</div>
+      <h3>版本裁剪/归档删除误删被复制节点共享的图</h3>
+      <div class="row">
+        <div class="k">场景</div><div>复制一个已生成实例（副本共享同一 storageKey）→ 原节点继续生成使旧版本被裁掉，或原节点归档后删除 → 清理逻辑删掉共享 Blob → 副本白屏。</div>
+        <div class="k">根因</div><div>裁剪与删除只扫本节点，不看其他节点是否仍引用同一媒体键。</div>
+        <div class="k">修复</div><div>删除前<strong>扫全画布引用集</strong>（复用 collectImage/MediaStorageKeys），仍被引用的键不删；成功路径与归档删除路径都加固。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 采纳的 major/minor -->
+  <section>
+    <div class="sec-head"><span class="num">04</span><h2>另外采纳修复的 5 项</h2></div>
+    <table class="data">
+      <thead><tr><th>#</th><th>问题</th><th>修复</th></tr></thead>
+      <tbody>
+        <tr><td>M5</td><td>hydrate 只迁移节点级状态，不迁 output/history 内嵌旧中文状态 → 旧数据触发非法状态迁移报错</td><td>迁移下沉到 output 与 history 每条</td></tr>
+        <tr><td>M6</td><td>资产卡 storageKey 不受禁-dataUrl 约束 → 导入数据可能把整图塞进画布持久化</td><td>schema 加 refine 拒绝 <code>data:</code></td></tr>
+        <tr><td>M8</td><td>图像节点回退误用文本版本上限（10），应为图像 5</td><td>历史裁剪改为按节点类型选上限</td></tr>
+        <tr><td>M4</td><td>衍生卡缺父图仅 warning 后降级为无参考生成（漂移）</td><td>改为<strong>拦截并提示先生成父卡图</strong>，对齐"衍生卡必须以父图为参考"裁决</td></tr>
+        <tr><td>m3</td><td>定点修入口缺费用确认文案</td><td>按钮文案补"将调用 1 次图像生成"</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:14px;color:var(--gray-500);margin-top:14px;">审查专门批评了"部分测试验证实现而非规格"。已补 3 个规格级回归测试锁住修复：首帧强制构图锁参考、旧状态迁移后合法转换、资产卡拒绝 dataUrl。</p>
+  </section>
+
+  <!-- 05 遗留 -->
+  <section>
+    <div class="sec-head"><span class="num">05</span><h2>核实后延后的遗留（已记 TODOS.md，附理由）</h2></div>
+    <p class="sec-intro">以下 7 项经核实判定为"非正确性 critical"，均写清了为什么现在不做、起点在哪。</p>
+    <details>
+      <summary>M2 · 段同步计划非事务化</summary>
+      <div class="detail-body"><p>确认弹窗用旧计划套最新画布，取消不回退。真问题但需给计划加版本戳+确认时重算，改动面大。<strong>缓解</strong>：首次同步免确认、仅结构变化弹窗，竞态窗口小。</p></div>
+    </details>
+    <details>
+      <summary>M7 / M8-回退 · 媒体 Blob 泄漏</summary>
+      <div class="detail-body"><p>弹窗取消/删卡/回退裁掉的图不即时清理。<strong>缓解</strong>：asset store 操作时全局孤儿清理兜底；图像版本上限已封顶增长，仅剩泄漏不构成损坏。</p></div>
+    </details>
+    <details>
+      <summary>M1 · 段实例同步过度标 stale</summary>
+      <div class="detail-body"><p>保留段有产出实例一律标失效，不比对分镜表版本。<strong>过度标 stale 是安全侧</strong>（多重生成一次），非错误；可选优化为按版本豁免未变段。</p></div>
+    </details>
+    <details>
+      <summary>M9 · cardId 冲突未校验 / 格子数=行数无结果校验 / 测试规格化补强</summary>
+      <div class="detail-body"><p>cardId 由 nanoid 生成，冲突概率极低。"格子=镜头"只能靠 prompt 控制，受 P3"不加量化指标"裁决约束，需上视觉分析才能结果校验。若干"验证实现"用例待逐个改为验证不变量。</p></div>
+    </details>
+  </section>
+
+  <!-- 06 浏览器实测 -->
+  <section>
+    <div class="sec-head"><span class="num">06</span><h2>浏览器实测闭环</h2></div>
+    <p class="sec-intro">测试画布 <code>Ve0pabSwTZTJtyWcvwx5O</code>，真实调用图像生成 API。</p>
+    <ul class="highlights">
+      <li>分镜表通过 → 30 个段实例自动展开 → 折叠开关正常。</li>
+      <li>资产卡池实体预填 → 真实生成"周启"角色立绘锚点图（黑衣、干净浅底，符合模板）。</li>
+      <li>保存后下游正确全线标"已失效" → 通过。</li>
+      <li>故事板页两段真实生成（黑白线稿带格号，构图符合方法论）。</li>
+      <li>首帧负路径拦截（无线稿报"请先生成该段故事板页"）；正路径以线稿+资产卡为参考生成彩色首帧，定点修按钮在位。</li>
+      <li>版本历史 Modal 图像大图预览正常。</li>
+    </ul>
+  </section>
+
+  <!-- 07 待拍板 -->
+  <section>
+    <div class="sec-head"><span class="num">07</span><h2>待你拍板 / 下一步</h2></div>
+    <div class="grid">
+      <div class="card">
+        <div class="role">最高优先 · 待拍板</div>
+        <h3>写盘冻结的存储重构</h3>
+        <p>30+ 节点后每次自动保存卡渲染器 10-30 秒，根因是整个画布库存成一坨大 blob 全量序列化。治本＝按项目分 key 存储，超出本期批过范围。<strong>回一句"修"即排期。</strong></p>
+        <span class="badge red">阻塞体验</span>
+      </div>
+      <div class="card">
+        <div class="role">下一阶段 · 前置条件</div>
+        <h3>T10 视频层（九宫格直出）</h3>
+        <p>开工前必须先关 Open Q1：内测网页部署到哪、外部用户 API 额度谁出。到时把选项摆出来给你选。</p>
+        <span class="badge orange">待决策</span>
+      </div>
+      <div class="card">
+        <div class="role">你的作业 · 未回报</div>
+        <h3>问 3 个客户"想改哪层"</h3>
+        <p>剧情 / 分镜 / 首帧 / 视频动作——答案决定阶段内节点接生成的先后顺序，也是对 P1（支配度）的第一次外部检验。</p>
+        <span class="badge gray">待回报</span>
+      </div>
+      <div class="card">
+        <div class="role">建议 · 演示前</div>
+        <h3>新开演示画布</h3>
+        <p>测试画布是旧的"15 段一镜一段"结构（稳定 ID 刻意保留旧身份）；给客户演示建议新开画布走新分段硬规则。七类卡 UI 尚未逐个浏览器点验（引擎有单测锁）。</p>
+        <span class="badge blue">提示</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    infinite-canvas · Toonflow 阶段 2 视觉层 · 交付与对抗审查报告 · 2026-07-13 生成<br>
+    验收口径：看实际 diff、亲自跑测试/构建/类型检查、关键产物浏览器实测 —— 不看口头报告。
+  </footer>
+
+</div>
+</body>
+</html>
