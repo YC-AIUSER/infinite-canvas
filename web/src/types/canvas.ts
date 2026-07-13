@@ -56,7 +56,7 @@ export type ToonflowNodeMetadata = {
     history?: NodeOutput[];
     pendingVideoTask?: {
         taskId: string;
-        provider: "openai" | "seedance";
+        provider: "openai" | "seedance" | "cano";
         model: string;
         upstreamSnapshot: Record<string, number>;
         startedAt: string;
