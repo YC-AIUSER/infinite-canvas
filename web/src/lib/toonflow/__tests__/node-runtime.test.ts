@@ -278,8 +278,9 @@ describe("文本支配度闭环", () => {
         target.metadata!.toonflow!.output = output(target.id, "script", 3, "approved");
         target.metadata!.toonflow!.history = [output(target.id, "script", 1, "approved"), output(target.id, "script", 2, "approved")];
         const result = applyRollback([target], [], target.id, 1);
-        expect(result[0].metadata?.toonflow?.output).toMatchObject({ version: 4, status: "approved", payload: { text: "版本 1" } });
-        expect(result[0].metadata?.toonflow?.history?.map((item) => item.version)).toEqual([1, 2, 3]);
+        expect(result.nodes[0].metadata?.toonflow?.output).toMatchObject({ version: 4, status: "approved", payload: { text: "版本 1" } });
+        expect(result.nodes[0].metadata?.toonflow?.history?.map((item) => item.version)).toEqual([1, 2, 3]);
+        expect(result.orphanedKeys).toEqual([]);
     });
 
     it("回退新版本后传播下游 stale", () => {
@@ -289,14 +290,45 @@ describe("文本支配度闭环", () => {
         const downstream = node("space", "space-contract", "空间", "approved");
         downstream.metadata!.toonflow!.output = { ...output(downstream.id, "space-contract", 1, "approved"), upstreamVersions: { script: 3 } };
         const result = applyRollback([target, downstream], [connection("script", "space")], target.id, 1);
-        expect(result[1].metadata?.toonflow?.status).toBe("stale");
+        expect(result.nodes[1].metadata?.toonflow?.status).toBe("stale");
     });
 
     it("找不到目标历史版本时不修改节点", () => {
         const target = node("script", "script", "版本 2", "approved");
         target.metadata!.toonflow!.output = output(target.id, "script", 2, "approved");
         const nodes = [target];
-        expect(applyRollback(nodes, [], target.id, 1)).toBe(nodes);
+        const result = applyRollback(nodes, [], target.id, 1);
+        expect(result.nodes).toBe(nodes);
+        expect(result.orphanedKeys).toEqual([]);
+    });
+
+    const imageOutput = (nodeId: string, version: number, keys: string[]): NodeOutput => ({
+        nodeId,
+        kind: "storyboard-page",
+        version,
+        status: "approved",
+        payload: { imageKeys: keys },
+        upstreamVersions: {},
+        generatedAt: `2026-07-12T00:00:${String(version).padStart(2, "0")}.000Z`,
+    });
+
+    it("图像节点回退超版本上限时,返回被裁旧版本独有的孤儿媒体键", () => {
+        // 图像历史上限 5:5 个历史版本 + 当前版本,回退触发 appendHistory 从头裁掉 v1。
+        const target = node("page", "storyboard-page", "首帧", "approved");
+        target.metadata!.toonflow!.output = imageOutput("page", 6, ["image:cur"]);
+        target.metadata!.toonflow!.history = [1, 2, 3, 4, 5].map((v) => imageOutput("page", v, [`image:v${v}`]));
+        const result = applyRollback([target], [], target.id, 3);
+        // allHistory = [v1..v5, cur](6 项),裁到后 5 项 [v2..v5,cur],被裁 v1 → image:v1 成孤儿。
+        expect(result.orphanedKeys).toEqual(["image:v1"]);
+    });
+
+    it("回退不误删仍被保留历史/恢复版本引用的媒体键", () => {
+        const target = node("page", "storyboard-page", "首帧", "approved");
+        // v1 与 cur 共享 image:shared;裁掉 v1 后 image:shared 仍被 cur 引用,不得算孤儿。
+        target.metadata!.toonflow!.output = imageOutput("page", 6, ["image:shared"]);
+        target.metadata!.toonflow!.history = [imageOutput("page", 1, ["image:shared"]), ...[2, 3, 4, 5].map((v) => imageOutput("page", v, [`image:v${v}`]))];
+        const result = applyRollback([target], [], target.id, 3);
+        expect(result.orphanedKeys).not.toContain("image:shared");
     });
 
     it("沿用 stale 产出恢复 approved、刷新快照且不增加版本", () => {

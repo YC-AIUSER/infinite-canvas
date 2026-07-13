@@ -2731,12 +2731,18 @@ function InfiniteCanvasPage() {
 
     const handleToonflowRollback = useCallback(
         (nodeId: string, version: number) => {
-            const next = applyRollback(nodesRef.current, connectionsRef.current, nodeId, version);
+            const { nodes: next, orphanedKeys } = applyRollback(nodesRef.current, connectionsRef.current, nodeId, version);
             nodesRef.current = next;
             setNodes(next);
             setToonflowHistoryNodeId(null);
             const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
             if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
+            // 先落画布状态,再清回退时被裁旧版本的孤儿媒体(排除仍被引用的键,防误删共享 Blob;失败最多留孤儿由全局兜底扫)。
+            if (orphanedKeys.length) {
+                const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                const orphaned = splitMediaKeysByStore(orphanedKeys.filter((key) => !referencedKeys.has(key)));
+                void Promise.all([deleteStoredImages(orphaned.imageKeys), deleteStoredMedia(orphaned.mediaKeys)]).catch(() => message.warning("历史图像清理失败"));
+            }
         },
         [syncStoryboardInstances],
     );

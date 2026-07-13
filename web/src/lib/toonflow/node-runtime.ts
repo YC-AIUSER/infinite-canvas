@@ -625,14 +625,23 @@ export function applyEditSave(nodes: CanvasNodeData[], connections: CanvasConnec
     return propagateAfterNewVersion(next, connections, nodeId);
 }
 
-export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, targetVersion: number): CanvasNodeData[] {
+export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, targetVersion: number): { nodes: CanvasNodeData[]; orphanedKeys: string[] } {
     const target = nodes.find((node) => node.id === nodeId);
     const toonflow = target?.metadata?.toonflow;
     const currentOutput = toonflow?.output;
     const historical = toonflow?.history?.find((output) => output.version === targetVersion);
-    if (!target || !toonflow || !currentOutput || !historical) return nodes;
+    if (!target || !toonflow || !currentOutput || !historical) return { nodes, orphanedKeys: [] };
 
     const output: NodeOutput = { ...rollbackToVersion(currentOutput, historical).next, generatedAt: new Date().toISOString() };
+    // appendHistory 会从头部裁掉超版本上限的旧历史;被裁历史里独有的媒体键成孤儿,需返回给调用方清理(否则 image_files 泄漏)。
+    const limit = IMAGE_HISTORY_KINDS.has(toonflow.kind) ? VERSION_LIMIT_IMAGE : VERSION_LIMIT_TEXT;
+    const allHistory = [...(toonflow.history ?? []), currentOutput];
+    const history = allHistory.slice(-limit);
+    const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - limit));
+    // 用最终状态(恢复的 output + 保留的 history)反查引用集,任何仍被引用的键都不算孤儿,防误删共享 Blob。
+    const referencedKeys = new Set<string>([...(output.payload.imageKeys ?? []), ...history.flatMap((item) => item.payload.imageKeys ?? [])]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((item) => item.payload.imageKeys ?? []))).filter((key) => !referencedKeys.has(key));
+
     const next = nodes.map<CanvasNodeData>((node) =>
         node.id === nodeId
             ? {
@@ -642,12 +651,12 @@ export function applyRollback(nodes: CanvasNodeData[], connections: CanvasConnec
                       content: payloadContent(output.payload),
                       status: "success",
                       errorDetails: undefined,
-                      toonflow: { ...toonflow, status: output.status, output, history: appendHistory(toonflow.history, currentOutput, toonflow.kind) },
+                      toonflow: { ...toonflow, status: output.status, output, history },
                   },
               }
             : node,
     );
-    return propagateAfterNewVersion(next, connections, nodeId);
+    return { nodes: propagateAfterNewVersion(next, connections, nodeId), orphanedKeys };
 }
 
 export function applyAdoptStale(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string): CanvasNodeData[] {
