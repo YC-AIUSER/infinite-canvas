@@ -18,6 +18,7 @@ import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
+import { computeAutoLayout } from "@/lib/canvas/auto-layout";
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { App, Button, Dropdown, Input, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
@@ -1124,6 +1125,17 @@ function InfiniteCanvasPage() {
         historyRef.current.future.push(current);
         applyHistory(previous);
     }, [applyHistory]);
+
+    const tidyCanvas = useCallback(() => {
+        const layout = computeAutoLayout(nodes, connections);
+        setNodes((prev) =>
+            prev.map((node) => {
+                const next = layout.get(node.id);
+                return next ? { ...node, position: next } : node;
+            }),
+        );
+        setSelectedNodeIds(new Set());
+    }, [nodes, connections]);
 
     const redoCanvas = useCallback(() => {
         const next = historyRef.current.future.pop();
@@ -3563,6 +3575,7 @@ function InfiniteCanvasPage() {
                     onAddText={() => createNode(CanvasNodeType.Text)}
                     onAddConfig={() => createNode(CanvasNodeType.Config)}
                     onAddGroup={() => createNode(CanvasNodeType.Group)}
+                    onTidy={tidyCanvas}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     onUpload={() => handleUploadRequest()}

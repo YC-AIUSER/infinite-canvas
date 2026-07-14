@@ -1,4 +1,5 @@
 import type { CanvasConnection, CanvasNodeData, ToonflowNodeKind } from "../../types/canvas";
+import { resolveFreePosition } from "../canvas/free-position";
 import { diffSegments, groupRowsBySegment, reconcileInstances, type SegmentInstance, type SegmentPlan } from "./segments";
 
 const INSTANCE_KINDS = ["storyboard-page", "keyframes", "video-workbench"] as const;
@@ -194,7 +195,9 @@ export function applyInstanceSync(
 
     for (const item of plan.toCreate) {
         const root = roots.get(item.kind)!;
-        nextNodes.push(createInstance(root, item.segmentId, item.segmentIndex, createId()));
+        const instance = createInstance(root, item.segmentId, item.segmentIndex, createId());
+        const position = resolveFreePosition(instance.position, { width: instance.width, height: instance.height }, nextNodes);
+        nextNodes.push({ ...instance, position });
     }
 
     let nextConnections = connections.filter((connection) => !archiveIds.has(connection.fromNodeId) && !archiveIds.has(connection.toNodeId));

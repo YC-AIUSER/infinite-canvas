@@ -118,7 +118,7 @@ describe("Toonflow segment instances", () => {
             ["id-5", "id-6"],
         ]);
         expect(instances[0].position).toEqual({ x: 500, y: 350 });
-        expect(instances[3].position).toEqual({ x: 856, y: 350 });
+        expect(instances[3].position).toEqual({ x: 856, y: 566 });
     });
 
     it("再次同步仅把有产出的保留实例置 stale，empty 实例不动", () => {
@@ -258,5 +258,33 @@ describe("Toonflow segment instances", () => {
         const fresh = planInstanceSync(applied.nodes, "storyboard");
 
         expect(resolveConfirmedSync(confirmed, fresh)).toEqual({ action: "dismiss" });
+    });
+});
+
+describe("applyInstanceSync 生成防碰撞", () => {
+    it("新建实例不与画布上已有节点重叠", () => {
+        // storyboard-page 根在 (500,100) 320x190;段0 实例理想落点约 (500,350)。
+        // 放一个挡在该处的无关节点,新建实例应被向下挪开。
+        const blocker: CanvasNodeData = {
+            id: "blocker",
+            type: CanvasNodeType.Image,
+            title: "无关节点",
+            position: { x: 500, y: 350 },
+            width: 320,
+            height: 190,
+            metadata: {},
+        };
+        const nodes = [...template([row("seg-1", 1)]), blocker];
+        const plan = planInstanceSync(nodes, "storyboard");
+        expect(plan).not.toBeNull();
+        const result = applyInstanceSync(nodes, [], plan!, idFactory());
+
+        const created = result.nodes.filter((node) => node.metadata?.toonflow?.segmentId === "seg-1");
+        expect(created.length).toBeGreaterThan(0);
+        const overlap = (a: CanvasNodeData, b: CanvasNodeData) =>
+            a.position.x < b.position.x + b.width && a.position.x + a.width > b.position.x && a.position.y < b.position.y + b.height && a.position.y + a.height > b.position.y;
+        for (const node of created) {
+            expect(overlap(node, blocker)).toBe(false);
+        }
     });
 });
