@@ -152,5 +152,5 @@ export const toolDescriptions: Record<ToolName, string> = {
     workbench_video_generate: "在视频创作台填入提示词并按需设置 model、size、seconds、resolution、generateAudio、watermark，run 默认 true 会自动点击生成按钮。会自动跳转到视频创作台。生成为异步过程，工具返回代表已提交。",
     prompts_search: "搜索提示词库（第三方提示词合集），支持 keyword、category、tags 过滤和 page/pageSize 分页，返回标题、提示词、分类、标签、封面等。",
     assets_list: "列出用户「我的素材」，支持 kind（text/image/video）过滤、keyword 搜索和 page/pageSize 分页。为控制体积不返回图片/视频原始 data，仅返回封面与元信息。",
-    assets_add: "向「我的素材」新增素材。kind=text 时用 content 传文本内容；kind=image 时用 imageUrl 传图片地址或 dataURL。可附带 title、tags、source、note。",
+    assets_add: "向「我的素材」新增素材。kind=text 时用 content 传文本内容；kind=image 时用 imageUrl 传图片，支持三种：本地文件绝对路径（如 D:/pics/a.png 或 /Users/me/a.png，由本地 Agent 读取，用户让你上传本机文件时优先用此方式）、公网图片 URL、dataURL。可附带 title、tags、source、note。",
 };

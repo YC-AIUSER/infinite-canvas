@@ -32,7 +32,7 @@ export async function runCodexTurn(prompt: string, emit: AgentEmit, attachments:
 
 export function interruptCodexTurn() {
     if (!codexApp) return false;
-    return codexApp.interruptCurrentTurn();
+    return codexApp.interruptCurrentTurn(codexThreadId);
 }
 
 async function runCodexTurnNow(prompt: string, emit: AgentEmit, attachments: AgentAttachment[], options: CodexRunOptions) {
@@ -205,14 +205,16 @@ class CodexAppClient {
         await new Promise((resolve, reject) => this.activeTurns.set(turnId, { resolve, reject }));
     }
 
-    interruptCurrentTurn() {
+    interruptCurrentTurn(threadId: string) {
         if (this.activeTurns.size === 0) return false;
-        try {
-            this.child.kill("SIGINT");
-            return true;
-        } catch {
-            return false;
-        }
+        const turnId = [...this.activeTurns.keys()][0];
+        if (!turnId) return false;
+        // 用 app-server 协议的 turn/interrupt 精准取消当前 turn。
+        // 不再 kill("SIGINT")：Windows 上 Node 投递不到真正的 SIGINT（会被映射成硬 TerminateProcess，
+        // 触发不了优雅取消，且 Windows 无进程组、会遗留 app-server 派生的子进程继续跑）。
+        // turn 会通过已有的 turn.completed(interrupted) 通知自然收尾（resolve activeTurn + emit agent_done）。
+        this.request("turn/interrupt", { threadId, turnId }).catch((error) => this.emit("agent_log", { text: `turn/interrupt failed: ${errorMessage(error)}` }));
+        return true;
     }
 
     private request(method: string, params: unknown) {
