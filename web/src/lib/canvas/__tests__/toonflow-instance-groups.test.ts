@@ -40,14 +40,36 @@ describe("reconcileInstanceGroups", () => {
         expect(out.find((node) => node.id === "v1")?.metadata?.batchRootId).toBeUndefined();
     });
 
-    it("Group 是成员当前位置的包围盒(含 root 与实例)", () => {
+    it("组内紧凑:root 当头部在实例上方,组框含全部成员", () => {
         const out = reconcileInstanceGroups([root("r", "keyframes", 100, 100), instance("k1", "keyframes", "seg1", 100, 400)]);
         const group = out.find((node) => node.id === instanceGroupId("r"))!;
+        const rootOut = out.find((node) => node.id === "r")!;
+        const k1 = out.find((node) => node.id === "k1")!;
 
-        expect(group.position.x).toBeLessThanOrEqual(100);
-        expect(group.position.y).toBeLessThanOrEqual(100);
-        expect(group.position.x + group.width).toBeGreaterThanOrEqual(400);
-        expect(group.position.y + group.height).toBeGreaterThanOrEqual(580);
+        // root 作头部,位于段实例上方
+        expect(rootOut.position.y).toBeLessThan(k1.position.y);
+        // 组框包住 root 与实例
+        expect(group.position.x).toBeLessThanOrEqual(Math.min(rootOut.position.x, k1.position.x));
+        expect(group.position.y).toBeLessThanOrEqual(rootOut.position.y);
+        expect(group.position.x + group.width).toBeGreaterThanOrEqual(Math.max(rootOut.position.x + rootOut.width, k1.position.x + k1.width));
+        expect(group.position.y + group.height).toBeGreaterThanOrEqual(k1.position.y + k1.height);
+    });
+
+    it("多个环节组分道、组框互不重叠", () => {
+        const out = reconcileInstanceGroups([
+            root("r-sp", "storyboard-page", 0, 0),
+            instance("sp1", "storyboard-page", "seg1", 0, 300),
+            root("r-kf", "keyframes", 380, 0),
+            instance("kf1", "keyframes", "seg1", 380, 300),
+        ]);
+        const g1 = out.find((node) => node.id === instanceGroupId("r-sp"))!;
+        const g2 = out.find((node) => node.id === instanceGroupId("r-kf"))!;
+        const overlap =
+            g1.position.x < g2.position.x + g2.width &&
+            g2.position.x < g1.position.x + g1.width &&
+            g1.position.y < g2.position.y + g2.height &&
+            g2.position.y < g1.position.y + g1.height;
+        expect(overlap).toBe(false);
     });
 
     it("Group 容器不带 toonflow", () => {
@@ -70,12 +92,13 @@ describe("reconcileInstanceGroups", () => {
         expect(out.find((node) => node.id === "k2")?.metadata?.groupId).toBeUndefined();
     });
 
-    it("幂等:连跑两次结构一致、成员位置不变", () => {
+    it("幂等:连跑两次结构与布局一致", () => {
         const once = reconcileInstanceGroups([root("r", "keyframes", 5, 5), instance("k1", "keyframes", "seg1", 5, 300)]);
         const twice = reconcileInstanceGroups(once);
 
         expect(twice.map((node) => node.id).sort()).toEqual(once.map((node) => node.id).sort());
-        expect(twice.find((node) => node.id === "k1")?.position).toEqual({ x: 5, y: 300 });
+        // 布局后位置稳定:第二次与第一次一致(而非等于输入)
+        expect(twice.find((node) => node.id === "k1")?.position).toEqual(once.find((node) => node.id === "k1")?.position);
     });
 
     it("root 消失后残留组被清、成员 groupId 清除", () => {
