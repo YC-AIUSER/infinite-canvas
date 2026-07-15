@@ -315,12 +315,23 @@ describe("段实例组化 · 零污染/内核守卫", () => {
 });
 ```
 
-- [ ] **Step 3: 跑测试确认通过 + 全量回归**
+- [ ] **Step 3: 更新现存 instances.test.ts(删冗余 batch 断言,保行为覆盖)**
+
+移除段实例 batch 标记后,`web/src/lib/toonflow/__tests__/instances.test.ts` 里若干 `batchChildIds` 断言会失效。**这些断言与"连线/segmentIndex"断言重复,配对与重排行为已被后者覆盖**。按下述**替换**(不是删覆盖):
+
+- 用例「首次同步…写入三个根的 batchChildIds」(约 line 92):**删除** line 105-107 的三条 `batchChildIds` 断言;标题改为「首次同步为每段创建三类实例、链式配对」。**保留** 97-104 的实例顺序断言与 108-119 的连线断言(配对由连线验)。
+- 用例「消失段…从根 batchChildIds 剔除」(约 line 160):**删除** line 170-172 的三条 `batchChildIds` 断言;标题改为「消失段会归档并断开全部连线」。保留归档(168)与连线断开(169)断言。
+- 用例「段顺序变化…根节点排序」(约 line 188):**删除** line 199-200 的两条 `batchChildIds` 断言;标题改为「段顺序变化会更新实例 segmentIndex」。保留 197-198 的 segmentIndex 断言与 201 的 title 断言(重排由 segmentIndex 验)。
+- 用例「删除归档实例…」(约 line 204):**不动**(它测的是 `deleteArchivedInstance`,本任务未改该函数;它手动构造 batchChildIds,仍通过)。
+
+**硬约束:只删这四处与已移除的 batch 标记直接相关的冗余断言,不得删改任何验证 create/archive/reindex/连线/stale/位置 的断言。**
+
+- [ ] **Step 4: 跑测试确认通过 + 全量回归**
 
 Run: `cd web && npx vitest run src/lib/canvas/__tests__/toonflow-instance-groups-isolation.test.ts && npm test`
-Expected: PASS(含现有 instances 相关测试仍绿——若现有测试断言了 isBatchRoot,需按新语义更新为"段实例不再是 batchRoot";这类更新属预期,连同说明)
+Expected: PASS(instances.test.ts 更新后仍绿,覆盖不减)
 
-- [ ] **Step 4: 提交**(Claude)
+- [ ] **Step 5: 提交**(Claude)
 
 ---
 
