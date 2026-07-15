@@ -45,6 +45,7 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { isAssetsProjectionNode, reconcileAssetsProjection, removeCardFromStageCards } from "@/lib/canvas/toonflow-assets-projection";
+import { reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
@@ -469,10 +470,11 @@ function InfiniteCanvasPage() {
             const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
             const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
             const projected = await applyAssetsProjection(restoredNodes);
+            const withInstanceGroups = reconcileInstanceGroups(projected);
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
-            nodesRef.current = projected;
+            nodesRef.current = withInstanceGroups;
             connectionsRef.current = project.connections;
-            setNodes(projected);
+            setNodes(withInstanceGroups);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
             setActiveChatId(project.activeChatId || null);
@@ -485,7 +487,7 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
             lastHistoryRef.current = {
-                nodes: projected,
+                nodes: withInstanceGroups,
                 connections: project.connections,
                 chatSessions: restoredSessions,
                 activeChatId: project.activeChatId || null,
@@ -2880,11 +2882,12 @@ function InfiniteCanvasPage() {
     );
 
     const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
-        const next = applyInstanceSync(nodesRef.current, connectionsRef.current, plan, () => nanoid());
-        nodesRef.current = next.nodes;
-        connectionsRef.current = next.connections;
-        setNodes(next.nodes);
-        setConnections(next.connections);
+        const synced = applyInstanceSync(nodesRef.current, connectionsRef.current, plan, () => nanoid());
+        const withGroups = reconcileInstanceGroups(synced.nodes);
+        nodesRef.current = withGroups;
+        connectionsRef.current = synced.connections;
+        setNodes(withGroups);
+        setConnections(synced.connections);
     }, []);
 
     const syncStoryboardInstances = useCallback(
@@ -3036,9 +3039,10 @@ function InfiniteCanvasPage() {
     const handleDeleteArchivedInstance = useCallback(async (nodeId: string) => {
         // 先落画布状态再清媒体:媒体清理失败最多留下孤儿 key,反序会出现节点引用已删媒体。
         const next = deleteArchivedInstance(nodesRef.current, connectionsRef.current, nodeId);
-        nodesRef.current = next.nodes;
+        const withGroups = reconcileInstanceGroups(next.nodes);
+        nodesRef.current = withGroups;
         connectionsRef.current = next.connections;
-        setNodes(next.nodes);
+        setNodes(withGroups);
         setConnections(next.connections);
         // C4: 排除删除后仍被其他节点/副本引用的键,避免误删共享 Blob。
         const referencedKeys = new Set<string>([...collectImageStorageKeys(next.nodes), ...collectMediaStorageKeys(next.nodes)]);
