@@ -103,4 +103,14 @@ describe("reconcileInstanceGroups", () => {
         expect(image?.metadata?.batchChildIds).toEqual(["c1"]);
         expect(image?.metadata?.groupId).toBeUndefined();
     });
+
+    it("段实例被拖入外来组(groupId 被改)后,reconcile 重新归回其实例组", () => {
+        const nodes = [root("r", "keyframes"), instance("k1", "keyframes", "seg1", 0, 240)];
+        const grouped = reconcileInstanceGroups(nodes);
+        // 模拟"段实例拖进普通 Group":其 groupId 被 snap 改成外来组 id
+        const dragged = grouped.map((node) => (node.id === "k1" ? { ...node, metadata: { ...node.metadata, groupId: "some-normal-group" } } : node));
+        const out = reconcileInstanceGroups(dragged);
+        // 成员身份由 toonflow 决定,权威地归回其实例组,不被外来 groupId 带走
+        expect(out.find((node) => node.id === "k1")?.metadata?.groupId).toBe(instanceGroupId("r"));
+    });
 });

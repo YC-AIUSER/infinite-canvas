@@ -45,7 +45,7 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { isAssetsProjectionNode, reconcileAssetsProjection, removeCardFromStageCards } from "@/lib/canvas/toonflow-assets-projection";
-import { isInstanceGroupNode, reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
+import { isInstanceGroupMemberNode, isInstanceGroupNode, reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
@@ -1336,7 +1336,9 @@ function InfiniteCanvasPage() {
                     if (node.metadata?.groupId === groupId) return node;
                     return { ...node, metadata: { ...node.metadata, groupId } };
                 });
-                const next = grouped.some((node) => movedIds.has(node.id) && (isInstanceGroupNode(node) || node.metadata?.groupId?.startsWith("instance-group-")))
+                // 用拖动节点的稳定身份(段实例/实例组)判断是否重组,而非拖放后的 groupId——
+                // 否则把段实例拖进普通 Group 时会漏掉 reconcile,使其脱离权威实例组。
+                const next = grouped.some((node) => movedIds.has(node.id) && (isInstanceGroupNode(node) || isInstanceGroupMemberNode(node)))
                     ? reconcileInstanceGroups(grouped)
                     : grouped;
                 nodesRef.current = next;

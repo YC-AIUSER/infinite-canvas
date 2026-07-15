@@ -12,6 +12,12 @@ export function isInstanceGroupNode(node: CanvasNodeData): boolean {
     return node.type === CanvasNodeType.Group && node.id.startsWith(GROUP_PREFIX) && Boolean(node.metadata?.projectionOf);
 }
 
+/** 属于段实例分组体系的节点:环节 root 或段实例(toonflow.kind 为多段环节类)。拖拽后判断是否需重跑 reconcile 用——按稳定的 toonflow 身份识别,不看拖放后的 groupId。 */
+export function isInstanceGroupMemberNode(node: CanvasNodeData): boolean {
+    const toonflow = node.metadata?.toonflow;
+    return Boolean(toonflow && INSTANCE_KINDS.has(toonflow.kind));
+}
+
 function isInstanceRoot(node: CanvasNodeData): boolean {
     const toonflow = node.metadata?.toonflow;
     return Boolean(toonflow && INSTANCE_KINDS.has(toonflow.kind) && !toonflow.segmentId);
