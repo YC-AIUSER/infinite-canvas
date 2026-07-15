@@ -106,6 +106,10 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     groupId?: string;
+    /** 投影标记:本节点是某 Toonflow 环节(如资产库)的投影组容器。 */
+    projectionOf?: { stageNodeId: string; kind: ToonflowNodeKind };
+    /** 投影标记:本节点是某环节某张资产卡的投影子节点,回指真相源。 */
+    cardProjection?: { stageNodeId: string; cardId: string };
     toonflow?: ToonflowNodeMetadata;
     requiresReferenceImage?: boolean; // 技能生产红线：生图时参考图为空禁止生成
 };

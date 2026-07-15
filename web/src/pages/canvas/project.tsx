@@ -44,6 +44,7 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
+import { isAssetsProjectionNode, reconcileAssetsProjection, removeCardFromStageCards } from "@/lib/canvas/toonflow-assets-projection";
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
@@ -442,6 +443,19 @@ function InfiniteCanvasPage() {
         [modal, stopGenerationByRunningId],
     );
 
+    // 投影层:纯函数出结构,再为新子节点解析 storageKey→content(复用图片 hydrate 成法)。真相源 cards[] 不变。
+    const applyAssetsProjection = useCallback(async (input: CanvasNodeData[]): Promise<CanvasNodeData[]> => {
+        const structured = reconcileAssetsProjection(input);
+        return Promise.all(
+            structured.map(async (node) => {
+                if (!isAssetsProjectionNode(node) || node.type !== CanvasNodeType.Image) return node;
+                if (node.metadata?.content || !node.metadata?.storageKey) return node;
+                const url = await resolveImageUrl(node.metadata.storageKey, "");
+                return url ? { ...node, metadata: { ...node.metadata, content: url } } : node;
+            }),
+        );
+    }, []);
+
     useEffect(() => {
         if (!hydrated) return;
         setProjectLoaded(false);
@@ -454,10 +468,11 @@ function InfiniteCanvasPage() {
         const restore = async () => {
             const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
             const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
+            const projected = await applyAssetsProjection(restoredNodes);
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
-            nodesRef.current = restoredNodes;
+            nodesRef.current = projected;
             connectionsRef.current = project.connections;
-            setNodes(restoredNodes);
+            setNodes(projected);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
             setActiveChatId(project.activeChatId || null);
@@ -470,7 +485,7 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
             lastHistoryRef.current = {
-                nodes: restoredNodes,
+                nodes: projected,
                 connections: project.connections,
                 chatSessions: restoredSessions,
                 activeChatId: project.activeChatId || null,
@@ -481,7 +496,7 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, navigate, openProject, projectId]);
+    }, [applyAssetsProjection, hydrated, navigate, openProject, projectId]);
 
     useEffect(() => {
         if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
@@ -2919,12 +2934,16 @@ function InfiniteCanvasPage() {
         setToonflowEditNodeId(null);
     }, []);
 
-    const handleToonflowAssetCardsSave = useCallback((nodeId: string, cards: AssetCard[]) => {
-        const next = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
-        nodesRef.current = next;
-        setNodes(next);
-        setToonflowAssetCardsNodeId(null);
-    }, []);
+    const handleToonflowAssetCardsSave = useCallback(
+        async (nodeId: string, cards: AssetCard[]) => {
+            const saved = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
+            const next = await applyAssetsProjection(saved);
+            nodesRef.current = next;
+            setNodes(next);
+            setToonflowAssetCardsNodeId(null);
+        },
+        [applyAssetsProjection],
+    );
 
     const handleToonflowAssetCardGenerate = useCallback(
         async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {
@@ -2966,6 +2985,34 @@ function InfiniteCanvasPage() {
             return (await uploadImage(image.dataUrl)).storageKey;
         },
         [effectiveConfig, isAiConfigReady, message, openConfigDialog],
+    );
+
+    // 投影子节点"删除":删对应 cards[] 一张卡,经保存漏斗同步(会连带重建投影)。
+    const handleAssetCardNodeDelete = useCallback(
+        async (childNode: CanvasNodeData) => {
+            const ref = childNode.metadata?.cardProjection;
+            if (!ref) return;
+            const nextCards = removeCardFromStageCards(nodesRef.current, ref.stageNodeId, ref.cardId);
+            await handleToonflowAssetCardsSave(ref.stageNodeId, nextCards);
+        },
+        [handleToonflowAssetCardsSave],
+    );
+
+    // 投影子节点"重生成":复用单卡生成,写回该卡 storageKey,经保存漏斗同步。
+    const handleAssetCardNodeRegenerate = useCallback(
+        async (childNode: CanvasNodeData) => {
+            const ref = childNode.metadata?.cardProjection;
+            if (!ref) return;
+            const stage = nodesRef.current.find((node) => node.id === ref.stageNodeId);
+            const cards = stage?.metadata?.toonflow?.output?.payload.cards ?? [];
+            const card = cards.find((item) => item.cardId === ref.cardId);
+            if (!card) return;
+            const newKey = await handleToonflowAssetCardGenerate(ref.stageNodeId, card, cards);
+            if (!newKey) return;
+            const nextCards = cards.map((item) => (item.cardId === ref.cardId ? { ...item, storageKey: newKey } : item));
+            await handleToonflowAssetCardsSave(ref.stageNodeId, nextCards);
+        },
+        [handleToonflowAssetCardGenerate, handleToonflowAssetCardsSave],
     );
 
     const handleToonflowRollback = useCallback(
@@ -3560,7 +3607,11 @@ function InfiniteCanvasPage() {
                     onReversePrompt={createImageReversePromptNodes}
                     onRetry={(node) => void handleRetryNode(node)}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
-                    onDelete={(node) => deleteNodes(new Set([node.id]))}
+                    onRegenerateCard={(node) => void handleAssetCardNodeRegenerate(node)}
+                    onDelete={(node) => {
+                        if (node.metadata?.cardProjection) return void handleAssetCardNodeDelete(node);
+                        deleteNodes(new Set([node.id]));
+                    }}
                 />
 
                 <CanvasToolbar
