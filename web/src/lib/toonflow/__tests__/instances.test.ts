@@ -89,7 +89,7 @@ function sync(nodes: CanvasNodeData[], connections: CanvasConnection[] = []) {
 }
 
 describe("Toonflow segment instances", () => {
-    it("首次同步为每段创建三类实例、链式配对并写入三个根的 batchChildIds", () => {
+    it("首次同步为每段创建三类实例、链式配对", () => {
         const result = sync(template([row("seg-a", 1), row("seg-a", 2), row("seg-b", 1)]));
         const instances = result.nodes.filter((node) => node.metadata?.toonflow?.segmentId);
 
@@ -102,9 +102,6 @@ describe("Toonflow segment instances", () => {
             ["seg-b", "keyframes"],
             ["seg-b", "video-workbench"],
         ]);
-        expect(result.nodes.find((node) => node.id === "storyboard-root")?.metadata?.batchChildIds).toEqual(["id-1", "id-4"]);
-        expect(result.nodes.find((node) => node.id === "keyframes-root")?.metadata?.batchChildIds).toEqual(["id-2", "id-5"]);
-        expect(result.nodes.find((node) => node.id === "video-root")?.metadata?.batchChildIds).toEqual(["id-3", "id-6"]);
         expect(result.connections.map((connection) => [connection.fromNodeId, connection.toNodeId])).toEqual([
             ["storyboard-root", "id-1"],
             ["storyboard-root", "id-4"],
@@ -157,7 +154,7 @@ describe("Toonflow segment instances", () => {
         expect(result.nodes.filter((node) => node.metadata?.toonflow?.segmentId)).toHaveLength(6);
     });
 
-    it("消失段会归档、断开全部连线并从根 batchChildIds 剔除", () => {
+    it("消失段会归档并断开全部连线", () => {
         const first = sync(template([row("seg-a", 1), row("seg-b", 1)]));
         const segBIds = first.nodes.filter((node) => node.metadata?.toonflow?.segmentId === "seg-b").map((node) => node.id);
         const nodes = first.nodes.map((node) => (node.id === "storyboard" ? storyboard([row("seg-a", 1)]) : node));
@@ -167,9 +164,6 @@ describe("Toonflow segment instances", () => {
         expect(new Set(plan.toArchive)).toEqual(new Set(segBIds));
         expect(result.nodes.filter((node) => segBIds.includes(node.id)).every((node) => node.metadata?.toonflow?.archived)).toBe(true);
         expect(result.connections.some((connection) => segBIds.includes(connection.fromNodeId) || segBIds.includes(connection.toNodeId))).toBe(false);
-        expect(result.nodes.find((node) => node.id === "storyboard-root")?.metadata?.batchChildIds).not.toContain(segBIds[0]);
-        expect(result.nodes.find((node) => node.id === "keyframes-root")?.metadata?.batchChildIds).not.toContain(segBIds[1]);
-        expect(result.nodes.find((node) => node.id === "video-root")?.metadata?.batchChildIds).not.toContain(segBIds[2]);
     });
 
     it("已归档实例不参与后续差分并会为重新出现的段新建实例", () => {
@@ -185,7 +179,7 @@ describe("Toonflow segment instances", () => {
         expect(plan.toCreate.every((item) => item.segmentId === "seg-a")).toBe(true);
     });
 
-    it("段顺序变化会更新实例 segmentIndex 与根节点排序", () => {
+    it("段顺序变化会更新实例 segmentIndex", () => {
         const first = sync(template([row("seg-a", 1), row("seg-b", 1)]));
         const nodes = first.nodes.map((node) => (node.id === "storyboard" ? storyboard([row("seg-b", 1), row("seg-a", 1)]) : node));
         const plan = planInstanceSync(nodes, "storyboard")!;
@@ -196,8 +190,6 @@ describe("Toonflow segment instances", () => {
         expect(plan.reindex).toHaveLength(6);
         expect(segA.every((node) => node.metadata?.toonflow?.segmentIndex === 1)).toBe(true);
         expect(segB.every((node) => node.metadata?.toonflow?.segmentIndex === 0)).toBe(true);
-        expect(result.nodes.find((node) => node.id === "storyboard-root")?.metadata?.batchChildIds).toEqual(["id-4", "id-1"]);
-        expect(result.nodes.find((node) => node.id === "video-root")?.metadata?.batchChildIds).toEqual(["id-6", "id-3"]);
         expect(segA.every((node) => node.title.endsWith("段2"))).toBe(true);
     });
 

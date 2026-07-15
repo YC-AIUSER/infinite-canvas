@@ -34,6 +34,7 @@ type CanvasNodeHoverToolbarProps = {
     onReversePrompt: (node: CanvasNodeData) => void;
     onRetry: (node: CanvasNodeData) => void;
     onToggleFreeResize: (node: CanvasNodeData) => void;
+    onRegenerateCard: (node: CanvasNodeData) => void;
     onDelete: (node: CanvasNodeData) => void;
 };
 
@@ -71,6 +72,7 @@ export function CanvasNodeHoverToolbar({
     onReversePrompt,
     onRetry,
     onToggleFreeResize,
+    onRegenerateCard,
     onDelete,
 }: CanvasNodeHoverToolbarProps) {
     const [quickImageToolIds, setQuickImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
@@ -103,6 +105,29 @@ export function CanvasNodeHoverToolbar({
     const activeNode = node;
     const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
     const top = viewport.y + node.position.y * viewport.k - 14;
+    const isAssetCard = Boolean(node.metadata?.cardProjection);
+    if (isAssetCard) {
+        const cardTools: ToolbarTool[] = [
+            { id: "info", title: "查看节点信息", label: "信息", icon: <Info className="size-4" />, onClick: () => onInfo(node) },
+            { id: "regenCard", title: "重生成这张资产卡", label: "重生成", icon: <RefreshCw className="size-4" />, onClick: () => onRegenerateCard(node) },
+            ...(node.metadata?.content ? [{ id: "download", title: "下载图片", label: "下载", icon: <Download className="size-4" />, onClick: () => onDownload(node) }] : []),
+            { id: "delete", title: "删除这张资产卡", label: "删除", icon: <Trash2 className="size-4" />, onClick: () => onDelete(node), danger: true },
+        ];
+        return (
+            <div
+                className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+                style={{ left, top }}
+                onMouseEnter={() => onKeep(node.id)}
+                onMouseLeave={() => onLeave()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+            >
+                {cardTools.map((tool) => (
+                    <ToolbarAction key={tool.id} {...tool} showLabel={showImageToolLabels} />
+                ))}
+            </div>
+        );
+    }
     const isToonflow = Boolean(node.metadata?.toonflow);
     const isImage = !isToonflow && node.type === CanvasNodeType.Image;
     const isVideo = !isToonflow && node.type === CanvasNodeType.Video;

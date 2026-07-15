@@ -44,6 +44,8 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
+import { isAssetsProjectionNode, reconcileAssetsProjection, removeCardFromStageCards } from "@/lib/canvas/toonflow-assets-projection";
+import { isInstanceGroupMemberNode, isInstanceGroupNode, reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
@@ -283,6 +285,8 @@ function InfiniteCanvasPage() {
     const didInitialCenterRef = useRef(false);
     const rafRef = useRef<number | null>(null);
     const nodeDraggingRef = useRef(false);
+    const assetsProjectionVersionRef = useRef(0);
+    const restoreVersionRef = useRef(0);
     const dragRef = useRef<{
         isDraggingNode: boolean;
         hasMoved: boolean;
@@ -442,7 +446,47 @@ function InfiniteCanvasPage() {
         [modal, stopGenerationByRunningId],
     );
 
+    // 投影结构同步落地；图片内容异步增量补齐，避免晚到结果用旧快照覆盖画布。
+    const applyAssetsProjection = useCallback((input: CanvasNodeData[]) => {
+        return { nodes: reconcileAssetsProjection(input), version: ++assetsProjectionVersionRef.current };
+    }, []);
+
+    const hydrateAssetsProjectionContent = useCallback((input: CanvasNodeData[], version: number, isCurrent: () => boolean) => {
+        input.forEach((node) => {
+            if (!isAssetsProjectionNode(node) || node.type !== CanvasNodeType.Image || node.metadata?.content || !node.metadata?.storageKey) return;
+            const { id, metadata } = node;
+            void resolveImageUrl(metadata.storageKey, "").then((content) => {
+                if (!content || version !== assetsProjectionVersionRef.current || !isCurrent()) return;
+                setNodes((prev) => {
+                    if (version !== assetsProjectionVersionRef.current || !isCurrent()) return prev;
+                    let changed = false;
+                    const next = prev.map((current) => {
+                        if (current.id !== id || current.metadata?.storageKey !== metadata.storageKey || current.metadata?.content) return current;
+                        changed = true;
+                        return { ...current, metadata: { ...current.metadata, content } };
+                    });
+                    if (changed) nodesRef.current = next;
+                    return changed ? next : prev;
+                });
+            }).catch(() => undefined);
+        });
+    }, []);
+
+    const handleToonflowAssetCardsSave = useCallback(
+        (nodeId: string, cards: AssetCard[]) => {
+            const saved = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
+            const { nodes: next, version } = applyAssetsProjection(saved);
+            nodesRef.current = next;
+            setNodes(next);
+            hydrateAssetsProjectionContent(next, version, () => true);
+            setToonflowAssetCardsNodeId(null);
+        },
+        [applyAssetsProjection, hydrateAssetsProjectionContent],
+    );
+
     useEffect(() => {
+        const restoreVersion = ++restoreVersionRef.current;
+        assetsProjectionVersionRef.current += 1;
         if (!hydrated) return;
         setProjectLoaded(false);
         const project = openProject(projectId);
@@ -453,11 +497,16 @@ function InfiniteCanvasPage() {
 
         const restore = async () => {
             const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            if (restoreVersion !== restoreVersionRef.current) return;
             const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
+            const { nodes: projected, version } = applyAssetsProjection(restoredNodes);
+            const withInstanceGroups = reconcileInstanceGroups(projected);
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
-            nodesRef.current = restoredNodes;
+            if (restoreVersion !== restoreVersionRef.current) return;
+            nodesRef.current = withInstanceGroups;
             connectionsRef.current = project.connections;
-            setNodes(restoredNodes);
+            setNodes(withInstanceGroups);
+            hydrateAssetsProjectionContent(withInstanceGroups, version, () => restoreVersion === restoreVersionRef.current);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
             setActiveChatId(project.activeChatId || null);
@@ -470,7 +519,7 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
             lastHistoryRef.current = {
-                nodes: restoredNodes,
+                nodes: withInstanceGroups,
                 connections: project.connections,
                 chatSessions: restoredSessions,
                 activeChatId: project.activeChatId || null,
@@ -481,7 +530,10 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, navigate, openProject, projectId]);
+        return () => {
+            if (restoreVersion === restoreVersionRef.current) restoreVersionRef.current += 1;
+        };
+    }, [applyAssetsProjection, hydrated, hydrateAssetsProjectionContent, navigate, openProject, projectId]);
 
     useEffect(() => {
         if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
@@ -902,10 +954,27 @@ function InfiniteCanvasPage() {
     const deleteNodes = useCallback(
         (ids: Set<string>) => {
             if (!ids.size) return;
-            const allIds = new Set(ids);
+            const assetCardsByStage = new Map<string, string[]>();
+            const assetCardNodeIds = new Set<string>();
+            nodesRef.current.forEach((node) => {
+                const ref = node.metadata?.cardProjection;
+                if (!ids.has(node.id) || !ref) return;
+                assetCardNodeIds.add(node.id);
+                const cardIds = assetCardsByStage.get(ref.stageNodeId) ?? [];
+                cardIds.push(ref.cardId);
+                assetCardsByStage.set(ref.stageNodeId, cardIds);
+            });
+            for (const [stageNodeId, cardIds] of assetCardsByStage) {
+                let nextCards = removeCardFromStageCards(nodesRef.current, stageNodeId, cardIds[0]);
+                for (const cardId of cardIds.slice(1)) nextCards = nextCards.filter((card) => card.cardId !== cardId);
+                handleToonflowAssetCardsSave(stageNodeId, nextCards);
+            }
+
+            const allIds = new Set([...ids].filter((id) => !assetCardNodeIds.has(id)));
             nodesRef.current.forEach((node) => {
                 if (ids.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => allIds.add(childId));
             });
+            const removedIds = new Set([...allIds, ...assetCardNodeIds]);
             setNodes((prev) => {
                 const next = prev.filter((node) => !allIds.has(node.id));
                 return next.map((node) => {
@@ -928,23 +997,23 @@ function InfiniteCanvasPage() {
                     };
                 });
             });
-            setConnections((prev) => prev.filter((conn) => !allIds.has(conn.fromNodeId) && !allIds.has(conn.toNodeId)));
+            setConnections((prev) => prev.filter((conn) => !removedIds.has(conn.fromNodeId) && !removedIds.has(conn.toNodeId)));
             setSelectedNodeIds(new Set());
             setSelectedConnectionId(null);
-            setHoveredNodeId((current) => (current && allIds.has(current) ? null : current));
-            setToolbarNodeId((current) => (current && allIds.has(current) ? null : current));
-            setDialogNodeId((current) => (current && allIds.has(current) ? null : current));
-            setEditingNodeId((current) => (current && allIds.has(current) ? null : current));
-            setInfoNodeId((current) => (current && allIds.has(current) ? null : current));
-            setCropNodeId((current) => (current && allIds.has(current) ? null : current));
-            setMaskEditNodeId((current) => (current && allIds.has(current) ? null : current));
-            setAngleNodeId((current) => (current && allIds.has(current) ? null : current));
-            setPreviewNodeId((current) => (current && allIds.has(current) ? null : current));
-            setRunningNodeId((current) => (current && allIds.has(current) ? null : current));
-            setContextMenu((current) => (current?.type === "node" && allIds.has(current.nodeId) ? null : current));
-            cleanupCanvasFiles({ projectId, nodes: nodesRef.current.filter((node) => !allIds.has(node.id)), chatSessions });
+            setHoveredNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setToolbarNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setDialogNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setEditingNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setInfoNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setCropNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setMaskEditNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setAngleNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setPreviewNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setRunningNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setContextMenu((current) => (current?.type === "node" && removedIds.has(current.nodeId) ? null : current));
+            cleanupCanvasFiles({ projectId, nodes: nodesRef.current.filter((node) => !removedIds.has(node.id)), chatSessions });
         },
-        [chatSessions, cleanupCanvasFiles, projectId],
+        [chatSessions, cleanupCanvasFiles, handleToonflowAssetCardsSave, projectId],
     );
 
     const deleteConnection = useCallback((connectionId: string) => {
@@ -1261,13 +1330,19 @@ function InfiniteCanvasPage() {
                     return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                 });
                 const targetGroup = findGroupDropTarget(movedIds, moved);
-                if (targetGroup) return snapNodesIntoGroup(movedIds, moved, targetGroup);
-                return moved.map((node) => {
+                const grouped = targetGroup ? snapNodesIntoGroup(movedIds, moved, targetGroup) : moved.map((node) => {
                     if (!movedIds.has(node.id) || node.type === CanvasNodeType.Group) return node;
                     const groupId = findContainingGroupId(node, moved);
                     if (node.metadata?.groupId === groupId) return node;
                     return { ...node, metadata: { ...node.metadata, groupId } };
                 });
+                // 用拖动节点的稳定身份(段实例/实例组)判断是否重组,而非拖放后的 groupId——
+                // 否则把段实例拖进普通 Group 时会漏掉 reconcile,使其脱离权威实例组。
+                const next = grouped.some((node) => movedIds.has(node.id) && (isInstanceGroupNode(node) || isInstanceGroupMemberNode(node)))
+                    ? reconcileInstanceGroups(grouped)
+                    : grouped;
+                nodesRef.current = next;
+                return next;
             });
         }
 
@@ -2865,11 +2940,12 @@ function InfiniteCanvasPage() {
     );
 
     const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
-        const next = applyInstanceSync(nodesRef.current, connectionsRef.current, plan, () => nanoid());
-        nodesRef.current = next.nodes;
-        connectionsRef.current = next.connections;
-        setNodes(next.nodes);
-        setConnections(next.connections);
+        const synced = applyInstanceSync(nodesRef.current, connectionsRef.current, plan, () => nanoid());
+        const withGroups = reconcileInstanceGroups(synced.nodes);
+        nodesRef.current = withGroups;
+        connectionsRef.current = synced.connections;
+        setNodes(withGroups);
+        setConnections(synced.connections);
     }, []);
 
     const syncStoryboardInstances = useCallback(
@@ -2919,13 +2995,6 @@ function InfiniteCanvasPage() {
         setToonflowEditNodeId(null);
     }, []);
 
-    const handleToonflowAssetCardsSave = useCallback((nodeId: string, cards: AssetCard[]) => {
-        const next = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
-        nodesRef.current = next;
-        setNodes(next);
-        setToonflowAssetCardsNodeId(null);
-    }, []);
-
     const handleToonflowAssetCardGenerate = useCallback(
         async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
@@ -2968,6 +3037,34 @@ function InfiniteCanvasPage() {
         [effectiveConfig, isAiConfigReady, message, openConfigDialog],
     );
 
+    // 投影子节点"删除":删对应 cards[] 一张卡,经保存漏斗同步(会连带重建投影)。
+    const handleAssetCardNodeDelete = useCallback(
+        async (childNode: CanvasNodeData) => {
+            const ref = childNode.metadata?.cardProjection;
+            if (!ref) return;
+            const nextCards = removeCardFromStageCards(nodesRef.current, ref.stageNodeId, ref.cardId);
+            await handleToonflowAssetCardsSave(ref.stageNodeId, nextCards);
+        },
+        [handleToonflowAssetCardsSave],
+    );
+
+    // 投影子节点"重生成":复用单卡生成,写回该卡 storageKey,经保存漏斗同步。
+    const handleAssetCardNodeRegenerate = useCallback(
+        async (childNode: CanvasNodeData) => {
+            const ref = childNode.metadata?.cardProjection;
+            if (!ref) return;
+            const stage = nodesRef.current.find((node) => node.id === ref.stageNodeId);
+            const cards = stage?.metadata?.toonflow?.output?.payload.cards ?? [];
+            const card = cards.find((item) => item.cardId === ref.cardId);
+            if (!card) return;
+            const newKey = await handleToonflowAssetCardGenerate(ref.stageNodeId, card, cards);
+            if (!newKey) return;
+            const nextCards = cards.map((item) => (item.cardId === ref.cardId ? { ...item, storageKey: newKey } : item));
+            await handleToonflowAssetCardsSave(ref.stageNodeId, nextCards);
+        },
+        [handleToonflowAssetCardGenerate, handleToonflowAssetCardsSave],
+    );
+
     const handleToonflowRollback = useCallback(
         (nodeId: string, version: number) => {
             const { nodes: next, orphanedKeys } = applyRollback(nodesRef.current, connectionsRef.current, nodeId, version);
@@ -2989,9 +3086,10 @@ function InfiniteCanvasPage() {
     const handleDeleteArchivedInstance = useCallback(async (nodeId: string) => {
         // 先落画布状态再清媒体:媒体清理失败最多留下孤儿 key,反序会出现节点引用已删媒体。
         const next = deleteArchivedInstance(nodesRef.current, connectionsRef.current, nodeId);
-        nodesRef.current = next.nodes;
+        const withGroups = reconcileInstanceGroups(next.nodes);
+        nodesRef.current = withGroups;
         connectionsRef.current = next.connections;
-        setNodes(next.nodes);
+        setNodes(withGroups);
         setConnections(next.connections);
         // C4: 排除删除后仍被其他节点/副本引用的键,避免误删共享 Blob。
         const referencedKeys = new Set<string>([...collectImageStorageKeys(next.nodes), ...collectMediaStorageKeys(next.nodes)]);
@@ -3560,7 +3658,11 @@ function InfiniteCanvasPage() {
                     onReversePrompt={createImageReversePromptNodes}
                     onRetry={(node) => void handleRetryNode(node)}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
-                    onDelete={(node) => deleteNodes(new Set([node.id]))}
+                    onRegenerateCard={(node) => void handleAssetCardNodeRegenerate(node)}
+                    onDelete={(node) => {
+                        if (node.metadata?.cardProjection) return void handleAssetCardNodeDelete(node);
+                        deleteNodes(new Set([node.id]));
+                    }}
                 />
 
                 <CanvasToolbar

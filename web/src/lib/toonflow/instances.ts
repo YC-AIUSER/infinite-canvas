@@ -132,7 +132,6 @@ function createInstance(root: CanvasNodeData, segmentId: string, segmentIndex: n
         width: root.width,
         height: root.height,
         metadata: {
-            batchRootId: root.id,
             toonflow: {
                 kind: toonflow.kind,
                 stage: toonflow.stage,
@@ -218,25 +217,6 @@ export function applyInstanceSync(
             nextConnections = appendConnection(nextConnections, instance.nodeIds.keyframes, instance.nodeIds.video, createId);
         }
     }
-
-    nextNodes = nextNodes.map<CanvasNodeData>((node) => {
-        const rootKind = node.metadata?.toonflow?.kind;
-        if (!rootKind || !isInstanceKind(rootKind) || roots.get(rootKind)?.id !== node.id) return node;
-        const children = instances
-            .filter((instance) => instance.metadata!.toonflow!.kind === rootKind)
-            .sort((left, right) => left.metadata!.toonflow!.segmentIndex! - right.metadata!.toonflow!.segmentIndex!)
-            .map((instance) => instance.id);
-        const hadInstances = nodes.some((instance) => instance.metadata?.toonflow?.kind === rootKind && instance.metadata.toonflow.segmentId);
-        return {
-            ...node,
-            metadata: {
-                ...node.metadata,
-                isBatchRoot: true,
-                batchChildIds: children,
-                imageBatchExpanded: !hadInstances && children.length ? (node.metadata?.imageBatchExpanded ?? true) : node.metadata?.imageBatchExpanded,
-            },
-        };
-    });
 
     return { nodes: nextNodes, connections: nextConnections };
 }
