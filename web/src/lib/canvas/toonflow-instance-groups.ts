@@ -55,7 +55,9 @@ export function reconcileInstanceGroups(nodes: CanvasNodeData[]): CanvasNodeData
         const desiredGroupId = memberToGroup.get(node.id);
         const currentGroupId = node.metadata?.groupId;
         if (desiredGroupId) {
-            return currentGroupId === desiredGroupId ? node : { ...node, metadata: { ...node.metadata, groupId: desiredGroupId } };
+            const isSegmentInstance = Boolean(node.metadata?.toonflow?.segmentId);
+            if (currentGroupId === desiredGroupId && (!isSegmentInstance || node.metadata?.batchRootId === undefined)) return node;
+            return { ...node, metadata: { ...node.metadata, groupId: desiredGroupId, ...(isSegmentInstance ? { batchRootId: undefined } : {}) } };
         }
         if (isInstanceNode(node) && currentGroupId?.startsWith(GROUP_PREFIX)) {
             return { ...node, metadata: { ...node.metadata, groupId: undefined } };

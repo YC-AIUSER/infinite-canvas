@@ -132,7 +132,6 @@ function createInstance(root: CanvasNodeData, segmentId: string, segmentIndex: n
         width: root.width,
         height: root.height,
         metadata: {
-            batchRootId: root.id,
             toonflow: {
                 kind: toonflow.kind,
                 stage: toonflow.stage,

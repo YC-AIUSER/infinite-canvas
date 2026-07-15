@@ -108,4 +108,34 @@ describe("reconcileAssetsProjection", () => {
         const out = reconcileAssetsProjection(first.filter(isAssetsProjectionNode));
         expect(out.filter(isAssetsProjectionNode)).toHaveLength(0);
     });
+
+    it("重建资产投影时保留段实例 Group 与成员归属", () => {
+        const stage = assetsStage("assets-1", [{ cardId: "c1", name: "主角", storageKey: "image:k1" }]);
+        const instanceGroup: CanvasNodeData = {
+            id: "instance-group-keyframes-root",
+            type: CanvasNodeType.Group,
+            title: "首帧",
+            position: { x: 0, y: 0 },
+            width: 500,
+            height: 500,
+            metadata: { projectionOf: { stageNodeId: "keyframes-root", kind: "keyframes" } },
+        };
+        const instanceMember: CanvasNodeData = {
+            id: "keyframe-seg-1",
+            type: CanvasNodeType.Image,
+            title: "首帧 · 段1",
+            position: { x: 50, y: 50 },
+            width: 320,
+            height: 190,
+            metadata: {
+                groupId: instanceGroup.id,
+                toonflow: { kind: "keyframes", stage: "视觉首帧", status: "empty", summary: "", checks: [], segmentId: "seg-1", segmentIndex: 0 },
+            },
+        };
+
+        const out = reconcileAssetsProjection([...reconcileAssetsProjection([stage]), instanceGroup, instanceMember]);
+
+        expect(out.find((node) => node.id === instanceGroup.id)).toEqual(instanceGroup);
+        expect(out.find((node) => node.id === instanceMember.id)?.metadata?.groupId).toBe(instanceGroup.id);
+    });
 });

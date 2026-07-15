@@ -19,7 +19,7 @@ export function assetsCardNodeId(stageNodeId: string, cardId: string): string {
 }
 
 export function isAssetsProjectionNode(node: CanvasNodeData): boolean {
-    return Boolean(node.metadata?.projectionOf) || Boolean(node.metadata?.cardProjection);
+    return Boolean(node.metadata?.cardProjection) || node.metadata?.projectionOf?.kind === "assets";
 }
 
 /**

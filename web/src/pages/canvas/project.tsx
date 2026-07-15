@@ -45,7 +45,7 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { isAssetsProjectionNode, reconcileAssetsProjection, removeCardFromStageCards } from "@/lib/canvas/toonflow-assets-projection";
-import { reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
+import { isInstanceGroupNode, reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
 import { ToonflowEditModal } from "@/components/canvas/toonflow-edit-modal";
 import { ToonflowAssetCardModal } from "@/components/canvas/toonflow-asset-card-modal";
 import { ToonflowHistoryModal } from "@/components/canvas/toonflow-history-modal";
@@ -285,6 +285,8 @@ function InfiniteCanvasPage() {
     const didInitialCenterRef = useRef(false);
     const rafRef = useRef<number | null>(null);
     const nodeDraggingRef = useRef(false);
+    const assetsProjectionVersionRef = useRef(0);
+    const restoreVersionRef = useRef(0);
     const dragRef = useRef<{
         isDraggingNode: boolean;
         hasMoved: boolean;
@@ -444,20 +446,47 @@ function InfiniteCanvasPage() {
         [modal, stopGenerationByRunningId],
     );
 
-    // 投影层:纯函数出结构,再为新子节点解析 storageKey→content(复用图片 hydrate 成法)。真相源 cards[] 不变。
-    const applyAssetsProjection = useCallback(async (input: CanvasNodeData[]): Promise<CanvasNodeData[]> => {
-        const structured = reconcileAssetsProjection(input);
-        return Promise.all(
-            structured.map(async (node) => {
-                if (!isAssetsProjectionNode(node) || node.type !== CanvasNodeType.Image) return node;
-                if (node.metadata?.content || !node.metadata?.storageKey) return node;
-                const url = await resolveImageUrl(node.metadata.storageKey, "");
-                return url ? { ...node, metadata: { ...node.metadata, content: url } } : node;
-            }),
-        );
+    // 投影结构同步落地；图片内容异步增量补齐，避免晚到结果用旧快照覆盖画布。
+    const applyAssetsProjection = useCallback((input: CanvasNodeData[]) => {
+        return { nodes: reconcileAssetsProjection(input), version: ++assetsProjectionVersionRef.current };
     }, []);
 
+    const hydrateAssetsProjectionContent = useCallback((input: CanvasNodeData[], version: number, isCurrent: () => boolean) => {
+        input.forEach((node) => {
+            if (!isAssetsProjectionNode(node) || node.type !== CanvasNodeType.Image || node.metadata?.content || !node.metadata?.storageKey) return;
+            const { id, metadata } = node;
+            void resolveImageUrl(metadata.storageKey, "").then((content) => {
+                if (!content || version !== assetsProjectionVersionRef.current || !isCurrent()) return;
+                setNodes((prev) => {
+                    if (version !== assetsProjectionVersionRef.current || !isCurrent()) return prev;
+                    let changed = false;
+                    const next = prev.map((current) => {
+                        if (current.id !== id || current.metadata?.storageKey !== metadata.storageKey || current.metadata?.content) return current;
+                        changed = true;
+                        return { ...current, metadata: { ...current.metadata, content } };
+                    });
+                    if (changed) nodesRef.current = next;
+                    return changed ? next : prev;
+                });
+            }).catch(() => undefined);
+        });
+    }, []);
+
+    const handleToonflowAssetCardsSave = useCallback(
+        (nodeId: string, cards: AssetCard[]) => {
+            const saved = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
+            const { nodes: next, version } = applyAssetsProjection(saved);
+            nodesRef.current = next;
+            setNodes(next);
+            hydrateAssetsProjectionContent(next, version, () => true);
+            setToonflowAssetCardsNodeId(null);
+        },
+        [applyAssetsProjection, hydrateAssetsProjectionContent],
+    );
+
     useEffect(() => {
+        const restoreVersion = ++restoreVersionRef.current;
+        assetsProjectionVersionRef.current += 1;
         if (!hydrated) return;
         setProjectLoaded(false);
         const project = openProject(projectId);
@@ -468,13 +497,16 @@ function InfiniteCanvasPage() {
 
         const restore = async () => {
             const hydratedNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            if (restoreVersion !== restoreVersionRef.current) return;
             const restoredNodes = project.kind === "toonflow" || hydratedNodes.some((node) => node.metadata?.toonflow) ? hydrateToonflowProject(hydratedNodes) : hydratedNodes;
-            const projected = await applyAssetsProjection(restoredNodes);
+            const { nodes: projected, version } = applyAssetsProjection(restoredNodes);
             const withInstanceGroups = reconcileInstanceGroups(projected);
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            if (restoreVersion !== restoreVersionRef.current) return;
             nodesRef.current = withInstanceGroups;
             connectionsRef.current = project.connections;
             setNodes(withInstanceGroups);
+            hydrateAssetsProjectionContent(withInstanceGroups, version, () => restoreVersion === restoreVersionRef.current);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
             setActiveChatId(project.activeChatId || null);
@@ -498,7 +530,10 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
-    }, [applyAssetsProjection, hydrated, navigate, openProject, projectId]);
+        return () => {
+            if (restoreVersion === restoreVersionRef.current) restoreVersionRef.current += 1;
+        };
+    }, [applyAssetsProjection, hydrated, hydrateAssetsProjectionContent, navigate, openProject, projectId]);
 
     useEffect(() => {
         if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
@@ -919,10 +954,27 @@ function InfiniteCanvasPage() {
     const deleteNodes = useCallback(
         (ids: Set<string>) => {
             if (!ids.size) return;
-            const allIds = new Set(ids);
+            const assetCardsByStage = new Map<string, string[]>();
+            const assetCardNodeIds = new Set<string>();
+            nodesRef.current.forEach((node) => {
+                const ref = node.metadata?.cardProjection;
+                if (!ids.has(node.id) || !ref) return;
+                assetCardNodeIds.add(node.id);
+                const cardIds = assetCardsByStage.get(ref.stageNodeId) ?? [];
+                cardIds.push(ref.cardId);
+                assetCardsByStage.set(ref.stageNodeId, cardIds);
+            });
+            for (const [stageNodeId, cardIds] of assetCardsByStage) {
+                let nextCards = removeCardFromStageCards(nodesRef.current, stageNodeId, cardIds[0]);
+                for (const cardId of cardIds.slice(1)) nextCards = nextCards.filter((card) => card.cardId !== cardId);
+                handleToonflowAssetCardsSave(stageNodeId, nextCards);
+            }
+
+            const allIds = new Set([...ids].filter((id) => !assetCardNodeIds.has(id)));
             nodesRef.current.forEach((node) => {
                 if (ids.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => allIds.add(childId));
             });
+            const removedIds = new Set([...allIds, ...assetCardNodeIds]);
             setNodes((prev) => {
                 const next = prev.filter((node) => !allIds.has(node.id));
                 return next.map((node) => {
@@ -945,23 +997,23 @@ function InfiniteCanvasPage() {
                     };
                 });
             });
-            setConnections((prev) => prev.filter((conn) => !allIds.has(conn.fromNodeId) && !allIds.has(conn.toNodeId)));
+            setConnections((prev) => prev.filter((conn) => !removedIds.has(conn.fromNodeId) && !removedIds.has(conn.toNodeId)));
             setSelectedNodeIds(new Set());
             setSelectedConnectionId(null);
-            setHoveredNodeId((current) => (current && allIds.has(current) ? null : current));
-            setToolbarNodeId((current) => (current && allIds.has(current) ? null : current));
-            setDialogNodeId((current) => (current && allIds.has(current) ? null : current));
-            setEditingNodeId((current) => (current && allIds.has(current) ? null : current));
-            setInfoNodeId((current) => (current && allIds.has(current) ? null : current));
-            setCropNodeId((current) => (current && allIds.has(current) ? null : current));
-            setMaskEditNodeId((current) => (current && allIds.has(current) ? null : current));
-            setAngleNodeId((current) => (current && allIds.has(current) ? null : current));
-            setPreviewNodeId((current) => (current && allIds.has(current) ? null : current));
-            setRunningNodeId((current) => (current && allIds.has(current) ? null : current));
-            setContextMenu((current) => (current?.type === "node" && allIds.has(current.nodeId) ? null : current));
-            cleanupCanvasFiles({ projectId, nodes: nodesRef.current.filter((node) => !allIds.has(node.id)), chatSessions });
+            setHoveredNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setToolbarNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setDialogNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setEditingNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setInfoNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setCropNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setMaskEditNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setAngleNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setPreviewNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setRunningNodeId((current) => (current && removedIds.has(current) ? null : current));
+            setContextMenu((current) => (current?.type === "node" && removedIds.has(current.nodeId) ? null : current));
+            cleanupCanvasFiles({ projectId, nodes: nodesRef.current.filter((node) => !removedIds.has(node.id)), chatSessions });
         },
-        [chatSessions, cleanupCanvasFiles, projectId],
+        [chatSessions, cleanupCanvasFiles, handleToonflowAssetCardsSave, projectId],
     );
 
     const deleteConnection = useCallback((connectionId: string) => {
@@ -1278,13 +1330,17 @@ function InfiniteCanvasPage() {
                     return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                 });
                 const targetGroup = findGroupDropTarget(movedIds, moved);
-                if (targetGroup) return snapNodesIntoGroup(movedIds, moved, targetGroup);
-                return moved.map((node) => {
+                const grouped = targetGroup ? snapNodesIntoGroup(movedIds, moved, targetGroup) : moved.map((node) => {
                     if (!movedIds.has(node.id) || node.type === CanvasNodeType.Group) return node;
                     const groupId = findContainingGroupId(node, moved);
                     if (node.metadata?.groupId === groupId) return node;
                     return { ...node, metadata: { ...node.metadata, groupId } };
                 });
+                const next = grouped.some((node) => movedIds.has(node.id) && (isInstanceGroupNode(node) || node.metadata?.groupId?.startsWith("instance-group-")))
+                    ? reconcileInstanceGroups(grouped)
+                    : grouped;
+                nodesRef.current = next;
+                return next;
             });
         }
 
@@ -2936,17 +2992,6 @@ function InfiniteCanvasPage() {
         });
         setToonflowEditNodeId(null);
     }, []);
-
-    const handleToonflowAssetCardsSave = useCallback(
-        async (nodeId: string, cards: AssetCard[]) => {
-            const saved = applyAssetCardsSave(nodesRef.current, connectionsRef.current, nodeId, cards);
-            const next = await applyAssetsProjection(saved);
-            nodesRef.current = next;
-            setNodes(next);
-            setToonflowAssetCardsNodeId(null);
-        },
-        [applyAssetsProjection],
-    );
 
     const handleToonflowAssetCardGenerate = useCallback(
         async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {

@@ -37,6 +37,7 @@ describe("reconcileInstanceGroups", () => {
         expect(group?.metadata?.projectionOf).toEqual({ stageNodeId: "root-video-workbench", kind: "video-workbench" });
         expect(out.find((node) => node.id === "root-video-workbench")?.metadata?.groupId).toBe(gid);
         expect(out.find((node) => node.id === "v1")?.metadata?.groupId).toBe(gid);
+        expect(out.find((node) => node.id === "v1")?.metadata?.batchRootId).toBeUndefined();
     });
 
     it("Group 是成员当前位置的包围盒(含 root 与实例)", () => {
