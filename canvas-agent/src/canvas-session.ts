@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import type { ServerResponse } from "node:http";
 
 import { type ToolName } from "./schemas.js";
-import { compactCanvasState, compactNode, isToolName, nextCanvasX, parseToolInput } from "./tools.js";
+import { isToolName, nextCanvasX, parseToolInput } from "./tools.js";
+import { annotateMethodology, buildSelectionResult, buildStateResult, toonflowKindsForOps } from "./methodology.js";
 import type { CanvasNode, CanvasNodeType, CanvasSnapshot } from "./types.js";
 
 type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
@@ -67,11 +68,8 @@ export class CanvasSession {
         }
         const readTool = ["canvas_get_state", "canvas_get_selection", "canvas_export_snapshot"].includes(tool);
         if (readTool && (!this.clients.size || !this.canvasState)) throw new Error("当前没有已连接画布");
-        if (tool === "canvas_get_state" || tool === "canvas_export_snapshot") return compactCanvasState(this.canvasState);
-        if (tool === "canvas_get_selection") {
-            const ids = new Set(this.canvasState?.selectedNodeIds || []);
-            return { nodes: (this.canvasState?.nodes || []).filter((node) => ids.has(node.id)).map(compactNode) };
-        }
+        if (tool === "canvas_get_state" || tool === "canvas_export_snapshot") return buildStateResult(this.canvasState);
+        if (tool === "canvas_get_selection") return buildSelectionResult(this.canvasState);
         if (tool === "canvas_create_node") {
             const data = input as { nodeType: CanvasNodeType; title?: string; x?: number; y?: number; width?: number; height?: number; metadata?: Record<string, unknown> };
             input = { ops: [{ type: "add_node", nodeType: data.nodeType, title: data.title, position: { x: data.x ?? nextCanvasX(this.canvasState), y: data.y ?? 0 }, width: data.width, height: data.height, metadata: data.metadata }] };
@@ -163,7 +161,8 @@ export class CanvasSession {
         }
         if (tool !== "canvas_apply_ops") throw new Error(`未知工具：${tool}`);
         if (!this.clients.size) throw new Error("当前没有已连接画布");
-        return await this.requestCanvasTool(tool, input);
+        const result = await this.requestCanvasTool(tool, input);
+        return annotateMethodology(result, toonflowKindsForOps(input.ops, this.canvasState?.nodes || []));
     }
 
     private async requestCanvasTool(name: ToolName, input: Record<string, unknown>) {
