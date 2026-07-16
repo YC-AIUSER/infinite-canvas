@@ -17,7 +17,7 @@ export type NodeStatus = (typeof NODE_STATUSES)[number];
 
 const NodeStatusSchema = z.enum(NODE_STATUSES);
 
-const TOONFLOW_NODE_KINDS = [
+export const TOONFLOW_NODE_KINDS = [
     "project",
     "script",
     "assets",
