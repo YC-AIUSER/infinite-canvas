@@ -18,6 +18,8 @@
 
 ## Toonflow 二期
 
+- [ ] **可选方法论/多内容形态(目标=档位③流程结构层,2026-07-16 用户拍板)** — 终局:按内容形态(短剧/带货/Vlog 等)选择整条管线——环节组合、生成模板、方法论红线三层都随形态切换。分三档递进:①agent 注入层建方法论注册表+画布级选择(小);②prompts.ts 五节点生成模板按方法论切换(中,①②必须一起上否则精神分裂);③环节/流程模板本身可选(大,现 14 节点模板是短剧专用)。前置:出现第二种真实内容形态需求时先过 office-hours 定形态与环节;现单一事实源契约(AGENT_METHODOLOGY_BRIEF 双侧字节锁)需升级为注册表契约。
+
 - [ ] **repair-tail + 段内拼接** — 只重生成段尾坏掉几秒并回并进段视频。背景:一期"单镜修改=整段重生成"(段为原子产物)是为避开拼接依赖的刻意取舍;若阶段 3 数据显示整段重摇成本过高,本项优先级提升。起点:web/src/services/api/video.ts + canvas-agent/src/stitch.ts(ffmpeg 基建已就绪:本地 Agent 调系统 ffmpeg,2026-07-16 成片拼接已落地,可直接复用裁剪+拼接)。
 - [x] **成片拼接导出(本地路线)** — 已实现(2026-07-16):canvas-agent 本地 ffmpeg 无损拼接(参数不一致自动转码兜底),导出弹窗「拼接成片」按钮 + export_stitch MCP 工具两入口,产物落 ~/Videos/Toonflow。设计文档 docs/superpowers/specs/2026-07-16-final-cut-stitch-design.md。ffmpeg 决策=本地 Agent 调系统 ffmpeg(repair-tail 可共用);浏览器端 ffmpeg.wasm 路线留对外部署时升级。
 - [ ] **避雷词表更新机制** — seedance_forbidden_terms.json 随即梦平台规则更新的流程(手动季检或社区源)。背景:一期只做静态快照。起点:web/src/lib/toonflow/prompts.ts 词表段。
