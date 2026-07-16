@@ -4,6 +4,7 @@ import { DEFAULT_PORT, ensureSiteWorkspace, loadConfig, saveConfig, updateSiteWo
 import { CanvasSession } from "./canvas-session.js";
 import { archiveCodexThread, interruptCodexTurn, listCodexThreads, readCodexThread, resumeCodexThread, runClaudeTurn, runCodexTurn, startCodexThread, summarizeCodexThread, verifyCodexThreadWorkspace, withAgentPrompt } from "./agents.js";
 import type { AgentAttachment } from "./types.js";
+import { hasAllSegments, isValidJobId, removeJob, revealOutput, stitchSegments, writeSegment } from "./stitch.js";
 
 export function startHttpServer() {
     const config = loadConfig(true);
@@ -38,6 +39,33 @@ export function startHttpServer() {
         res.json({ ok: true });
     });
     app.post("/api/tools", route(async (req, res) => res.json({ ok: true, result: await session.callTool(req.body?.name, req.body?.input || {}) })));
+    const stitchOutputs = new Set<string>();
+    app.post("/export/segments", express.raw({ type: "application/octet-stream", limit: "200mb" }), route(async (req, res) => {
+        const jobId = String(req.query.jobId || "");
+        const index = Number(req.query.index);
+        if (!isValidJobId(jobId) || !Number.isInteger(index) || index < 0 || !Buffer.isBuffer(req.body)) return void res.status(400).json({ ok: false, error: "jobId 或 index 无效" });
+        await writeSegment(jobId, index, req.body);
+        res.json({ ok: true });
+    }));
+    app.post("/export/stitch", route(async (req, res) => {
+        const jobId = String(req.body?.jobId || "");
+        const count = Number(req.body?.count);
+        const title = typeof req.body?.title === "string" ? req.body.title : undefined;
+        if (!isValidJobId(jobId) || !Number.isInteger(count) || count < 1 || !await hasAllSegments(jobId, count)) return void res.status(400).json({ ok: false, error: "jobId、count 或段文件无效" });
+        try {
+            const result = await stitchSegments({ jobId, count, title });
+            stitchOutputs.add(result.outputPath);
+            res.json({ ok: true, ...result });
+        } finally {
+            await removeJob(jobId);
+        }
+    }));
+    app.post("/export/reveal", route(async (req, res) => {
+        const file = typeof req.body?.path === "string" ? req.body.path : "";
+        if (!stitchOutputs.has(file)) return void res.status(403).json({ ok: false, error: "无权打开此文件" });
+        await revealOutput(file, stitchOutputs);
+        res.json({ ok: true });
+    }));
     app.get("/agent/codex/workspace", (_req, res) => {
         const workspace = ensureSiteWorkspace(config);
         res.json({ ok: true, workspace });
