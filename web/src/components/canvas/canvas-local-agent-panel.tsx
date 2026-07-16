@@ -10,6 +10,8 @@ import { useUserStore } from "@/stores/use-user-store";
 import { useAgentStore, type AgentAttachment, type AgentChatItem, type AgentEventLog, type AgentPanelTab, type AgentPendingToolCall, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-site-tools";
+import { collectExportSegments } from "@/lib/toonflow/node-runtime";
+import { stitchFinalCut } from "@/lib/toonflow/final-cut";
 import { AgentChatComposer, AgentChatMessage, AgentPanelTabs, AgentPendingToolCard, AgentWorkingMessage, type CanvasAgentChatAttachment } from "./canvas-agent-chat-ui";
 
 const MAX_ATTACHMENTS = 6;
@@ -272,7 +274,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             return;
         }
         try {
-            const input: { ops?: CanvasAgentOp[]; path?: string } = payload.input || {};
+            const input: { ops?: CanvasAgentOp[]; path?: string; title?: string } = payload.input || {};
             setAgentState({ activity: payload.name === "canvas_apply_ops" ? "执行画布操作" : payload.name === "site_navigate" ? "跳转页面" : "读取画布", waiting: true });
             addEventLog(toolName(payload.name), payload, payload);
             let result: unknown;
@@ -280,6 +282,11 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                 const path = input.path || "/";
                 navigate(path);
                 result = { ok: true, path };
+            } else if (payload.name === "export_stitch") {
+                const snapshot = canvasContextRef.current?.snapshot;
+                if (!snapshot) throw new Error("当前不在画布页，请先用 site_navigate 打开画布");
+                const segments = collectExportSegments(snapshot.nodes).segments;
+                result = segments.length ? { ...(await stitchFinalCut(segments, input.title)), segmentCount: segments.length } : { ok: true, text: "当前画布没有已通过的段视频，请先通过至少一段" };
             } else if (payload.name === "canvas_apply_ops") {
                 const context = canvasContextRef.current;
                 if (!context) throw new Error("当前不在画布页，请先用 site_navigate 打开画布");
@@ -293,7 +300,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
             setAgentState({ activity: "工具完成", waiting: true });
             addEventLog(`${toolName(payload.name)}完成`, result, result);
-            addMessage({ role: "tool", title: `${toolName(payload.name)}完成`, text: payload.name === "canvas_apply_ops" ? summarizeCanvasAgentOps(input.ops || []) || "画布操作" : payload.name === "site_navigate" ? `已跳转到 ${input.path || "/"}` : "已完成", detail: { requestId: payload.requestId, name: payload.name, input, result } });
+            addMessage({ role: "tool", title: `${toolName(payload.name)}完成`, text: payload.name === "canvas_apply_ops" ? summarizeCanvasAgentOps(input.ops || []) || "画布操作" : payload.name === "site_navigate" ? `已跳转到 ${input.path || "/"}` : payload.name === "export_stitch" ? stitchToolText(result) : "已完成", detail: { requestId: payload.requestId, name: payload.name, input, result } });
         } catch (error) {
             const message = error instanceof Error ? error.message : "画布操作失败";
             setAgentState({ activity: "工具失败", waiting: false });
@@ -914,9 +921,16 @@ function toolName(name: string) {
     if (name === "canvas_select_nodes") return "选择节点";
     if (name === "canvas_set_viewport") return "调整视口";
     if (name === "canvas_run_generation") return "触发生成";
+    if (name === "export_stitch") return "拼接成片";
     if (name === "site_navigate") return "网站跳转";
     if (isSiteTool(name)) return SITE_TOOL_LABELS[name];
     return name;
+}
+
+function stitchToolText(result: unknown) {
+    const data = result && typeof result === "object" ? result as Record<string, unknown> : {};
+    if (typeof data.text === "string") return data.text;
+    return typeof data.outputPath === "string" ? `已拼接 ${typeof data.segmentCount === "number" ? data.segmentCount : ""} 段成片：${data.outputPath}` : "已完成";
 }
 
 function siteToolSummary(name: string, result: unknown) {

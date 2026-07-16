@@ -39,6 +39,7 @@ export const toolNames = [
     "prompts_search",
     "assets_list",
     "assets_add",
+    "export_stitch",
 ] as const;
 export type ToolName = (typeof toolNames)[number];
 
@@ -118,6 +119,7 @@ export const toolInputSchemas = {
     prompts_search: z.object({ keyword: z.string().optional(), category: z.string().optional(), tags: z.array(z.string()).optional(), page: z.number().optional(), pageSize: z.number().optional() }),
     assets_list: z.object({ kind: z.enum(["all", "text", "image", "video"]).optional(), keyword: z.string().optional(), page: z.number().optional(), pageSize: z.number().optional() }),
     assets_add: z.object({ kind: z.enum(["text", "image"]), title: z.string(), content: z.string().optional(), imageUrl: z.string().optional(), tags: z.array(z.string()).optional(), source: z.string().optional(), note: z.string().optional() }),
+    export_stitch: z.object({ title: z.string().optional() }),
 } satisfies Record<ToolName, z.AnyZodObject>;
 
 export const toolDescriptions: Record<ToolName, string> = {
@@ -153,4 +155,5 @@ export const toolDescriptions: Record<ToolName, string> = {
     prompts_search: "搜索提示词库（第三方提示词合集），支持 keyword、category、tags 过滤和 page/pageSize 分页，返回标题、提示词、分类、标签、封面等。",
     assets_list: "列出用户「我的素材」，支持 kind（text/image/video）过滤、keyword 搜索和 page/pageSize 分页。为控制体积不返回图片/视频原始 data，仅返回封面与元信息。",
     assets_add: "向「我的素材」新增素材。kind=text 时用 content 传文本内容；kind=image 时用 imageUrl 传图片，支持三种：本地文件绝对路径（如 D:/pics/a.png 或 /Users/me/a.png，由本地 Agent 读取，用户让你上传本机文件时优先用此方式）、公网图片 URL、dataURL。可附带 title、tags、source、note。",
+    export_stitch: "拼接当前画布 Toonflow 导出节点收集到的全部「已通过」段视频为单一成片，需本地 ffmpeg，产物落在本机 Videos/Toonflow 目录。",
 };

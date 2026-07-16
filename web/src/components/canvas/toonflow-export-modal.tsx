@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { App, Button, Empty, Modal } from "antd";
-import { Download, Package, Play } from "lucide-react";
+import { Download, FolderOpen, Package, Play, Scissors } from "lucide-react";
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
 
 import type { ExportCollection, ExportSegment } from "@/lib/toonflow/node-runtime";
 import { getMediaBlob, resolveMediaUrl } from "@/services/file-storage";
+import { checkStitchAgentHealth, revealFinalCut, stitchFinalCut, type FinalCutResult, type StitchProgress } from "@/lib/toonflow/final-cut";
+import { useAgentStore } from "@/stores/use-agent-store";
 
 // 文件名安全化:去掉 Windows/Unix 都禁止的字符,避免下载/打包时非法名。
 function safeName(name: string) {
@@ -18,12 +20,17 @@ function segmentFileName(segment: ExportSegment, order: number) {
 
 export function ToonflowExportModal({ open, collection, onCancel }: { open: boolean; collection: ExportCollection | null; onCancel: () => void }) {
     const { message } = App.useApp();
+    const agentUrl = useAgentStore((state) => state.url);
+    const agentToken = useAgentStore((state) => state.token);
     const segments = useMemo(() => collection?.segments ?? [], [collection]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [playerUrl, setPlayerUrl] = useState("");
     const [playerMissing, setPlayerMissing] = useState(false);
     const [zipping, setZipping] = useState(false);
     const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+    const [agentReady, setAgentReady] = useState(false);
+    const [stitchProgress, setStitchProgress] = useState<StitchProgress | null>(null);
+    const [finalCut, setFinalCut] = useState<FinalCutResult | null>(null);
 
     // 越界兜底:段集收缩后 currentIndex 停在旧值时钳到最后一段,不整体重置(见下方重置 effect 只认 open 上升沿)。
     const clampedIndex = segments.length ? Math.min(currentIndex, segments.length - 1) : 0;
@@ -34,6 +41,20 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
     useEffect(() => {
         if (open) setCurrentIndex(0);
     }, [open]);
+
+    useEffect(() => {
+        let active = true;
+        if (!open) {
+            setAgentReady(false);
+            return;
+        }
+        void checkStitchAgentHealth().then((ready) => {
+            if (active) setAgentReady(ready);
+        });
+        return () => {
+            active = false;
+        };
+    }, [open, agentToken, agentUrl]);
 
     // 按当前段的 videoKey 解析可播放 URL:依赖 key 而非 collection/segments 身份,避免后台 setNodes 导致的闪烁重载。
     useEffect(() => {
@@ -106,13 +127,36 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
         }
     }
 
+    async function stitch() {
+        if (!segments.length) return;
+        setFinalCut(null);
+        try {
+            const result = await stitchFinalCut(segments, "toonflow-成片", setStitchProgress);
+            setFinalCut(result);
+            if (result.mode === "reencode") message.warning("段参数不一致，已自动转码拼接");
+            else message.success("成片拼接完成");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "拼接失败，请重试");
+        } finally {
+            setStitchProgress(null);
+        }
+    }
+
+    async function reveal() {
+        if (!finalCut) return;
+        try {
+            await revealFinalCut(finalCut.outputPath);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "打开文件夹失败");
+        }
+    }
+
     const totalSegments = collection?.totalSegments ?? 0;
 
     return (
         <Modal title="成片预览与导出" open={open} footer={null} width={860} onCancel={onCancel}>
             <p className="text-sm leading-6 opacity-70">
-                本期交付为<b>分段视频</b>（已通过 {segments.length} / {totalSegments} 段），可顺序预览、逐段下载或打包 ZIP。
-                <span className="opacity-80">本期不拼接成单文件</span>（成片拼接为二期能力）。
+                已通过 {segments.length} / {totalSegments} 段，可顺序预览、逐段下载、打包 ZIP 或在本机拼接为单一成片。
             </p>
 
             {segments.length ? (
@@ -152,10 +196,22 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
                     <div className="flex min-h-0 flex-col">
                         <div className="mb-2 flex items-center justify-between">
                             <span className="text-xs font-medium opacity-55">段列表（点击跳播）</span>
-                            <Button type="primary" size="small" icon={<Package className="size-3.5" />} loading={zipping} onClick={() => void downloadZip()}>
-                                打包下载 ZIP
-                            </Button>
+                            <div className="flex items-center gap-1">
+                                <Button size="small" icon={<Package className="size-3.5" />} loading={zipping} onClick={() => void downloadZip()}>
+                                    打包下载 ZIP
+                                </Button>
+                                <Button type="primary" size="small" icon={<Scissors className="size-3.5" />} loading={Boolean(stitchProgress)} disabled={!agentReady} title={agentReady ? undefined : "需本地 Agent 运行"} onClick={() => void stitch()}>
+                                    {stitchProgress?.phase === "uploading" ? `上传 ${stitchProgress.current}/${stitchProgress.total}` : stitchProgress?.phase === "stitching" ? "拼接中" : "拼接成片"}
+                                </Button>
+                            </div>
                         </div>
+                        {!agentReady && <p className="mb-2 text-xs opacity-55">需本地 Agent 运行</p>}
+                        {finalCut && (
+                            <div className="mb-2 rounded-lg border px-2.5 py-2 text-xs">
+                                <p className="truncate opacity-70" title={finalCut.outputPath}>成片已保存：{finalCut.outputPath}</p>
+                                <Button className="mt-1" size="small" type="link" icon={<FolderOpen className="size-3.5" />} onClick={() => void reveal()}>打开文件夹</Button>
+                            </div>
+                        )}
                         <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
                             {segments.map((segment, index) => {
                                 const active = index === clampedIndex;
