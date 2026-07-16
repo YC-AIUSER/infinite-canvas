@@ -52,6 +52,15 @@ describe("annotateMethodology", () => {
         const r = annotateMethodology({}, ["keyframes", "keyframes", "video-workbench"]) as Record<string, unknown>;
         expect(String(r._methodology).match(/首帧：/g)?.length).toBe(1);
     });
+    it("多个回落 kind 只堆一遍全局 brief", () => {
+        const r = annotateMethodology({}, ["script", "assets"]) as Record<string, unknown>;
+        expect(String(r._methodology).match(/三铁律/g)?.length).toBe(1);
+    });
+    it("数组结果原样返回,不退化成对象", () => {
+        const r = annotateMethodology([1, 2, 3], ["keyframes"]) as unknown;
+        expect(Array.isArray(r)).toBe(true);
+        expect((r as Record<string, unknown>)._methodology).toBeUndefined();
+    });
 });
 
 describe("toonflowKindsForOps", () => {
@@ -67,6 +76,11 @@ describe("toonflowKindsForOps", () => {
             "keyframes",
             "video-workbench",
         ]);
+    });
+    it("识别 connect_nodes 的 fromNodeId/toNodeId 端点", () => {
+        const nodes = [node("n1", "keyframes"), node("n2", "video-workbench")];
+        const ops = [{ type: "connect_nodes", fromNodeId: "n1", toNodeId: "n2" }];
+        expect(toonflowKindsForOps(ops, nodes).filter(Boolean).sort()).toEqual(["keyframes", "video-workbench"]);
     });
     it("非数组返回空", () => {
         expect(toonflowKindsForOps(undefined, [])).toEqual([]);

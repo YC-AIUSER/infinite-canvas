@@ -24,4 +24,15 @@ describe("Agent 方法论注入单源一致(决议 8B)", () => {
             expect(source).toContain(redline);
         }
     });
+
+    it("canvas-agent 每条专属红线绑定到正确 kind(防键换值映射错乱)", () => {
+        const source = readFileSync(canvasAgentConfigPath, "utf8");
+        const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        for (const [kind, redline] of Object.entries(STAGE_METHODOLOGY_REDLINES)) {
+            // 回落项(值 === 全局 brief)不在 canvas-agent 表内,由上一条 toContain + brief 锁兜住;只对专属红线校验键值配对。
+            if (redline === AGENT_METHODOLOGY_BRIEF) continue;
+            const pattern = new RegExp(`"?${escape(kind)}"?\\s*:\\s*${escape(JSON.stringify(redline))}`);
+            expect(source).toMatch(pattern);
+        }
+    });
 });

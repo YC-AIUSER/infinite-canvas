@@ -8,15 +8,17 @@ export function toonflowKindOf(node: CanvasNode | undefined): string | undefined
 }
 
 function attach<T>(result: T, methodology: string): T {
-    if (result === null || typeof result !== "object") return result;
+    // 数组结果不能 spread 进对象字面量(会退化成带数字键的对象),连同 null/原始值一并原样返回。
+    if (result === null || typeof result !== "object" || Array.isArray(result)) return result;
     return { ...(result as object), _methodology: methodology } as T;
 }
 
 export function annotateMethodology<T>(result: T, kinds: Array<string | undefined>): T {
-    const distinct = [...new Set(kinds.filter((kind): kind is string => Boolean(kind)))];
-    if (!distinct.length) return result;
-    const body = distinct.map((kind) => redlineForKind(kind)).join("\n");
-    return attach(result, `⚠ 你正在操作 Toonflow 环节，必须守方法论：\n${body}`);
+    const present = kinds.filter((kind): kind is string => Boolean(kind));
+    if (!present.length) return result;
+    // 按解析后的红线文本去重(多个回落 kind 都指向全局 brief,不能重复堆同一段)。
+    const lines = [...new Set(present.map((kind) => redlineForKind(kind)))];
+    return attach(result, `⚠ 你正在操作 Toonflow 环节，必须守方法论：\n${lines.join("\n")}`);
 }
 
 export function toonflowKindsForOps(ops: unknown, nodes: CanvasNode[]): Array<string | undefined> {
@@ -28,6 +30,8 @@ export function toonflowKindsForOps(ops: unknown, nodes: CanvasNode[]): Array<st
         const record = op as Record<string, unknown>;
         if (typeof record.id === "string") ids.push(record.id);
         if (typeof record.nodeId === "string") ids.push(record.nodeId);
+        if (typeof record.fromNodeId === "string") ids.push(record.fromNodeId);
+        if (typeof record.toNodeId === "string") ids.push(record.toNodeId);
         if (Array.isArray(record.ids)) for (const id of record.ids) if (typeof id === "string") ids.push(id);
     }
     return ids.map((id) => toonflowKindOf(byId.get(id)));

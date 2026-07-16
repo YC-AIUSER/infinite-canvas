@@ -161,8 +161,10 @@ export class CanvasSession {
         }
         if (tool !== "canvas_apply_ops") throw new Error(`未知工具：${tool}`);
         if (!this.clients.size) throw new Error("当前没有已连接画布");
+        // 在 await 前冻结 kind 快照:改动落库后 canvasState 可能被网页推送覆盖(如删节点),此时再算会漏掉刚操作的环节。
+        const touchedKinds = toonflowKindsForOps(input.ops, this.canvasState?.nodes || []);
         const result = await this.requestCanvasTool(tool, input);
-        return annotateMethodology(result, toonflowKindsForOps(input.ops, this.canvasState?.nodes || []));
+        return annotateMethodology(result, touchedKinds);
     }
 
     private async requestCanvasTool(name: ToolName, input: Record<string, unknown>) {
