@@ -7,6 +7,7 @@ import { annotateMethodology, buildSelectionResult, buildStateResult, toonflowKi
 import type { CanvasNode, CanvasNodeType, CanvasSnapshot } from "./types.js";
 
 type PendingRequest = { clientId: string; resolve: (value: unknown) => void; reject: (error: Error) => void };
+export type CodexState = { busy: boolean; threadId: string; turnId: string };
 
 const SITE_TOOLS = new Set<ToolName>([
     "site_navigate",
@@ -27,14 +28,29 @@ export class CanvasSession {
     private pending = new Map<string, PendingRequest>();
     private canvasStates = new Map<string, CanvasSnapshot>();
     private activeClientId = "";
+    private boundClientId = "";
     private focusSequence = 0;
+    private codexState: CodexState = { busy: false, threadId: "", turnId: "" };
 
     private get canvasState() {
-        return this.canvasStates.get(this.activeClientId) || null;
+        return this.canvasStates.get(this.targetClientId) || null;
+    }
+
+    private get targetClientId() {
+        return this.boundClientId || this.activeClientId;
     }
 
     health() {
-        return { ok: true, hasCanvas: Boolean(this.canvasState), clients: this.clients.size };
+        return { ok: true, hasCanvas: Boolean(this.canvasState), clients: this.clients.size, codexBusy: this.codexState.busy };
+    }
+
+    get codexBusy() {
+        return this.codexState.busy;
+    }
+
+    setCodexState(patch: Partial<CodexState>) {
+        this.codexState = { ...this.codexState, ...patch };
+        this.emitAll("codex_state", this.codexState);
     }
 
     openEvents(url: URL, res: ServerResponse) {
@@ -49,7 +65,7 @@ export class CanvasSession {
                 this.clientFocusOrder.set(clientId, ++this.focusSequence);
             }
         }
-        sendEvent(res, "hello", { ok: true, clientId });
+        sendEvent(res, "hello", { ok: true, clientId, codex: this.codexState });
         const timer = setInterval(() => sendEvent(res, "ping", { time: Date.now() }), 15000);
         res.on("close", () => {
             clearInterval(timer);
@@ -57,6 +73,7 @@ export class CanvasSession {
             this.clients.delete(clientId);
             this.clientFocusOrder.delete(clientId);
             this.canvasStates.delete(clientId);
+            if (this.boundClientId === clientId) this.boundClientId = "";
             this.pending.forEach((item, requestId) => {
                 if (item.clientId !== clientId) return;
                 this.pending.delete(requestId);
@@ -78,6 +95,15 @@ export class CanvasSession {
         this.clientFocusOrder.set(clientId, ++this.focusSequence);
     }
 
+    bindClient(clientId: string) {
+        if (!this.clients.has(clientId)) throw new Error("当前网页未连接");
+        this.boundClientId = clientId;
+    }
+
+    releaseClient(clientId: string) {
+        if (this.boundClientId === clientId) this.boundClientId = "";
+    }
+
     resolveResult(clientId: string, body: { requestId?: string; error?: string; result?: unknown }) {
         const item = body.requestId ? this.pending.get(body.requestId) : null;
         if (!item || !body.requestId || item.clientId !== clientId) return false;
@@ -88,6 +114,10 @@ export class CanvasSession {
 
     emitAll(type: string, payload: unknown) {
         this.clients.forEach((client) => sendEvent(client, type, payload));
+    }
+
+    emitThread(type: string, threadId: string, payload: Record<string, unknown> = {}) {
+        this.emitAll(type, { ...payload, threadId });
     }
 
     async callTool(name: unknown, rawInput: unknown) {
@@ -201,7 +231,7 @@ export class CanvasSession {
 
     private async requestCanvasTool(name: ToolName, input: Record<string, unknown>) {
         const requestId = crypto.randomUUID();
-        const clientId = this.activeClientId;
+        const clientId = this.targetClientId;
         const client = this.clients.get(clientId);
         if (!client) throw new Error("当前没有已连接画布");
         sendEvent(client, "tool_call", { requestId, name, input });

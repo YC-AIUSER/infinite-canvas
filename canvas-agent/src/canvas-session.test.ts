@@ -132,6 +132,78 @@ test("closing a client rejects its pending tool requests", async () => {
     assert.match(outcome, /断开/);
 });
 
+test("shared thread events are broadcast with the active thread id", (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    const second = connect(session, "second");
+    t.after(() => {
+        first.close();
+        second.close();
+    });
+
+    session.emitThread("workspace_changed", "thread-2", { activeThreadId: "thread-2" });
+
+    assert.deepEqual(first.event("workspace_changed"), { activeThreadId: "thread-2", threadId: "thread-2" });
+    assert.deepEqual(second.event("workspace_changed"), { activeThreadId: "thread-2", threadId: "thread-2" });
+});
+
+test("new clients receive the current Codex state and later updates", (t) => {
+    const session = new CanvasSession();
+    session.setCodexState({ busy: true, threadId: "thread-2", turnId: "turn-1" });
+    const client = connect(session, "first");
+    t.after(() => client.close());
+
+    assert.deepEqual(field(client.event("hello"), "codex"), { busy: true, threadId: "thread-2", turnId: "turn-1" });
+
+    session.setCodexState({ busy: false });
+    assert.deepEqual(client.event("codex_state"), { busy: false, threadId: "thread-2", turnId: "turn-1" });
+});
+
+test("a bound client remains the tool target while focus changes", async (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    const second = connect(session, "second");
+    t.after(() => {
+        first.close();
+        second.close();
+    });
+    session.updateState(snapshot("canvas-first"), "first");
+    session.updateState(snapshot("canvas-second"), "second");
+    session.bindClient("first");
+    session.activateClient("second");
+
+    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-first");
+    const result = session.callTool("canvas_create_text_node", { text: "bound" });
+    const call = first.event("tool_call");
+    assert.equal(second.event("tool_call"), undefined);
+    session.resolveResult("first", { requestId: String(field(call, "requestId")), result: { ok: true } });
+    assert.deepEqual(await result, { ok: true });
+
+    session.releaseClient("first");
+    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+});
+
+test("closing the bound client falls back to the active client", async (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    const second = connect(session, "second");
+    t.after(() => {
+        first.close();
+        second.close();
+    });
+    session.updateState(snapshot("canvas-first"), "first");
+    session.updateState(snapshot("canvas-second"), "second");
+    session.bindClient("first");
+    session.activateClient("second");
+    first.close();
+
+    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+    const result = session.callTool("canvas_create_text_node", { text: "fallback" });
+    const call = second.event("tool_call");
+    session.resolveResult("second", { requestId: String(field(call, "requestId")), result: { ok: true } });
+    assert.deepEqual(await result, { ok: true });
+});
+
 function connect(session: CanvasSession, clientId: string) {
     const response = new FakeSseResponse();
     session.openEvents(new URL(`http://127.0.0.1/events?clientId=${clientId}`), response as unknown as ServerResponse);
