@@ -34,9 +34,13 @@ export function startHttpServer() {
         session.updateState(req.body, String(req.query.clientId || "") || undefined);
         res.json({ ok: true });
     });
-    app.post("/canvas/result", (req, res) => {
-        session.resolveResult(req.body);
+    app.post("/canvas/activate", (req, res) => {
+        session.activateClient(String(req.query.clientId || ""));
         res.json({ ok: true });
+    });
+    app.post("/canvas/result", (req, res) => {
+        const ok = session.resolveResult(String(req.query.clientId || ""), req.body);
+        res.status(ok ? 200 : 409).json({ ok });
     });
     app.post("/api/tools", route(async (req, res) => res.json({ ok: true, result: await session.callTool(req.body?.name, req.body?.input || {}) })));
     const stitchOutputs = new Set<string>();

@@ -154,6 +154,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             setAgentState({ connected: true, activity: "已连接", connectError: "", messages: useAgentStore.getState().messages.filter((item) => !isConnectionErrorMessage(item)) });
             if (!headless) message.success("本地 Agent 已连接");
             void postState(endpoint, token, clientId, canvasContextRef.current?.snapshot || null);
+            if (document.visibilityState === "visible" && document.hasFocus()) void activateAgentClient(endpoint, token, clientId);
         });
         source.addEventListener("tool_call", (event) => {
             const data = parseEventData<AgentPendingToolCall>(event);
@@ -202,6 +203,19 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
         if (connected) void loadThreads();
     }, [connected, loadThreads]);
 
+    useEffect(() => {
+        if (!connected) return;
+        const activate = () => void activateAgentClient(endpoint, token, clientIdRef.current);
+        const activateVisible = () => {
+            if (document.visibilityState === "visible") activate();
+        };
+        window.addEventListener("focus", activate);
+        document.addEventListener("visibilitychange", activateVisible);
+        return () => {
+            window.removeEventListener("focus", activate);
+            document.removeEventListener("visibilitychange", activateVisible);
+        };
+    }, [connected, endpoint, token]);
     const sendPrompt = async () => {
         const text = prompt.trim();
         const files = attachments;
@@ -306,7 +320,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             try {
                 setAgentState({ activity: SITE_TOOL_LABELS[payload.name], waiting: true });
                 addEventLog(toolName(payload.name), payload, payload);
-                const result = await runSiteTool(payload.name, payload.input || {}, navigate);
+                const result = await runSiteTool(payload.name, payload.input || {}, navigate, { canvasSnapshot: canvasContextRef.current?.snapshot || null });
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
                 setAgentState({ activity: "工具完成", waiting: true });
                 addEventLog(`${toolName(payload.name)}完成`, result, result);
@@ -954,6 +968,12 @@ async function postState(endpoint: string, token: string, clientId: string, snap
     } catch {}
 }
 
+async function activateAgentClient(endpoint: string, token: string, clientId: string) {
+    try {
+        await fetch(`${endpoint}/canvas/activate?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`, { method: "POST" });
+    } catch {}
+}
+
 async function postToolResult(endpoint: string, token: string, clientId: string, body: { requestId: string; result?: unknown; error?: string }) {
     await fetch(`${endpoint}/canvas/result?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 }
@@ -1099,6 +1119,10 @@ function siteToolSummary(name: string, result: unknown) {
     if (name === "prompts_search") return `找到 ${numberField(data, "total")} 条提示词`;
     if (name === "assets_list") return `共 ${numberField(data, "total")} 个素材`;
     if (name === "assets_add") return "已加入我的素材";
+    if (name === "generation_get_status") {
+        const summary = data.summary && typeof data.summary === "object" ? (data.summary as Record<string, unknown>) : {};
+        return `共 ${numberField(data, "total")} 个任务，排队 ${numberField(summary, "queued")}，运行中 ${numberField(summary, "running")}，成功 ${numberField(summary, "succeeded")}，失败 ${numberField(summary, "failed")}`;
+    }
     if (name === "workbench_image_generate" || name === "workbench_video_generate") return typeof data.note === "string" ? data.note : "已在工作台执行";
     if (name === "workbench_image_get_config" || name === "workbench_video_get_config") return "已读取工作台配置";
     return "已完成";

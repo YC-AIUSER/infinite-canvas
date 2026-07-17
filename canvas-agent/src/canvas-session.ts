@@ -6,7 +6,7 @@ import { isToolName, nextCanvasX, parseToolInput } from "./tools.js";
 import { annotateMethodology, buildSelectionResult, buildStateResult, toonflowKindsForOps } from "./methodology.js";
 import type { CanvasNode, CanvasNodeType, CanvasSnapshot } from "./types.js";
 
-type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
+type PendingRequest = { clientId: string; resolve: (value: unknown) => void; reject: (error: Error) => void };
 
 const SITE_TOOLS = new Set<ToolName>([
     "site_navigate",
@@ -18,12 +18,20 @@ const SITE_TOOLS = new Set<ToolName>([
     "prompts_search",
     "assets_list",
     "assets_add",
+    "generation_get_status",
 ]);
 
 export class CanvasSession {
     private clients = new Map<string, ServerResponse>();
+    private clientFocusOrder = new Map<string, number>();
     private pending = new Map<string, PendingRequest>();
-    private canvasState: CanvasSnapshot | null = null;
+    private canvasStates = new Map<string, CanvasSnapshot>();
+    private activeClientId = "";
+    private focusSequence = 0;
+
+    private get canvasState() {
+        return this.canvasStates.get(this.activeClientId) || null;
+    }
 
     health() {
         return { ok: true, hasCanvas: Boolean(this.canvasState), clients: this.clients.size };
@@ -33,25 +41,49 @@ export class CanvasSession {
         const clientId = url.searchParams.get("clientId") || crypto.randomUUID();
         const statusOnly = url.searchParams.get("role") === "status";
         res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-        if (!statusOnly) this.clients.set(clientId, res);
+        if (!statusOnly) {
+            this.clients.set(clientId, res);
+            if (!this.clientFocusOrder.has(clientId)) this.clientFocusOrder.set(clientId, 0);
+            if (!this.activeClientId) {
+                this.activeClientId = clientId;
+                this.clientFocusOrder.set(clientId, ++this.focusSequence);
+            }
+        }
         sendEvent(res, "hello", { ok: true, clientId });
         const timer = setInterval(() => sendEvent(res, "ping", { time: Date.now() }), 15000);
         res.on("close", () => {
             clearInterval(timer);
-            if (!statusOnly) this.clients.delete(clientId);
-            if (this.canvasState?.clientId === clientId) this.canvasState = null;
+            if (statusOnly || this.clients.get(clientId) !== res) return;
+            this.clients.delete(clientId);
+            this.clientFocusOrder.delete(clientId);
+            this.canvasStates.delete(clientId);
+            this.pending.forEach((item, requestId) => {
+                if (item.clientId !== clientId) return;
+                this.pending.delete(requestId);
+                item.reject(new Error("请求页面已断开"));
+            });
+            if (this.activeClientId === clientId) this.activeClientId = [...this.clients.keys()].sort((a, b) => (this.clientFocusOrder.get(b) || 0) - (this.clientFocusOrder.get(a) || 0))[0] || "";
         });
     }
 
     updateState(body: unknown, clientId?: string) {
-        this.canvasState = { ...((body && typeof body === "object" && !Array.isArray(body) ? body : {}) as Record<string, unknown>), clientId } as CanvasSnapshot;
+        const targetClientId = clientId || this.activeClientId;
+        if (!targetClientId) return;
+        this.canvasStates.set(targetClientId, { ...((body && typeof body === "object" && !Array.isArray(body) ? body : {}) as Record<string, unknown>), clientId: targetClientId } as CanvasSnapshot);
     }
 
-    resolveResult(body: { requestId?: string; error?: string; result?: unknown }) {
+    activateClient(clientId: string) {
+        if (!this.clients.has(clientId)) throw new Error("当前网页未连接");
+        this.activeClientId = clientId;
+        this.clientFocusOrder.set(clientId, ++this.focusSequence);
+    }
+
+    resolveResult(clientId: string, body: { requestId?: string; error?: string; result?: unknown }) {
         const item = body.requestId ? this.pending.get(body.requestId) : null;
-        if (!item || !body.requestId) return;
+        if (!item || !body.requestId || item.clientId !== clientId) return false;
         this.pending.delete(body.requestId);
         body.error ? item.reject(new Error(body.error)) : item.resolve(body.result);
+        return true;
     }
 
     emitAll(type: string, payload: unknown) {
@@ -169,7 +201,8 @@ export class CanvasSession {
 
     private async requestCanvasTool(name: ToolName, input: Record<string, unknown>) {
         const requestId = crypto.randomUUID();
-        const client = this.clients.get(this.canvasState?.clientId || "") || this.clients.values().next().value;
+        const clientId = this.activeClientId;
+        const client = this.clients.get(clientId);
         if (!client) throw new Error("当前没有已连接画布");
         sendEvent(client, "tool_call", { requestId, name, input });
         return await new Promise((resolve, reject) => {
@@ -177,7 +210,7 @@ export class CanvasSession {
                 this.pending.delete(requestId);
                 reject(new Error("画布操作超时"));
             }, 30000);
-            this.pending.set(requestId, { resolve: (value) => (clearTimeout(timer), resolve(value)), reject: (error) => (clearTimeout(timer), reject(error)) });
+            this.pending.set(requestId, { clientId, resolve: (value) => (clearTimeout(timer), resolve(value)), reject: (error) => (clearTimeout(timer), reject(error)) });
         });
     }
 }
