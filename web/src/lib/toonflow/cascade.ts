@@ -16,8 +16,11 @@ export type CostBoundary = "text-to-image" | "image-to-video";
 
 export const TEXT_KINDS = [
     "project",
+    "creative",
     "script",
     "space-contract",
+    "continuity-table",
+    "directing-lock",
     "storyboard-table",
     "shot-contract",
     "action-contract",

@@ -1,4 +1,5 @@
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind, type ViewportTransform } from "@/types/canvas";
+import type { NodeStatus } from "../toonflow/schema";
+import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind, type ViewportTransform } from "../../types/canvas";
 
 type ToonflowTemplateNode = {
     kind: ToonflowNodeKind;
@@ -11,13 +12,16 @@ type ToonflowTemplateNode = {
     accent: string;
     width?: number;
     height?: number;
+    /** 选修环节的初始态。缺省 empty(待生成);填 skipped 则一键跑全链时不会被执行掉。 */
+    defaultStatus?: NodeStatus;
 };
 
 const NODE_GAP_X = 380;
 const NODE_GAP_Y = 300;
 const NODE_LEFT = 0;
 const NODE_TOP = 40;
-const ROW_BREAKS = [4, 9];
+// 三排分界:前期文本决策(project..directing-lock) / 分镜与图像 / 生成与交付。
+const ROW_BREAKS = [7, 12];
 
 const templateNodes: ToonflowTemplateNode[] = [
     {
@@ -29,6 +33,17 @@ const templateNodes: ToonflowTemplateNode[] = [
         checks: ["项目已选", "剧集已选", "比例/平台明确"],
         outputs: ["本集生产上下文"],
         accent: "#2563eb",
+    },
+    {
+        kind: "creative",
+        type: CanvasNodeType.Text,
+        title: "创意（选修）",
+        stage: "P0 创意",
+        summary: "选修环节，可整节跳过。有剧本走体检模式对照爽点与钩子，无剧本走冷启动碰撞法。",
+        checks: ["爽点覆盖", "结尾钩子", "付费卡点"],
+        outputs: ["创意体检报告/冷启动方向"],
+        accent: "#c026d3",
+        defaultStatus: "skipped",
     },
     {
         kind: "script",
@@ -59,6 +74,26 @@ const templateNodes: ToonflowTemplateNode[] = [
         checks: ["空间方位", "角色站位", "镜头轴线"],
         outputs: ["点位图/空间规则"],
         accent: "#0f766e",
+    },
+    {
+        kind: "continuity-table",
+        type: CanvasNodeType.Text,
+        title: "跨段继承表",
+        stage: "跨段连续性",
+        summary: "全片一张，逐段更新桌面道具白名单、人物站位姿态、光向天气、角色装备和遗留物。",
+        checks: ["道具白名单", "站位姿态", "光向天气"],
+        outputs: ["跨段状态继承表"],
+        accent: "#059669",
+    },
+    {
+        kind: "directing-lock",
+        type: CanvasNodeType.Text,
+        title: "分镜决策锁定表",
+        stage: "决策锁定",
+        summary: "A 表锁全局风格、调色、布光、运镜基调和表演档位，B 表逐段锁构图景别，并签相邻段缝合同。一次锁死，后续只引用。",
+        checks: ["A 表已锁", "B 表逐段齐", "缝合同四行"],
+        outputs: ["分镜决策锁定表", "缝合同"],
+        accent: "#b45309",
     },
     {
         kind: "storyboard-table",
@@ -191,7 +226,7 @@ export function buildToonflowCanvasTemplate() {
                 toonflow: {
                     kind: item.kind,
                     stage: item.stage,
-                    status: "empty",
+                    status: item.defaultStatus ?? "empty",
                     summary: item.summary,
                     checks: item.checks,
                     outputs: item.outputs,

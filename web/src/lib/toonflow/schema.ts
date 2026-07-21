@@ -19,9 +19,12 @@ const NodeStatusSchema = z.enum(NODE_STATUSES);
 
 export const TOONFLOW_NODE_KINDS = [
     "project",
+    "creative",
     "script",
     "assets",
     "space-contract",
+    "continuity-table",
+    "directing-lock",
     "storyboard-table",
     "shot-contract",
     "action-contract",
@@ -91,6 +94,13 @@ export const ShotContractSchema = z.object({
         include: z.array(z.string()),
         exclude: z.array(z.string()),
     }),
+    // 口型要求:台词剥离后视频只出音效,谁张嘴谁闭口只能靠 prompt 控制(设计文档 4.4)。
+    lipSync: z
+        .object({
+            speaking: z.array(z.string()), // 本镜张嘴说话的角色
+            silent: z.array(z.string()), // 本镜必须闭口的角色(旁白/内心段落全员闭口)
+        })
+        .optional(),
 });
 
 export type ShotContract = z.infer<typeof ShotContractSchema>;
@@ -105,12 +115,81 @@ export const ActionContractSchema = z.object({
 
 export type ActionContract = z.infer<typeof ActionContractSchema>;
 
+// P3 分镜决策锁定表 A 表:全局一次锁死,后续环节只引用不复判(设计文档 4.1)。
+// 词条值一律用 z.string():封闭词库合规由检查器报告,不在 schema 层硬阻断(决策 D4)。
+export const DirectingLockGlobalSchema = z.object({
+    visualStyle: z.string(), // 视觉风格
+    colorGrading: z.string(), // 调色主策略
+    lighting: z.string(), // 布光主策略
+    cameraTone: z.string(), // 运镜基调
+    performanceLevel: z.string(), // 表演档位 L1-L5
+    unifiedStyleString: z.string(), // 全段统一风格串
+    motifs: z.array(z.string()), // 母题必落项
+});
+
+export type DirectingLockGlobal = z.infer<typeof DirectingLockGlobalSchema>;
+
+// B 表:逐段锁构图与镜头语法。
+export const DirectingLockSegmentSchema = z.object({
+    segmentId: z.string(),
+    compositionPrimary: z.string(), // 构图主策略
+    compositionSecondary: z.string(), // 构图次策略
+    compositionDiversity: z.string(), // 构图多样性
+    cameraType: z.string(), // 运镜类型
+    scaleRange: z.string(), // 景别跨度
+    angleType: z.string(), // 角度类型
+    openingType: z.string(), // 开场类型
+});
+
+export type DirectingLockSegment = z.infer<typeof DirectingLockSegmentSchema>;
+
+// 缝合同四行:分段即分缝,缝在第一块签,供故事板画进画面、视频层核对(设计文档 4.3)。
+export const SeamContractSchema = z.object({
+    fromSegmentId: z.string(),
+    toSegmentId: z.string(),
+    prevEndBeat: z.string(), // 上段末拍:动作做到中间态截止
+    nextFirstPanel: z.string(), // 本段首格:同一动作的后半段,禁止重新建立空间
+    scaleOrMotivation: z.string(), // 景别跳档或运镜动机
+    soundBridge: z.string(), // 声音桥:J-cut / L-cut
+});
+
+export type SeamContract = z.infer<typeof SeamContractSchema>;
+
+export const DirectingLockSchema = z.object({
+    global: DirectingLockGlobalSchema,
+    segments: z.array(DirectingLockSegmentSchema).optional(),
+    seams: z.array(SeamContractSchema).optional(),
+});
+
+export type DirectingLock = z.infer<typeof DirectingLockSchema>;
+
+// 跨段状态继承表的一项:名称 + 锁定值。
+export const ContinuityEntrySchema = z.object({
+    name: z.string(),
+    lockedValue: z.string(),
+});
+
+export type ContinuityEntry = z.infer<typeof ContinuityEntrySchema>;
+
+// 全片一张,逐段更新;不适用的类目可整项缺省(设计文档 4.1)。
+export const ContinuityTableSchema = z.object({
+    propWhitelist: z.array(ContinuityEntrySchema).optional(), // 桌面道具白名单:只许被角色的手改变
+    blocking: z.array(ContinuityEntrySchema).optional(), // 人物站位与姿态
+    lightingWeather: z.array(ContinuityEntrySchema).optional(), // 光向与天气
+    characterGear: z.array(ContinuityEntrySchema).optional(), // 角色装备
+    leftovers: z.array(ContinuityEntrySchema).optional(), // 遗留物
+});
+
+export type ContinuityTable = z.infer<typeof ContinuityTableSchema>;
+
 export const AudioLineSchema = z.object({
     lineId: z.string(),
     role: z.string(),
     text: z.string(),
     shotId: z.string(),
     order: z.number(),
+    // 出口对白/旁白内心/音效;决定口型要求与配音轨(设计文档 4.4)。旧画布无此字段,故 optional。
+    type: z.enum(["dialogue", "os", "sfx"]).optional(),
 });
 
 export type AudioLine = z.infer<typeof AudioLineSchema>;
@@ -185,6 +264,8 @@ export const NodeOutputSchema = z.object({
         shotPrompts: z.record(z.string(), z.string()).optional(),
         audioLines: z.array(AudioLineSchema).optional(),
         cards: z.array(AssetCardSchema).optional(),
+        directingLock: DirectingLockSchema.optional(),
+        continuityTable: ContinuityTableSchema.optional(),
     }),
     upstreamVersions: z.record(z.string(), z.number()),
     generationMeta: GenerationMetaSchema.optional(),

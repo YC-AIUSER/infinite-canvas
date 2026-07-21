@@ -26,9 +26,12 @@ export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 export type ToonflowNodeKind =
     | "project"
+    | "creative"
     | "script"
     | "assets"
     | "space-contract"
+    | "continuity-table"
+    | "directing-lock"
     | "storyboard-table"
     | "shot-contract"
     | "action-contract"
