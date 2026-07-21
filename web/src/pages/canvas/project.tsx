@@ -53,9 +53,11 @@ import { ToonflowExportModal } from "@/components/canvas/toonflow-export-modal";
 import { ToonflowSeamCheckModal } from "@/components/canvas/toonflow-seam-check-modal";
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
-import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
-import { buildAssetCardPrompt, washPrompt } from "@/lib/toonflow/prompts";
-import type { AssetCard } from "@/lib/toonflow/schema";
+import { ToonflowDiversityPatchModal, type DiversityPatchOutcome } from "@/components/canvas/toonflow-plus-node-views";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyDiversityPatch, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
+import { buildAssetCardPrompt, buildDiversityRepairPrompt, washPrompt } from "@/lib/toonflow/prompts";
+import type { QualityCheckItem } from "@/lib/toonflow/quality-check";
+import { DiversityPatchSchema, ShotContractSchema, parseModelJson, type AssetCard, type DiversityPatch, type DiversityPatchItem, type ShotContract } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
@@ -148,6 +150,43 @@ function createCanvasNode(type: CanvasNodeType, position: Position, metadata?: C
         height: spec.height,
         metadata: { ...spec.metadata, ...metadata },
     };
+}
+
+// ============================================================
+// 一键修改方案（设计文档 4.5）：定点修补丁的读取与写回
+// ============================================================
+
+const DiversityShotContractListSchema = ShotContractSchema.array();
+
+/** 镜头合同节点的产物是一串 JSON 文本，解析失败就当作没有合同（检查器与 prompt 都容忍缺合同）。 */
+function readShotContracts(nodes: CanvasNodeData[]): { node?: CanvasNodeData; contracts?: ShotContract[] } {
+    const node = nodes.find((item) => item.metadata?.toonflow?.kind === "shot-contract");
+    const text = node?.metadata?.toonflow?.output?.payload.text;
+    if (!text?.trim()) return { node };
+    const parsed = parseModelJson(DiversityShotContractListSchema, text);
+    return { node, contracts: parsed.ok ? parsed.data : undefined };
+}
+
+/**
+ * 把定点修后的产物落回节点：走「重生成 → 落新版本 → 传播失效」这条既有路径，
+ * 不直接改 payload——版本号、history、下游 stale 传播都由状态机负责，绕过去就会丢失这些。
+ * 内容变了理应重新验收，所以节点回到 review（与生成成功后的落点一致）。
+ */
+function applyToonflowTextRevision(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, rawText: string): { nodes: CanvasNodeData[]; error?: string } {
+    const toonflow = nodes.find((node) => node.id === nodeId)?.metadata?.toonflow;
+    if (!toonflow) return { nodes, error: "未找到目标节点" };
+    // generating 是状态机唯一不允许再次进入生成的状态；此时写回会抛非法迁移，直接放弃本次写回。
+    if (toonflow.status === "generating") return { nodes, error: "该节点正在生成中，请稍后再应用" };
+
+    const regenerated = applyRegenerate(nodes, connections, nodeId);
+    const prepared = regenerated.find((node) => node.id === nodeId);
+    if (!prepared) return { nodes, error: "未找到目标节点" };
+    const resultNode = applyGenerationSuccess(prepared, rawText, [], computeUpstreamVersions(regenerated, connections, nodeId));
+    const resultToonflow = resultNode.metadata?.toonflow;
+    if (resultToonflow?.status === "failed") return { nodes, error: resultToonflow.output?.error || "修改后的内容未通过校验" };
+
+    const next = regenerated.map((node) => (node.id === nodeId ? resultNode : node));
+    return { nodes: propagateAfterNewVersion(next, connections, nodeId) };
 }
 
 export default function CanvasPage() {
@@ -361,6 +400,14 @@ function InfiniteCanvasPage() {
     const [toonflowExportNodeId, setToonflowExportNodeId] = useState<string | null>(null);
     const [toonflowSeamNodeId, setToonflowSeamNodeId] = useState<string | null>(null);
     const [toonflowSegmentSyncPlan, setToonflowSegmentSyncPlan] = useState<InstanceSyncPlan | null>(null);
+    // 一键修改方案（设计文档 4.5）：整轮状态（生成中 / 失败原因 / 待选补丁 / 应用回执）都挂在这一份上，弹窗只是它的投影。
+    const [toonflowDiversityRepair, setToonflowDiversityRepair] = useState<{
+        nodeId: string;
+        loading: boolean;
+        error?: string;
+        patch?: DiversityPatch;
+        outcome?: DiversityPatchOutcome;
+    } | null>(null);
     const [toonflowCascadeProgress, setToonflowCascadeProgress] = useState<ToonflowCascadeProgress | null>(null);
     const [cascadeLockedNodeIds, setCascadeLockedNodeIds] = useState<Set<string>>(new Set());
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
@@ -2986,6 +3033,103 @@ function InfiniteCanvasPage() {
         setNodes(next);
     }, []);
 
+    /**
+     * 一键修改方案第一步：拿不达标项去调一次模型，要一份只针对那几镜的定点修补丁。
+     * 解析失败不静默——把原因写进弹窗并弹 message，用户看得见才知道要不要重来。
+     */
+    const handleToonflowDiversityRepair = useCallback(
+        async (nodeId: string, failedItems: QualityCheckItem[]) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            const rows = sourceNode?.metadata?.toonflow?.output?.payload.table;
+            if (!sourceNode || !rows?.length) {
+                message.error("分镜表暂无内容，无法生成修改方案");
+                return;
+            }
+            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, "text");
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            const { contracts } = readShotContracts(nodesRef.current);
+            const prompt = buildDiversityRepairPrompt({ rows, shotContracts: contracts, failedItems });
+
+            setToonflowDiversityRepair({ nodeId, loading: true });
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            try {
+                const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: prompt }], () => {}, { signal: controller.signal });
+                const parsed = parseModelJson(DiversityPatchSchema, rawText);
+                if (!parsed.ok) {
+                    message.error(`修改方案解析失败：${parsed.error}`);
+                    setToonflowDiversityRepair({ nodeId, loading: false, error: parsed.error });
+                    return;
+                }
+                setToonflowDiversityRepair({ nodeId, loading: false, patch: parsed.data });
+            } catch (error) {
+                if (isGenerationCanceled(error)) {
+                    setToonflowDiversityRepair(null);
+                    return;
+                }
+                const errorDetails = error instanceof Error ? error.message : "修改方案生成失败";
+                message.error(errorDetails);
+                setToonflowDiversityRepair({ nodeId, loading: false, error: errorDetails });
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
+    /**
+     * 一键修改方案第二步：只把用户勾选的那几条交给 applyDiversityPatch（部分应用就是这么实现的），
+     * 再把改动的分镜表 / 镜头合同各自走一遍节点更新路径。先分镜表后镜头合同：
+     * 分镜表落新版本会把镜头合同标 stale，随后镜头合同自己再落新版本时快照已含新表版本，不会留一个假 stale。
+     */
+    const handleToonflowDiversityPatchApply = useCallback(
+        (patches: DiversityPatchItem[]) => {
+            const session = toonflowDiversityRepair;
+            if (!session) return;
+            const tableNode = nodesRef.current.find((node) => node.id === session.nodeId);
+            const rows = tableNode?.metadata?.toonflow?.output?.payload.table;
+            if (!rows?.length) {
+                message.error("分镜表暂无内容，无法应用修改");
+                return;
+            }
+            const { node: contractNode, contracts } = readShotContracts(nodesRef.current);
+            const result = applyDiversityPatch({ rows, shotContracts: contracts }, patches);
+
+            let next = nodesRef.current;
+            const failures: string[] = [];
+            if (result.rows !== rows) {
+                const revision = applyToonflowTextRevision(next, connectionsRef.current, session.nodeId, JSON.stringify(result.rows, null, 2));
+                if (revision.error) failures.push(`分镜表写回失败：${revision.error}`);
+                next = revision.nodes;
+            }
+            if (contracts && contractNode && result.shotContracts !== contracts) {
+                const revision = applyToonflowTextRevision(next, connectionsRef.current, contractNode.id, JSON.stringify(result.shotContracts, null, 2));
+                if (revision.error) failures.push(`镜头合同写回失败：${revision.error}`);
+                next = revision.nodes;
+            }
+            if (next !== nodesRef.current) {
+                nodesRef.current = next;
+                setNodes(next);
+            }
+            failures.forEach((failure) => message.error(failure));
+
+            const skipped = result.skipped;
+            if (skipped.length) {
+                // 没应用的条目必须让用户看见原因，弹窗留在结果页而不是直接关掉。
+                setToonflowDiversityRepair({ nodeId: session.nodeId, loading: false, outcome: { appliedCount: result.applied.length, skipped } });
+                return;
+            }
+            message.success(`已应用 ${result.applied.length} 条修改`);
+            setToonflowDiversityRepair(null);
+        },
+        [message, toonflowDiversityRepair],
+    );
+
     const handleToonflowEditSave = useCallback((nodeId: string, text: string) => {
         setNodes((prev) => {
             const next = applyEditSave(prev, connectionsRef.current, nodeId, text);
@@ -3564,6 +3708,7 @@ function InfiniteCanvasPage() {
                                         onCascade={(nodeId) => void handleToonflowCascade(nodeId)}
                                         onHistory={setToonflowHistoryNodeId}
                                         onRepair={setToonflowRepairNodeId}
+                                        onDiversityRepair={(nodeId, failedItems) => void handleToonflowDiversityRepair(nodeId, failedItems)}
                                         onOpenAssetCards={setToonflowAssetCardsNodeId}
                                         onAdopt={handleToonflowAdopt}
                                         onDeleteArchived={(nodeId) => void handleDeleteArchivedInstance(nodeId)}
@@ -3742,6 +3887,16 @@ function InfiniteCanvasPage() {
                         if (toonflowSeamNodeId) handleToonflowSeamSave(toonflowSeamNodeId, reviews);
                     }}
                     onCancel={() => setToonflowSeamNodeId(null)}
+                />
+
+                <ToonflowDiversityPatchModal
+                    open={Boolean(toonflowDiversityRepair)}
+                    loading={toonflowDiversityRepair?.loading}
+                    error={toonflowDiversityRepair?.error}
+                    patch={toonflowDiversityRepair?.patch}
+                    outcome={toonflowDiversityRepair?.outcome}
+                    onApply={handleToonflowDiversityPatchApply}
+                    onClose={() => setToonflowDiversityRepair(null)}
                 />
 
                 <Modal

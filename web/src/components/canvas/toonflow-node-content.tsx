@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, Clock3 } from 
 import { z } from "zod";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { runQualityCheck } from "@/lib/toonflow/quality-check";
+import { runQualityCheck, type QualityCheckItem } from "@/lib/toonflow/quality-check";
 import { parseModelJson, ShotContractSchema, type StoryboardRow } from "@/lib/toonflow/schema";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
@@ -47,6 +47,8 @@ type ToonflowNodeContentProps = {
     onCascade?: (nodeId: string) => void;
     onHistory?: (nodeId: string) => void;
     onRepair?: (nodeId: string) => void;
+    /** 分镜表质量检查的「生成修改方案」入口（设计文档 4.5），不传就不渲染该按钮。 */
+    onDiversityRepair?: (nodeId: string, failedItems: QualityCheckItem[]) => void;
     onOpenAssetCards?: (nodeId: string) => void;
     onAdopt?: (nodeId: string) => void;
     onDeleteArchived?: (nodeId: string) => void;
@@ -127,7 +129,7 @@ function findToonflowNode(projects: Array<{ nodes: CanvasNodeData[] }>, nodeId: 
  * 分镜表节点上的质量检查：检查器是纯函数、输入全在画布节点里，所以渲染时实时算，
  * 不落库、不进 schema。selector 只取镜头合同文本与锁定表两个引用，画布其它改动不会触发重算。
  */
-function StoryboardQualityCheck({ nodeId, rows, background }: { nodeId: string; rows: StoryboardRow[]; background: string }) {
+function StoryboardQualityCheck({ nodeId, rows, background, onDiversityRepair }: { nodeId: string; rows: StoryboardRow[]; background: string; onDiversityRepair?: (nodeId: string, failedItems: QualityCheckItem[]) => void }) {
     const shotContractText = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "shot-contract")?.output?.payload.text);
     const directingLock = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "directing-lock")?.output?.payload.directingLock);
     const report = useMemo(() => {
@@ -136,10 +138,32 @@ function StoryboardQualityCheck({ nodeId, rows, background }: { nodeId: string; 
         return runQualityCheck({ storyboardRows: rows, shotContracts: parsed?.ok ? parsed.data : undefined, directingLock });
     }, [rows, shotContractText, directingLock]);
 
-    return <ToonflowQualityCheckPanel report={report} background={background} />;
+    return <ToonflowQualityCheckPanel report={report} background={background} onRepair={onDiversityRepair ? (failedItems) => onDiversityRepair(nodeId, failedItems) : undefined} />;
 }
 
-export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, onOpenExport, exportSummary, onOpenSeam, onSeamSkip, seamSummary, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
+export function ToonflowNodeContent({
+    node,
+    cascadeLocked = false,
+    onGenerate,
+    onRegenerate,
+    onApprove,
+    onEdit,
+    onCascade,
+    onHistory,
+    onRepair,
+    onDiversityRepair,
+    onOpenAssetCards,
+    onAdopt,
+    onDeleteArchived,
+    onOpenExport,
+    exportSummary,
+    onOpenSeam,
+    onSeamSkip,
+    seamSummary,
+    batchCount = 0,
+    batchExpanded = false,
+    onToggleBatch,
+}: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const toonflow = node.metadata?.toonflow;
@@ -324,7 +348,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
             ) : continuityTable ? (
                 <ToonflowContinuityTableView table={continuityTable} background={theme.node.fill} />
             ) : storyboardRows?.length ? (
-                <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} />
+                <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} onDiversityRepair={onDiversityRepair} />
             ) : (
                 <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-1.5">
                     {toonflow.checks.slice(0, isActionable ? 2 : 3).map((item) => (
