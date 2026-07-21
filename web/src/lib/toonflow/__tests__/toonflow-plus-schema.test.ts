@@ -55,12 +55,20 @@ describe("画布模板初始状态", () => {
         expect(toonflowMetaOf(creative!).status).toBe("skipped");
     });
 
+    // keyframes 在 plus 线已退役(Module3 故事板本身就是首帧),但 kind 不能删——旧画布存着这个节点。
+    it("keyframes 已退役,初始态 skipped", () => {
+        const { nodes } = buildToonflowCanvasTemplate();
+        const keyframes = nodes.find((node) => toonflowMetaOf(node).kind === "keyframes");
+        expect(keyframes).toBeDefined();
+        expect(toonflowMetaOf(keyframes!).status).toBe("skipped");
+    });
+
     // skipped 不在 state-machine 的 GENERATABLE_STATUSES 里,这是"一键跑全链不白花钱"的唯一防线;
-    // 若哪天 creative 退回 empty,选修节点会被当成待生成节点执行掉。
-    it("creative 是唯一非 empty 的节点,其余 16 个都待生成", () => {
+    // 若哪天 creative / keyframes 退回 empty,选修与退役节点会被当成待生成节点执行掉。
+    it("只有 creative 与 keyframes 非 empty,其余 15 个都待生成", () => {
         const { nodes } = buildToonflowCanvasTemplate();
         const nonEmpty = nodes.filter((node) => toonflowMetaOf(node).status !== "empty").map((node) => toonflowMetaOf(node).kind);
-        expect(nonEmpty).toEqual(["creative"]);
+        expect(nonEmpty).toEqual(["creative", "keyframes"]);
         expect(nodes).toHaveLength(17);
     });
 });

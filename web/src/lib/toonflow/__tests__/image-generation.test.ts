@@ -105,13 +105,15 @@ function baseNodes(targetKind: "storyboard-page" | "keyframes" = "storyboard-pag
 }
 
 describe("Toonflow 图像提示词", () => {
-    it("故事板页格数等于行数且逐格包含景别、角度和动作", () => {
+    it("故事板页格数等于行数且逐格按三层空间语法给出景别、角度与前景主体", () => {
         const prompt = buildStoryboardPagePrompt({ rows: [row(2), row(1)], shotContracts: [], actionContracts: [] });
-        expect(prompt).toContain("共 2 格、格子=镜头、按 shotNo 顺序排布");
+        expect(prompt).toContain("共 2 格，一格 = 一镜 = 一个时点 = 一个景别");
         expect(prompt.indexOf("shotNo 1")).toBeLessThan(prompt.indexOf("shotNo 2"));
-        expect(prompt).toContain("景别：近景");
+        expect(prompt).toContain("景别：近景（本格只有这一个景别）");
         expect(prompt).toContain("机位角度：低机位");
-        expect(prompt).toContain("动作：主角抬手");
+        expect(prompt).toContain("前景（浅灰亮面）：主角抬手");
+        expect(prompt).toContain("中景（中灰暗面）：");
+        expect(prompt).toContain("背景（深灰阴影）：");
     });
 
     it("故事板页注入镜头落点、排除项和动作关键瞬间", () => {
@@ -122,7 +124,75 @@ describe("Toonflow 图像提示词", () => {
         });
         expect(prompt).toContain("落点构图：手停在中央");
         expect(prompt).toContain("必须排除：路人");
-        expect(prompt).toContain("关键瞬间：手指触到门把");
+        expect(prompt).toContain("停在这一瞬间：手指触到门把");
+        // 主体关系有值时吃进中景层，没有才回落到「按空间合同补足」。
+        expect(prompt).toContain("中景（中灰暗面）：单人");
+    });
+
+    // Module3 是照相级首帧，plus 线弃用「黑白粗线稿 + 首帧上色」两步走。
+    it("故事板页是 Module3 照相级首帧，不再出现黑白线稿表述", () => {
+        const prompt = buildStoryboardPagePrompt({ rows: [row(1)], shotContracts: [], actionContracts: [] });
+        expect(prompt).toContain("这张图就是该段视频的首帧主参考");
+        for (const retired of ["monochrome", "黑白", "线稿"]) expect(prompt).not.toContain(retired);
+    });
+
+    it("故事板页按镜数给出画格排列矩阵（3-5→3+2、6→3+3、7-8→4+4）", () => {
+        const layoutOf = (count: number) =>
+            buildStoryboardPagePrompt({ rows: Array.from({ length: count }, (_, index) => row(index + 1)), shotContracts: [], actionContracts: [] });
+        expect(layoutOf(1)).toContain("画格排列 单行 1 格");
+        expect(layoutOf(4)).toContain("画格排列 3+2 矩阵");
+        expect(layoutOf(6)).toContain("画格排列 3+3 矩阵（上下各 3 格）");
+        expect(layoutOf(8)).toContain("画格排列 4+4 矩阵（上下各 4 格）");
+        for (const count of [1, 4, 6, 8]) expect(layoutOf(count)).toContain("画布 16:9 横版");
+    });
+
+    it("故事板页含三层空间语法禁令、单一视觉任务与禁制清单", () => {
+        const prompt = buildStoryboardPagePrompt({ rows: [row(1)], shotContracts: [], actionContracts: [] });
+        expect(prompt).toContain("禁止位置百分比语言");
+        expect(prompt).toContain("占画面 1/5");
+        expect(prompt).toContain("禁止成品渲染词汇");
+        expect(prompt).toContain("每格只有 1 个前景主体 + 至多 1 个背景暗示");
+        for (const ban of ["速度线", "残影与运动模糊", "同一角色在同一格里出现两次", "拟声词", "跨格共享元素"]) {
+            expect(prompt).toContain(ban);
+        }
+        for (const styleBan of ["漫画", "卡通", "动画", "插画风", "手绘风", "水墨", "Q版"]) expect(prompt).toContain(styleBan);
+        // 单镜物理可行性四档。
+        expect(prompt).toContain("L5：最多 1 个主体局部 + 1 个相邻小元素");
+        expect(prompt).toContain("L3：上半身 + 手持物");
+        // 调度信息内部化。
+        expect(prompt).toContain("因果锚点、主视觉任务标签、空间锚点编号、道具状态链一律不画、不写");
+    });
+
+    // §1.8 实证：故事板是首帧主参考，其外观污染强于 Module4 文字绑定句，裸称人物会丢装备。
+    it("故事板页要求人物标签携带装备特征，禁止裸称", () => {
+        const prompt = buildStoryboardPagePrompt({ rows: [row(1)], shotContracts: [], actionContracts: [] });
+        expect(prompt).toContain("人物标签必须携带装备特征");
+        expect(prompt).toContain("头戴四镜筒头盔的瘦高男");
+        expect(prompt).toContain("一件都不能省");
+    });
+
+    it("故事板页把缝合同落进首末格", () => {
+        const prompt = buildStoryboardPagePrompt({
+            rows: [row(1), row(2)],
+            shotContracts: [],
+            actionContracts: [],
+            seams: [
+                { fromSegmentId: "seg-0", toSegmentId: "seg-a", prevEndBeat: "上段收手到一半", nextFirstPanel: "接住同一次收手的后半", scaleOrMotivation: "景别跳 2 档", soundBridge: "J-cut 提前 0.3s" },
+                { fromSegmentId: "seg-a", toSegmentId: "seg-b", prevEndBeat: "下摇到 1/3 截止", nextFirstPanel: "下一段接同一次下摇", scaleOrMotivation: "POV 运镜动机", soundBridge: "L-cut 拖尾 0.5s" },
+            ],
+        });
+        expect(prompt).toContain("首格（第 1 格）承接上一段：接住同一次收手的后半");
+        expect(prompt).toContain("禁止重新建立空间");
+        expect(prompt).toContain("末格（第 2 格）交给下一段：下摇到 1/3 截止");
+        expect(prompt).toContain("动作画到中间态截止");
+        // 只取与本段相关的两条缝，不把别段的缝抄进来。
+        expect(prompt).not.toContain("上段收手到一半");
+        expect(prompt).not.toContain("下一段接同一次下摇");
+    });
+
+    it("没有缝合同时不出现缝合同区块", () => {
+        const prompt = buildStoryboardPagePrompt({ rows: [row(1)], shotContracts: [], actionContracts: [], seams: [] });
+        expect(prompt).not.toContain("【缝合同");
     });
 
     it("首帧逐字注入 anchors 且 note 进入只改一处的定点修指令", () => {

@@ -40,9 +40,11 @@ describe("redlineForKind", () => {
 });
 
 describe("annotateMethodology", () => {
+    // 本条锁的是「有 toonflow kind 就追加该环节红线」这个行为,不是红线的字面内容。
+    // 断言只挑红线里稳定的特征词,别锁整句——方法论文案会随 skill 更新改写,锁死会误伤。
     it("含 toonflow kind 时追加 _methodology", () => {
         const r = annotateMethodology({ ok: true }, ["keyframes"]) as Record<string, unknown>;
-        expect(String(r._methodology)).toContain("只上色不改构图");
+        expect(String(r._methodology)).toContain("已退役");
     });
     it("无 kind 时零追加", () => {
         const r = annotateMethodology({ ok: true }, [undefined, undefined]) as Record<string, unknown>;
@@ -101,12 +103,13 @@ describe("buildSelectionResult", () => {
 });
 
 describe("buildStateResult", () => {
+    // 同上:反向断言也要挑当前红线里真实存在的特征词,否则红线改写后这条会退化成永远为真的空断言。
     it("含环节 → 挂全局三铁律+指引,不倒逐环节红线", () => {
         const state = { nodes: [node("n1", "video-workbench"), node("n2", "keyframes")] };
         const r = buildStateResult(state) as Record<string, unknown>;
         expect(String(r._methodology)).toContain("三铁律");
         expect(String(r._methodology)).toContain("canvas_get_selection");
-        expect(String(r._methodology)).not.toContain("只上色不改构图");
+        expect(String(r._methodology)).not.toContain("已退役");
     });
     it("普通画布 → 零追加", () => {
         const state = { nodes: [node("n1")] };

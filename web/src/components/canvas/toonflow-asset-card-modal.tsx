@@ -18,6 +18,7 @@ const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     outfit: "服装",
     form: "形态",
     audio: "音频",
+    palette: "色板",
 };
 
 const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
@@ -29,6 +30,7 @@ const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
     outfit: "magenta",
     form: "gold",
     audio: "volcano",
+    palette: "geekblue",
 };
 
 type ToonflowAssetCardModalProps = {

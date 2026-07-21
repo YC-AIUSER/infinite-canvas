@@ -199,7 +199,7 @@ export function ToonflowNodeContent({
                   summary[card.cardType] += 1;
                   return summary;
               },
-              { character: 0, scene: 0, prop: 0, action: 0, expression: 0, outfit: 0, form: 0, audio: 0 },
+              { character: 0, scene: 0, prop: 0, action: 0, expression: 0, outfit: 0, form: 0, audio: 0, palette: 0 },
           )
         : null;
 

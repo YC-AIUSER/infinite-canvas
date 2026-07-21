@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind } from "../../../types/canvas";
 import { applyAssetCardsSave, buildToonflowImageGeneration, parseEntityHints, readNodeInput } from "../node-runtime";
-import { buildAssetCardPrompt } from "../prompts";
+import { PALETTE_ANCHOR_SENTENCE, buildAssetCardPrompt, buildStoryboardPagePrompt } from "../prompts";
 import { AssetCardSchema, NodeOutputSchema, validateAssetCards, type AssetCard, type NodeOutput, type NodeStatus } from "../schema";
 
 const cards: AssetCard[] = [{ cardId: "card-1", cardType: "character", name: "阿青", anchor: "黑色短发，青色长衫", storageKey: "image:anchor-1" }];
@@ -226,6 +226,50 @@ describe("buildAssetCardPrompt", () => {
         expect(prompt).toContain("青色龙鳞覆盖全身");
         expect(prompt).not.toContain("父锚点绝不能出现");
         expect(prompt).not.toContain("阿青的外貌");
+    });
+
+    it("色板卡出 13 色冷暖双调色板并逐字带 HEX 与中文描述要求", () => {
+        const prompt = buildAssetCardPrompt({ cardType: "palette", name: "全片色板", anchor: "低饱和冷调都市夜色" });
+        expect(prompt).toContain("film color palette, 13 color swatches, warm-cool dual tone system");
+        expect(prompt).toContain("13 个色块按冷暖双调分区排列");
+        expect(prompt).toContain("HEX 色号与一句中文色彩描述");
+        expect(prompt).toContain("低饱和冷调都市夜色");
+    });
+});
+
+// ST 色板全局锚定（03-assets.md §6.3，阻断级）。两句一体：第二句是防泄漏句，
+// 2026-07-18 A/B 实证里 B 组零图表泄漏全靠它，任何人不许以「太长」为由删掉。
+describe("色板锚定句", () => {
+    it("逐字等于方法论源 03-assets.md §6.3", () => {
+        expect(PALETTE_ANCHOR_SENTENCE).toBe(
+            "strictly follow the confirmed color palette (13 colors, warm-cool dual tone), no color deviation from palette. The palette reference image is a color grading source only — do NOT render any swatches, charts or labels in the output",
+        );
+    });
+
+    it.each([
+        ["角色卡", { cardType: "character", name: "阿青", anchor: "黑色短发" }],
+        ["场景卡", { cardType: "scene", name: "长街", anchor: "青砖长街" }],
+        ["动作卡", { cardType: "action", name: "阿青·拔剑", anchor: "右手拔剑" }],
+        ["表情卡", { cardType: "expression", name: "阿青·惊讶", anchor: "瞳孔放大" }],
+        ["服装卡", { cardType: "outfit", name: "阿青·夜行装", anchor: "黑色夜行衣" }],
+        ["形态卡", { cardType: "form", name: "阿青·青龙形态", anchor: "青色龙鳞" }],
+    ] as const)("%s 追加锚定句且防泄漏句齐全", (_name, card) => {
+        const prompt = buildAssetCardPrompt(card);
+        expect(prompt).toContain(PALETTE_ANCHOR_SENTENCE);
+        expect(prompt).toContain("The palette reference image is a color grading source only");
+    });
+
+    it("色板卡自身不追加锚定句（它的成品就是色卡，带防泄漏句自相矛盾）", () => {
+        expect(buildAssetCardPrompt({ cardType: "palette", name: "全片色板", anchor: "冷调" })).not.toContain(PALETTE_ANCHOR_SENTENCE);
+    });
+
+    it("Module3 故事板同样追加锚定句", () => {
+        const prompt = buildStoryboardPagePrompt({
+            rows: [{ segmentId: "seg-a", shotId: "seg-a-shot-1", shotNo: 1, scale: "L3 近景", angle: "平视", action: "抬手", line: "", sfx: "", mood: "紧张", durationSec: 3 }],
+            shotContracts: [],
+            actionContracts: [],
+        });
+        expect(prompt).toContain(PALETTE_ANCHOR_SENTENCE);
     });
 });
 

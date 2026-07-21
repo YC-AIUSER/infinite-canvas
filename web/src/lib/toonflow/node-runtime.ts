@@ -72,6 +72,7 @@ const ASSET_CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     outfit: "服装",
     form: "形态",
     audio: "音频",
+    palette: "色板",
 };
 
 function formatAssetCard(card: AssetCard, parentNameById: Map<string, string>) {
