@@ -1,12 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Popconfirm } from "antd";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, Clock3 } from "lucide-react";
+import { z } from "zod";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { runQualityCheck } from "@/lib/toonflow/quality-check";
+import { parseModelJson, ShotContractSchema, type StoryboardRow } from "@/lib/toonflow/schema";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasNodeData, ToonflowNodeStageStatus } from "@/types/canvas";
+
+import { ToonflowContinuityTableView, ToonflowDirectingLockView, ToonflowQualityCheckPanel } from "./toonflow-plus-node-views";
 
 const statusTone: Record<ToonflowNodeStageStatus, string> = {
     empty: "#78716c",
@@ -28,7 +34,8 @@ const statusLabel: Record<ToonflowNodeStageStatus, string> = {
     skipped: "已跳过",
 };
 
-const actionableKinds = new Set(["script", "space-contract", "storyboard-table", "shot-contract", "action-contract"]);
+// creative 是选修环节,默认状态就是 skipped,也必须能手动生成——不列进来的话整个操作区都不渲染,用户点不到任何入口。
+const actionableKinds = new Set(["creative", "script", "space-contract", "storyboard-table", "shot-contract", "action-contract"]);
 
 type ToonflowNodeContentProps = {
     node: CanvasNodeData;
@@ -105,6 +112,33 @@ function InstanceVideo({ storageKey, name, background, borderColor }: { storageK
     );
 }
 
+const ShotContractListSchema = z.array(ShotContractSchema);
+
+/** 在画布工程里找到该节点所在的那份节点列表（节点状态由 project 页同步进 store，这里只读不写）。 */
+function findSiblingNodes(projects: Array<{ nodes: CanvasNodeData[] }>, nodeId: string): CanvasNodeData[] | undefined {
+    return projects.find((project) => project.nodes.some((item) => item.id === nodeId))?.nodes;
+}
+
+function findToonflowNode(projects: Array<{ nodes: CanvasNodeData[] }>, nodeId: string, kind: string) {
+    return findSiblingNodes(projects, nodeId)?.find((item) => item.metadata?.toonflow?.kind === kind)?.metadata?.toonflow;
+}
+
+/**
+ * 分镜表节点上的质量检查：检查器是纯函数、输入全在画布节点里，所以渲染时实时算，
+ * 不落库、不进 schema。selector 只取镜头合同文本与锁定表两个引用，画布其它改动不会触发重算。
+ */
+function StoryboardQualityCheck({ nodeId, rows, background }: { nodeId: string; rows: StoryboardRow[]; background: string }) {
+    const shotContractText = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "shot-contract")?.output?.payload.text);
+    const directingLock = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "directing-lock")?.output?.payload.directingLock);
+    const report = useMemo(() => {
+        const parsed = shotContractText?.trim() ? parseModelJson(ShotContractListSchema, shotContractText) : null;
+        // 故事板格子数无法从节点数据里读出（要数图上的画格），不传：检查器会把「格子数一致」标成待定，而不是误报不达标。
+        return runQualityCheck({ storyboardRows: rows, shotContracts: parsed?.ok ? parsed.data : undefined, directingLock });
+    }, [rows, shotContractText, directingLock]);
+
+    return <ToonflowQualityCheckPanel report={report} background={background} />;
+}
+
 export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, onRegenerate, onApprove, onEdit, onCascade, onHistory, onRepair, onOpenAssetCards, onAdopt, onDeleteArchived, onOpenExport, exportSummary, onOpenSeam, onSeamSkip, seamSummary, batchCount = 0, batchExpanded = false, onToggleBatch }: ToonflowNodeContentProps) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
@@ -130,6 +164,9 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
     const instanceVideoKey = toonflow.output?.payload.videoKeys?.[0];
     const generationKindLabel = toonflow.kind === "video-workbench" ? "视频" : "图像";
     const error = toonflow.output?.error || node.metadata?.errorDetails;
+    const directingLock = toonflow.kind === "directing-lock" ? toonflow.output?.payload.directingLock : undefined;
+    const continuityTable = toonflow.kind === "continuity-table" ? toonflow.output?.payload.continuityTable : undefined;
+    const storyboardRows = toonflow.kind === "storyboard-table" ? toonflow.output?.payload.table : undefined;
     const washHits = toonflow.washReport?.hits || [];
     const assetCards = toonflow.output?.payload.cards;
     const assetCardSummary = assetCards?.length
@@ -282,6 +319,12 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                         </Button>
                     </div>
                 </div>
+            ) : directingLock ? (
+                <ToonflowDirectingLockView lock={directingLock} background={theme.node.fill} />
+            ) : continuityTable ? (
+                <ToonflowContinuityTableView table={continuityTable} background={theme.node.fill} />
+            ) : storyboardRows?.length ? (
+                <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} />
             ) : (
                 <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-1.5">
                     {toonflow.checks.slice(0, isActionable ? 2 : 3).map((item) => (
@@ -299,7 +342,7 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                 </div>
             )}
 
-            {!isActionable && !isExport && !isSeam && toonflow.kind !== "compliance" && toonflow.outputs?.length ? (
+            {!isActionable && !isExport && !isSeam && toonflow.kind !== "compliance" && !directingLock && !continuityTable && toonflow.outputs?.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                     {toonflow.outputs.slice(0, 2).map((item) => (
                         <span key={item} className="rounded-md px-2 py-1 text-[11px] font-medium" style={{ background: `${accent}16`, color: accent }}>
@@ -520,6 +563,14 @@ export function ToonflowNodeContent({ node, cascadeLocked = false, onGenerate, o
                         >
                             沿用
                         </Button>
+                    ) : null}
+                    {toonflow.status === "skipped" ? (
+                        // 选修环节的入口:状态机允许 skipped → generating(一键跑全链仍会跳过),文案说清点它等于"启用这个环节"。
+                        <Popconfirm title="启用该选修环节并生成？" okText="启用并生成" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
+                            <Button size="small" type="primary" disabled={cascadeLocked}>
+                                启用并生成
+                            </Button>
+                        </Popconfirm>
                     ) : null}
                     {["empty", "failed"].includes(toonflow.status) ? (
                         <Button
