@@ -1,0 +1,453 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toonflow 现在到哪一步了 — infinite-canvas</title>
+<style>
+:root {
+  --ivory:    #FAF9F5;
+  --slate:    #141413;
+  --clay:     #D97757;
+  --oat:      #E3DACC;
+  --olive:    #788C5D;
+  --rust:     #B04A3F;
+  --white:    #FFFFFF;
+  --gray-100: #F0EEE6;
+  --gray-300: #D1CFC5;
+  --gray-500: #87867F;
+  --gray-700: #3D3D3A;
+
+  --warning:  #C78E3F;
+  --danger:   #B04A4A;
+  --info:     #5C7CA3;
+
+  --serif: ui-serif, Georgia, "Noto Serif SC", "Source Han Serif SC", serif;
+  --sans:  system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius: 12px;
+  --border: 1.5px solid var(--gray-300);
+  --shadow: 0 1px 2px rgba(20,20,19,0.06);
+}
+html[data-theme="dark"] {
+  --ivory:    #16161A;
+  --white:    #201F1D;
+  --slate:    #F2EEE6;
+  --oat:      #3A3226;
+  --gray-100: #26251F;
+  --gray-300: #3A3A36;
+  --gray-500: #9C9A92;
+  --gray-700: #D6D3CB;
+  --shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+body {
+  margin: 0; padding: 0 32px 120px;
+  background: var(--ivory); color: var(--gray-700);
+  font-family: var(--sans); font-size: 15px; line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
+}
+.page { max-width: 1000px; margin: 0 auto; }
+
+.docnav {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--ivory) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  border-bottom: 1px solid var(--gray-300);
+  margin: 0 -32px 40px; padding: 10px 32px;
+}
+.docnav-inner { max-width: 1000px; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
+.docnav .toc { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.docnav .toc a {
+  font-family: var(--mono); font-size: 12px; color: var(--gray-500); text-decoration: none;
+  padding: 5px 10px; border-radius: 7px; white-space: nowrap; transition: background 0.15s, color 0.15s;
+}
+.docnav .toc a:hover { color: var(--clay); background: var(--gray-100); }
+.docnav .toc a.active { color: var(--slate); background: var(--oat); }
+.docnav .search {
+  font-family: var(--mono); font-size: 12px; background: var(--white); color: var(--gray-700);
+  border: var(--border); border-radius: 999px; padding: 6px 12px; width: 150px;
+  transition: width 0.2s, border-color 0.15s;
+}
+.docnav .search:focus { outline: none; width: 200px; border-color: var(--clay); }
+.docnav .search-count { font-family: var(--mono); font-size: 11px; color: var(--gray-500); min-width: 30px; text-align: center; }
+.docnav .theme-btn {
+  background: var(--white); border: var(--border); border-radius: 999px;
+  width: 34px; height: 34px; cursor: pointer; font-size: 15px;
+  display: grid; place-items: center; flex-shrink: 0; color: var(--gray-700);
+}
+.docnav .theme-btn:hover { border-color: var(--clay); }
+mark.dochit { background: var(--clay); color: var(--ivory); border-radius: 3px; padding: 0 1px; }
+mark.dochit.current { outline: 2px solid var(--slate); }
+@media (max-width: 640px) { .docnav .search { width: 100px; } .docnav .search:focus { width: 130px; } }
+
+.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px; }
+h1 { font-family: var(--serif); font-weight: 500; font-size: 36px; line-height: 1.15; color: var(--slate); letter-spacing: -0.01em; margin: 0 0 16px; }
+.lede { font-size: 17px; color: var(--gray-500); max-width: 720px; margin: 0 0 40px; }
+
+.verdict {
+  background: var(--slate); color: var(--ivory); border-radius: var(--radius);
+  padding: 26px 30px; margin-bottom: 48px;
+}
+.verdict .label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6; display: block; margin-bottom: 10px; }
+.verdict p { margin: 0; font-family: var(--serif); font-size: 23px; line-height: 1.45; }
+.verdict .sub { font-family: var(--sans); font-size: 15px; opacity: 0.75; margin-top: 12px; line-height: 1.6; }
+
+.summary-band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 56px; }
+@media (max-width: 720px) { .summary-band { grid-template-columns: repeat(2, 1fr); } }
+.stat-card { background: var(--white); border: var(--border); border-radius: var(--radius); padding: 20px 22px 18px; }
+.stat-card.warn { border-left: 4px solid var(--clay); padding-left: 19px; }
+.stat-num { font-family: var(--serif); font-size: 42px; font-weight: 500; line-height: 1; color: var(--slate); margin-bottom: 8px; }
+.stat-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gray-500); }
+.stat-delta { font-family: var(--mono); font-size: 11px; margin-top: 6px; }
+.stat-delta.up   { color: var(--olive); }
+.stat-delta.flat { color: var(--gray-500); }
+
+section { margin-bottom: 56px; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+.sec-head .num { font-family: var(--mono); font-size: 12px; background: var(--oat); color: var(--slate); padding: 3px 9px; border-radius: 8px; }
+.sec-head h2 { font-family: var(--serif); font-weight: 500; font-size: 24px; color: var(--slate); letter-spacing: -0.01em; margin: 0; }
+.sec-intro { font-size: 14px; color: var(--gray-500); max-width: 720px; margin-bottom: 24px; }
+
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--white); border: var(--border); border-radius: var(--radius); padding: 20px 24px; box-shadow: var(--shadow); }
+.card .role { font-size: 12px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--clay); margin-bottom: 6px; }
+.card h3 { font-size: 17px; font-weight: 500; margin: 0 0 8px; color: var(--slate); }
+.card p { margin: 0 0 10px; font-size: 14px; color: var(--gray-700); }
+.card p:last-child { margin-bottom: 0; }
+[data-group].filtered-out { display: none !important; }
+
+.tag { display: inline-block; font-family: var(--mono); font-size: 11px; background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 6px; padding: 3px 8px; color: var(--gray-700); }
+.badge { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; color: #FFF; }
+.badge.green { background: var(--olive); } .badge.orange { background: var(--warning); }
+.badge.blue { background: var(--info); } .badge.gray { background: var(--gray-500); }
+
+.milestones { display: flex; flex-direction: column; }
+.milestone { display: grid; grid-template-columns: 100px 28px 1fr; gap: 0 18px; }
+@media (max-width: 640px) { .milestone { grid-template-columns: 68px 28px 1fr; gap: 0 10px; } }
+.milestone .when { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--gray-500); padding-top: 4px; }
+.milestone .dot-col { display: flex; flex-direction: column; align-items: center; }
+.milestone .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--white); border: 3px solid var(--clay); margin-top: 6px; flex-shrink: 0; }
+.milestone .dot.done { background: var(--olive); border-color: var(--olive); }
+.milestone .line { width: 2px; flex: 1; background: var(--gray-300); margin: 4px 0; }
+.milestone:last-child .line { display: none; }
+.milestone .body { padding-bottom: 30px; }
+.milestone .body h3 { font-family: var(--serif); font-weight: 500; font-size: 18px; color: var(--slate); margin: 0 0 4px; }
+.milestone .body p { font-size: 14px; color: var(--gray-500); margin: 0 0 10px; max-width: 640px; }
+.milestone .tags { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.highlights { list-style: none; margin: 0; padding: 0; }
+.highlights li { position: relative; padding: 0 0 14px 26px; font-size: 15px; color: var(--gray-700); }
+.highlights li::before { content: ""; position: absolute; left: 6px; top: 10px; width: 7px; height: 7px; border-radius: 2px; background: var(--clay); }
+.highlights li strong { color: var(--slate); font-weight: 600; }
+
+.chips { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+.chip { font-family: var(--mono); font-size: 12px; padding: 4px 12px; border: 1px solid var(--gray-300); border-radius: 6px; background: var(--white); cursor: pointer; color: var(--gray-700); user-select: none; }
+.chip.active { background: var(--slate); color: var(--ivory); border-color: var(--slate); }
+.chip:hover:not(.active) { border-color: var(--clay); color: var(--clay); }
+
+.ask { background: var(--white); border: var(--border); border-left: 4px solid var(--clay); border-radius: var(--radius); padding: 22px 26px; }
+.ask h3 { font-family: var(--serif); font-weight: 500; font-size: 20px; margin: 0 0 10px; color: var(--slate); }
+.ask p { margin: 0 0 14px; font-size: 15px; }
+.ask .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+@media (max-width: 640px) { .ask .opts { grid-template-columns: 1fr; } }
+.opt { background: var(--gray-100); border-radius: 9px; padding: 14px 16px; font-size: 14px; }
+.opt b { display: block; color: var(--slate); font-size: 15px; margin-bottom: 4px; }
+
+footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--gray-300); font-size: 13px; color: var(--gray-500); }
+@media (max-width: 640px) {
+  body { padding: 0 16px 64px; }
+  .docnav { margin: 0 -16px 32px; padding: 10px 16px; }
+  h1 { font-size: 28px; }
+  .verdict p { font-size: 19px; }
+  .summary-band { grid-template-columns: 1fr; }
+}
+</style>
+
+<div class="docnav">
+  <div class="docnav-inner">
+    <nav class="toc" aria-label="目录"></nav>
+    <input class="search" type="search" placeholder="搜索…" aria-label="页内搜索">
+    <span class="search-count"></span>
+    <button class="theme-btn" title="深/浅色切换" aria-label="切换主题">🌙</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <div class="eyebrow">状态汇报 · infinite-canvas / Toonflow</div>
+  <h1>Toonflow 现在到哪一步了</h1>
+  <p class="lede">截至 2026-07-21。工具本身已经能用，最近五天你没有改它——你在拿它做真片子。</p>
+
+  <div class="verdict">
+    <span class="label">一句话</span>
+    <p>造工具的阶段结束了，现在是用工具的阶段。</p>
+    <div class="sub">代码最后一次改动停在 7 月 16 日，之后这个仓库就从「在建的工具」变成了「正在跑活的工具」——跑刀那部片子就是它做出来的。停下来不是卡住，是该停。</div>
+  </div>
+
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">6/6</div><div class="stat-label">主流程环节</div><div class="stat-delta up">7月13日全通</div></div>
+    <div class="stat-card"><div class="stat-num">4</div><div class="stat-label">二期已完成</div><div class="stat-delta up">7月14–16日</div></div>
+    <div class="stat-card warn"><div class="stat-num">10</div><div class="stat-label">待办事项</div><div class="stat-delta flat">全部非急件</div></div>
+    <div class="stat-card"><div class="stat-num">5天</div><div class="stat-label">未改代码</div><div class="stat-delta flat">在用它做片子</div></div>
+  </div>
+
+  <section id="s-how" data-nav="怎么走到今天">
+    <div class="sec-head"><span class="num">01</span><h2>怎么走到今天的</h2></div>
+    <p class="sec-intro">四步，一个月不到。</p>
+    <div class="milestones">
+      <div class="milestone">
+        <div class="when">7月13日</div>
+        <div class="dot-col"><div class="dot done"></div><div class="line"></div></div>
+        <div class="body">
+          <h3>整条流水线跑通了</h3>
+          <p>从写故事 → 分镜 → 出图 → 出视频 → 导出，一条龙全部打通，能从头做到尾。</p>
+          <div class="tags"><span class="tag">一期完成</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">7月14–16日</div>
+        <div class="dot-col"><div class="dot done"></div><div class="line"></div></div>
+        <div class="body">
+          <h3>连着补了四件事</h3>
+          <p>画布上的节点能成组管理了；跟 AI 对话改东西时它不会再忘记规矩；一键整理画布变整齐；最后加了「把几段视频接成一条成片」的功能。</p>
+          <div class="tags"><span class="tag">节点分组</span><span class="tag">规矩不失忆</span><span class="tag">一键整理</span><span class="tag">成片拼接</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">7月16日</div>
+        <div class="dot-col"><div class="dot done"></div><div class="line"></div></div>
+        <div class="body">
+          <h3>立了个大项，然后主动停手</h3>
+          <p>记下了「以后要支持不同类型的片子（短剧、带货、Vlog 各走各的流程）」这件事，但同时写明了前提：<b>等真的出现第二种片子需求再动手</b>。现在还没出现，所以停着是对的。</p>
+          <div class="tags"><span class="tag">已立项</span><span class="tag">等条件</span></div>
+        </div>
+      </div>
+      <div class="milestone">
+        <div class="when">7月16–21日</div>
+        <div class="dot-col"><div class="dot"></div></div>
+        <div class="body">
+          <h3>改用它做真片子</h3>
+          <p>项目文件夹里现在唯一多出来的东西，是 20 张跑刀的参考图（萨满、桌子布局、通风口那些）。工具没动，人在用它干活。</p>
+          <div class="tags"><span class="tag">跑刀 S1</span><span class="tag">实战中</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="s-todo" data-nav="还没做的">
+    <div class="sec-head"><span class="num">02</span><h2>还没做的 10 件事</h2></div>
+    <p class="sec-intro">没有一件是坏掉的东西。都是当初想清楚了、故意排到后面的。点上面的按钮可以只看某一类。</p>
+
+    <div class="chips" data-filter="todo">
+      <div class="chip active" data-tag="all">全部 10</div>
+      <div class="chip" data-tag="ready">该动手了 1</div>
+      <div class="chip" data-tag="wait">等条件 2</div>
+      <div class="chip" data-tag="minor">小修小补 7</div>
+    </div>
+
+    <div class="grid">
+      <div class="card" data-group="todo" data-tag="ready">
+        <div class="role">该动手了</div>
+        <h3>只补重拍坏掉的那几秒</h3>
+        <p>现在一段视频里只要有一个镜头不满意，整段都得重摇。当初这么设计是为了省事。</p>
+        <p><b>但跑刀这轮证明了整段重摇太贵</b>——正好这个功能提级的条件就是「整段重摇成本过高」。而且接视频的技术底子上周已经铺好了，能直接拿来用。</p>
+        <span class="badge orange">建议提级</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="wait">
+        <div class="role">等条件</div>
+        <h3>支持不同类型的片子</h3>
+        <p>短剧、带货、Vlog 各有各的做法，将来整条流程都能按类型切换。这是三档递进的大工程。</p>
+        <p>前提写死了：<b>得先真的有第二种片子的需求</b>，再坐下来聊清楚流程长什么样。现在只有短剧。</p>
+        <span class="badge gray">条件未满足</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="wait">
+        <div class="role">等条件</div>
+        <h3>老客户的粗版一键搬进画布</h3>
+        <p>让现有客户的成品直接展开成画布项目，把他们变成画布用户。</p>
+        <p>动手前得先摸清他们那边东西长什么样，这件事还没做。</p>
+        <span class="badge gray">待摸底</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="minor">
+        <div class="role">小修小补</div>
+        <h3>敏感词表怎么更新</h3>
+        <p>现在是一份固定的快照。平台规则改了要靠人手动更新，还没定季度检查还是别的办法。</p>
+        <span class="badge gray">流程未定</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="minor">
+        <div class="role">小修小补</div>
+        <h3>场景平面图能手画</h3>
+        <p>方法论要求手绘俯视点位图（AI 画会飘），现在只有文字版的空间规则，画布上还画不了。</p>
+        <span class="badge gray">未开工</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="minor">
+        <div class="role">小修小补</div>
+        <h3>自动化测试</h3>
+        <p>两条主要流程现在靠人工点一遍验收。等用的人多了再上自动的。</p>
+        <span class="badge gray">按人数触发</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="minor">
+        <div class="role">小修小补</div>
+        <h3>分镜表质量打分</h3>
+        <p>分镜表是全链条最要命的一环，想建个小测试集固定打分防退步。需要人工标注一次基准。</p>
+        <span class="badge gray">未开工</span>
+      </div>
+
+      <div class="card" data-group="todo" data-tag="minor">
+        <div class="role">小修小补</div>
+        <h3>三个早期审查的小尾巴</h3>
+        <p>①有些段落被过度标记成「要重做」（宁可多做一次，不会出错）；②图里格子数对不对不做机器检查（当初拍板接受这个风险）；③部分测试写法要改得更严谨。</p>
+        <p>三条都确认过<b>不是错误</b>，只是不够漂亮。</p>
+        <span class="badge green">已确认无害</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="s-ask" data-nav="要你拍板">
+    <div class="sec-head"><span class="num">03</span><h2>就一件事要你拍板</h2></div>
+    <div class="ask">
+      <h3>跑刀这轮的经验，要不要现在回灌进工具？</h3>
+      <p>做跑刀 S1 撞出来一堆真东西：整段重摇太费轮次、参考图顺序会串位、什么内容会被平台拦。这些现在只躺在会话日记里，没进待办清单。</p>
+      <div class="opts">
+        <div class="opt">
+          <b>A. 现在回灌</b>
+          把经验整理进待办，把「只补坏掉那几秒」提到最前面先做掉——下一部片子能省不少轮次。
+        </div>
+        <div class="opt">
+          <b>B. 继续停工</b>
+          先把手上片子做完，攒够经验再一次性回来改。工具现在够用，不改也不耽误事。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    依据：本仓库 git 记录、TODOS.md、docs 目录时间戳 · 生成于 2026-07-21
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $  = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+  var root = document.documentElement, btn = $(".theme-btn");
+  function applyTheme(t) {
+    root.setAttribute("data-theme", t);
+    if (btn) btn.textContent = t === "dark" ? "☀️" : "🌙";
+  }
+  var saved = null;
+  try { saved = localStorage.getItem("doc-theme"); } catch (e) {}
+  var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+  if (btn) btn.addEventListener("click", function () {
+    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem("doc-theme", next); } catch (e) {}
+  });
+
+  var toc = $(".docnav .toc");
+  var secs = $$("section[data-nav]");
+  var links = [];
+  if (toc && secs.length) {
+    secs.forEach(function (sec) {
+      if (!sec.id) return;
+      var a = document.createElement("a");
+      a.href = "#" + sec.id;
+      a.textContent = sec.getAttribute("data-nav");
+      toc.appendChild(a);
+      links.push(a);
+    });
+    var spy = function () {
+      var y = window.scrollY + 90, cur = null;
+      secs.forEach(function (sec) { if (sec.offsetTop <= y) cur = sec.id; });
+      links.forEach(function (a) { a.classList.toggle("active", a.getAttribute("href") === "#" + cur); });
+    };
+    window.addEventListener("scroll", spy, { passive: true });
+    spy();
+  }
+
+  $$(".chips[data-filter]").forEach(function (bar) {
+    var group = bar.getAttribute("data-filter");
+    var targets = $$('[data-group="' + group + '"]');
+    bar.addEventListener("click", function (e) {
+      var chip = e.target.closest(".chip");
+      if (!chip) return;
+      $$(".chip", bar).forEach(function (c) { c.classList.remove("active"); });
+      chip.classList.add("active");
+      var want = chip.getAttribute("data-tag");
+      targets.forEach(function (el) {
+        var tags = (el.getAttribute("data-tag") || "").split(/\s+/);
+        var show = want === "all" || tags.indexOf(want) !== -1;
+        el.classList.toggle("filtered-out", !show);
+      });
+    });
+  });
+
+  var input = $(".docnav .search"), count = $(".docnav .search-count");
+  var page = $(".page"), hits = [], idx = -1;
+  function clearMarks() {
+    $$("mark.dochit", page).forEach(function (m) {
+      var t = document.createTextNode(m.textContent);
+      m.parentNode.replaceChild(t, m); m.parentNode.normalize();
+    });
+    hits = []; idx = -1;
+  }
+  function highlight(term) {
+    clearMarks();
+    if (!term || term.length < 2) { if (count) count.textContent = ""; return; }
+    var rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        if (!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        var p = n.parentNode.nodeName;
+        if (p === "SCRIPT" || p === "STYLE" || p === "MARK") return NodeFilter.FILTER_REJECT;
+        return rx.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    var nodes = [], n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    nodes.forEach(function (node) {
+      var frag = document.createDocumentFragment(), last = 0, s = node.nodeValue, m;
+      rx.lastIndex = 0;
+      while ((m = rx.exec(s))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+        var mk = document.createElement("mark"); mk.className = "dochit"; mk.textContent = m[0];
+        frag.appendChild(mk); hits.push(mk); last = m.index + m[0].length;
+        if (m[0].length === 0) rx.lastIndex++;
+      }
+      if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+    if (count) count.textContent = hits.length ? "0/" + hits.length : "0";
+    if (hits.length) jump(0);
+  }
+  function jump(i) {
+    if (!hits.length) return;
+    if (idx >= 0 && hits[idx]) hits[idx].classList.remove("current");
+    idx = (i + hits.length) % hits.length;
+    hits[idx].classList.add("current");
+    hits[idx].scrollIntoView({ block: "center", behavior: "smooth" });
+    if (count) count.textContent = (idx + 1) + "/" + hits.length;
+  }
+  if (input) {
+    var deb;
+    input.addEventListener("input", function () {
+      clearTimeout(deb); var v = input.value;
+      deb = setTimeout(function () { highlight(v.trim()); }, 180);
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); jump(idx + (e.shiftKey ? -1 : 1)); }
+      if (e.key === "Escape") { input.value = ""; clearMarks(); if (count) count.textContent = ""; }
+    });
+  }
+})();
+</script>
