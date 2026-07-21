@@ -91,7 +91,7 @@ const templateNodes: ToonflowTemplateNode[] = [
         title: "分镜决策锁定表",
         stage: "决策锁定",
         summary: "A 表锁全局风格、调色、布光、运镜基调和表演档位，B 表逐段锁构图景别，并签相邻段缝合同。一次锁死，后续只引用。",
-        checks: ["A 表已锁", "B 表逐段齐", "缝合同四行"],
+        checks: ["A 表已锁", "B 表逐段齐", "缝合同五行"],
         outputs: ["分镜决策锁定表", "缝合同"],
         accent: "#b45309",
     },

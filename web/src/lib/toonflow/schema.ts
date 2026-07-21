@@ -206,7 +206,13 @@ export const SeamContractSchema = z.object({
     prevEndBeat: z.string(), // 上段末拍:动作做到中间态截止
     nextFirstPanel: z.string(), // 本段首格:同一动作的后半段,禁止重新建立空间
     scaleOrMotivation: z.string(), // 景别跳档或运镜动机
-    soundBridge: z.string(), // 声音桥:J-cut / L-cut
+    soundBridge: z.string(), // 声音桥:J-cut / L-cut(后期怎么编排台词轨与音效轨)
+    // 音频边界:生成时就别造出跨缝的持续音,让缝天生可切。与 soundBridge 分工不同——
+    // soundBridge 管后期编排,本行管生成约束,落进两侧段视频的生成 prompt。
+    // 由来:跑刀 v3.17 实战撞出「墩柜声与人声同帧不可分」,想在那儿裁一刀声音必然带伤。
+    // 台词剥离(设计文档 4.4)只解决了人声,视频自带的环境音效仍由模型烧进视频轨、仍会跨缝。
+    // 事后发现切不开只能绕,所以把它前置成生成要求——同铁律 11 ⓪「缝在装配层消灭」的思路。
+    audioBoundary: z.string().optional(),
 });
 
 export type SeamContract = z.infer<typeof SeamContractSchema>;

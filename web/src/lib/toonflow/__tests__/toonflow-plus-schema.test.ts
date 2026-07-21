@@ -7,6 +7,7 @@ import {
     ContinuityTableSchema,
     DirectingLockSchema,
     NodeOutputSchema,
+    SeamContractSchema,
     ShotContractSchema,
     TOONFLOW_NODE_KINDS,
 } from "../schema";
@@ -192,8 +193,22 @@ describe("DirectingLockSchema", () => {
                     nextFirstPanel: "门继续被推开,人踏进门内",
                     scaleOrMotivation: "景别跳 2 档,中景→特写",
                     soundBridge: "J-cut:下段台词提前 0.3s",
+                    audioBoundary: "上段末 0.5s 内门轴声自然收束,本段开头不接门轴残响",
                 },
             ],
+        });
+        expect(result.success).toBe(true);
+    });
+
+    // audioBoundary 是 16d88ab 之后补的第五行,已提交的锁定表数据不带它,必须能原样读进来(设计文档 4.8)。
+    it("缝合同不带 audioBoundary 时仍能通过校验", () => {
+        const result = SeamContractSchema.safeParse({
+            fromSegmentId: "seg-1",
+            toSegmentId: "seg-2",
+            prevEndBeat: "手推到门开一半",
+            nextFirstPanel: "门继续被推开,人踏进门内",
+            scaleOrMotivation: "景别跳 2 档,中景→特写",
+            soundBridge: "J-cut:下段台词提前 0.3s",
         });
         expect(result.success).toBe(true);
     });

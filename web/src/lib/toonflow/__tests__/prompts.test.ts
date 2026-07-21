@@ -175,14 +175,23 @@ describe("plus 方法论保真", () => {
         expect(prompt).toContain("ARC-SUSPENSE 悬疑螺旋波");
     });
 
-    it("分镜决策锁定表模板含 A/B 表、自检八条、缝合同四行与 JSON 键名", () => {
+    it("分镜决策锁定表模板含 A/B 表、自检八条、缝合同五行与 JSON 键名", () => {
         const prompt = buildDirectingLockPrompt("上下文");
         expect(prompt).toContain("A 表 · 全局视觉策略");
         expect(prompt).toContain("B 表 · 逐段锁定");
         expect(prompt).toContain("锁定表自检八条");
-        for (const line of ["上段末拍 =", "本段首格 =", "景别/动机 =", "声音桥 ="]) expect(prompt).toContain(line);
-        for (const key of ["unifiedStyleString", "compositionPrimary", "openingType", "soundBridge"]) expect(prompt).toContain(key);
+        for (const line of ["上段末拍 =", "本段首格 =", "景别/动机 =", "声音桥 =", "音频边界 ="]) expect(prompt).toContain(line);
+        for (const key of ["unifiedStyleString", "compositionPrimary", "openingType", "soundBridge", "audioBoundary"]) expect(prompt).toContain(key);
         expect(prompt).toContain("只引用不复判");
+    });
+
+    // 音频边界与声音桥是两件事,分工写死在测试里:前者管生成时别造出跨缝的持续音,后者管后期怎么编排。
+    // 台词已独立成轨(设计文档 4.4),但视频自带的环境音效仍由模型烧进视频轨,跨缝的持续音照样让这一刀带伤。
+    it("音频边界只约束视频自带音效，并声明台词轨不受此限", () => {
+        const prompt = buildDirectingLockPrompt("上下文");
+        expect(prompt).toContain("上段末 0.5s 内不起新的持续音");
+        expect(prompt).toContain("本段开头不设承接性音效残留");
+        expect(prompt).toContain("台词已独立成轨不受此限");
     });
 
     it("跨段状态继承表模板含五类锁定项与 JSON 键名", () => {
