@@ -22,7 +22,10 @@ type NodeMutationResult = {
 type GraphEdge = { from: string; to: string };
 
 const STALEABLE_STATUSES: ReadonlySet<NodeStatus> = new Set(["approved", "review", "failed"]);
-const GENERATABLE_STATUSES: ReadonlySet<NodeStatus> = new Set(["empty", "failed", "stale", "approved", "review"]);
+// skipped 也可生成:选修环节(如 P0 创意)默认落 skipped,用户手动点生成必须能启用它。
+// 「一键跑全链不碰 skipped」这条语义不靠此集合守卫,而由 cascadeOrder 末尾的 isSkipped 过滤兜底——
+// 两者职责分离:此集合管"手动能不能生成",cascadeOrder 管"自动要不要生成"。
+const GENERATABLE_STATUSES: ReadonlySet<NodeStatus> = new Set(["empty", "failed", "stale", "approved", "review", "skipped"]);
 
 function buildAdjacency(edges: GraphEdge[]): Map<string, string[]> {
     const adjacency = new Map<string, string[]>();
@@ -147,11 +150,11 @@ export function rollbackToVersion(current: NodeOutput, historical: NodeOutput): 
 }
 
 /**
- * empty|failed|stale|approved|review --generate--> generating
+ * empty|failed|stale|approved|review|skipped --generate--> generating
  */
 export function nextStatusOnGenerate(status: NodeStatus): NodeStatus {
     if (!GENERATABLE_STATUSES.has(status)) {
-        return transitionError("nextStatusOnGenerate", status, "empty|failed|stale|approved|review -> generating");
+        return transitionError("nextStatusOnGenerate", status, "empty|failed|stale|approved|review|skipped -> generating");
     }
 
     return "generating";

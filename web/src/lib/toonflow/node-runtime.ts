@@ -4,6 +4,9 @@ import type { CanvasConnection, CanvasNodeData, ToonflowNodeKind } from "../../t
 
 import {
     buildActionContractPrompt,
+    buildContinuityTablePrompt,
+    buildCreativePrompt,
+    buildDirectingLockPrompt,
     buildKeyframesPrompt,
     buildNodeContext,
     buildScriptPrompt,
@@ -16,6 +19,8 @@ import {
 } from "./prompts";
 import {
     ActionContractSchema,
+    ContinuityTableSchema,
+    DirectingLockSchema,
     NODE_STATUSES,
     ShotContractSchema,
     StoryboardRowSchema,
@@ -34,12 +39,15 @@ import {
 import { assignIds, validateSegmentRows } from "./segments";
 import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, rollbackToVersion, saveEditedNode, type GraphNode } from "./state-machine";
 
-type GeneratableToonflowKind = "script" | "space-contract" | "storyboard-table" | "shot-contract" | "action-contract";
+type GeneratableToonflowKind = "creative" | "script" | "space-contract" | "continuity-table" | "directing-lock" | "storyboard-table" | "shot-contract" | "action-contract";
 type WashHit = { term: string; replacement: string };
 
 const PROMPT_BUILDERS: Record<GeneratableToonflowKind, (context: string) => string> = {
+    creative: buildCreativePrompt,
     script: buildScriptPrompt,
     "space-contract": buildSpaceContractPrompt,
+    "continuity-table": buildContinuityTablePrompt,
+    "directing-lock": buildDirectingLockPrompt,
     "storyboard-table": buildStoryboardTablePrompt,
     "shot-contract": buildShotContractPrompt,
     "action-contract": buildActionContractPrompt,
@@ -78,6 +86,9 @@ export function readNodeInput(node: CanvasNodeData) {
         return payload.cards.map((card) => formatAssetCard(card, parentNameById)).join("\n");
     }
     if (payload?.table) return JSON.stringify(payload.table, null, 2);
+    // 锁定表/继承表的产物只落结构化字段(无 text),下游要读到必须在此显式序列化。
+    if (payload?.directingLock) return JSON.stringify(payload.directingLock, null, 2);
+    if (payload?.continuityTable) return JSON.stringify(payload.continuityTable, null, 2);
     return node.metadata?.content?.trim() || node.metadata?.prompt?.trim() || "";
 }
 
@@ -372,6 +383,16 @@ export function applyGenerationSuccess(node: CanvasNodeData, rawText: string, wa
         const errors = validateSegmentRows(assigned.rows).filter((issue) => !issue.warning);
         if (errors.length) return failedGenerationNode(node, errors.map((issue) => issue.message).join("；"), washHits);
         payload = { table: assigned.rows };
+    } else if (toonflow.kind === "directing-lock") {
+        // 锁定表是单个 JSON 对象(A 表 global + B 表 segments + 缝合同 seams),不是数组。
+        const parsed = parseModelJson(DirectingLockSchema, rawText);
+        if (!parsed.ok) return failedGenerationNode(node, parsed.error, washHits);
+        payload = { directingLock: parsed.data };
+    } else if (toonflow.kind === "continuity-table") {
+        // 跨段状态继承表同样是单个 JSON 对象,五类锁定项各为一个数组。
+        const parsed = parseModelJson(ContinuityTableSchema, rawText);
+        if (!parsed.ok) return failedGenerationNode(node, parsed.error, washHits);
+        payload = { continuityTable: parsed.data };
     }
 
     const previous = toonflow.output;
@@ -842,6 +863,8 @@ export function parseEntityHints(scriptText: string): Array<{ cardType: "charact
 function payloadContent(payload: NodeOutput["payload"]) {
     if (typeof payload.text === "string") return payload.text;
     if (payload.table) return JSON.stringify(payload.table, null, 2);
+    if (payload.directingLock) return JSON.stringify(payload.directingLock, null, 2);
+    if (payload.continuityTable) return JSON.stringify(payload.continuityTable, null, 2);
     return "";
 }
 

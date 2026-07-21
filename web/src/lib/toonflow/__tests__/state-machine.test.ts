@@ -146,9 +146,14 @@ describe("生成状态迁移", () => {
         }
     });
 
+    // 选修环节(P0 创意)默认落 skipped,用户手动点生成必须能启用它,否则功能不可达。
+    // 「一键跑全链不碰 skipped」由 cascadeOrder 过滤保证,不由本迁移守卫,见下方 cascadeOrder 用例。
+    it("nextStatusOnGenerate 允许手动生成 skipped 的选修节点", () => {
+        expect(nextStatusOnGenerate("skipped")).toBe("generating");
+    });
+
     it("nextStatusOnGenerate 遇到非法来源状态时抛错", () => {
         expect(() => nextStatusOnGenerate("generating")).toThrow("非法状态迁移");
-        expect(() => nextStatusOnGenerate("skipped")).toThrow("非法状态迁移");
     });
 
     it("onGenerateSuccess 将 generating 转为 review", () => {
@@ -187,6 +192,12 @@ describe("cascadeOrder", () => {
             { from: "skipped", to: "child" },
         ];
         expect(cascadeOrder(nodes, edges, "root")).toEqual(["root", "child"]);
+    });
+
+    // 不变量:即便 skipped 已进入可生成状态集合(手动可生成),一键跑全链仍不得执行它——两条路径各管各的。
+    it("skipped 节点即使是级联根也不被执行", () => {
+        const nodes = [graphNode("skipped", "skipped"), graphNode("child")];
+        expect(cascadeOrder(nodes, [{ from: "skipped", to: "child" }], "skipped")).toEqual(["child"]);
     });
 
     it("存在环时抛错", () => {

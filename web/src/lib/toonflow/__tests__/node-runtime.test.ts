@@ -16,6 +16,7 @@ import {
     hydrateToonflowProject,
     propagateAfterNewVersion,
 } from "../node-runtime";
+import { cascadeOrder } from "../state-machine";
 
 function node(id: string, kind?: ToonflowNodeKind, content = "", status: NodeStatus = "empty"): CanvasNodeData {
     return {
@@ -163,6 +164,138 @@ describe("applyGenerationSuccess", () => {
         expect(result.metadata?.toonflow?.history).toHaveLength(10);
         expect(result.metadata?.toonflow?.history?.map((item) => item.version)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         expect(result.metadata?.toonflow?.output?.version).toBe(12);
+    });
+});
+
+describe("plus 三个新节点的生成路径", () => {
+    function directingLockJson() {
+        return JSON.stringify({
+            global: {
+                visualStyle: "王家卫",
+                colorGrading: "青橙对比",
+                lighting: "伦勃朗布光，主光左前上方",
+                cameraTone: "手持跟随",
+                performanceLevel: "L3",
+                unifiedStyleString: "cinematic teal-orange, 35mm",
+                motifs: ["骰子"],
+            },
+            segments: [
+                {
+                    segmentId: "seg-a",
+                    compositionPrimary: "三分法",
+                    compositionSecondary: "框中框",
+                    compositionDiversity: "两种构图交替",
+                    cameraType: "推镜 + 摇镜",
+                    scaleRange: "L0-L4",
+                    angleType: "平视 + 俯视",
+                    openingType: "动作中途切入",
+                },
+            ],
+            seams: [
+                {
+                    fromSegmentId: "seg-a",
+                    toSegmentId: "seg-b",
+                    prevEndBeat: "手举到杯沿停住",
+                    nextFirstPanel: "同一只手落下把杯子按在桌上",
+                    scaleOrMotivation: "L4 跳 L1",
+                    soundBridge: "J-cut：本段音效提前 0.3s",
+                },
+            ],
+        });
+    }
+
+    function continuityTableJson() {
+        return JSON.stringify({
+            propWhitelist: [{ name: "茶杯", lockedValue: "桌右侧，杯口朝上" }],
+            blocking: [{ name: "老陈", lockedValue: "坐姿，恒在画面左侧" }],
+            lightingWeather: [{ name: "主光", lockedValue: "左前上方，允许 ±15°" }],
+            characterGear: [],
+            leftovers: [],
+        });
+    }
+
+    it("创意节点产出自由文本,落进 payload.text", () => {
+        const target = node("creative", "creative", "", "generating");
+        const result = applyGenerationSuccess(target, "体检模式：缺反转打脸爽点", []);
+        expect(result.metadata?.toonflow?.status).toBe("review");
+        expect(result.metadata?.toonflow?.output?.payload).toEqual({ text: "体检模式：缺反转打脸爽点" });
+    });
+
+    it("创意节点可作为可生成节点构建提示词", () => {
+        const nodes = [node("script", "script", "已有剧本正文"), node("creative", "creative")];
+        const result = buildToonflowGeneration(nodes, [connection("script", "creative")], "creative");
+        expect(result.finalPrompt).toContain("【script】\n已有剧本正文");
+    });
+
+    it("分镜决策锁定表解析为对象并落进 payload.directingLock", () => {
+        const target = node("lock", "directing-lock", "", "generating");
+        const result = applyGenerationSuccess(target, directingLockJson(), []);
+        expect(result.metadata?.toonflow?.status).toBe("review");
+        expect(result.metadata?.toonflow?.output?.payload.text).toBeUndefined();
+        expect(result.metadata?.toonflow?.output?.payload.directingLock?.global.visualStyle).toBe("王家卫");
+        expect(result.metadata?.toonflow?.output?.payload.directingLock?.segments?.[0].segmentId).toBe("seg-a");
+        expect(result.metadata?.toonflow?.output?.payload.directingLock?.seams?.[0].soundBridge).toContain("J-cut");
+    });
+
+    it("分镜决策锁定表 JSON 非法时转 failed 且错误可见", () => {
+        const target = node("lock", "directing-lock", "", "generating");
+        const result = applyGenerationSuccess(target, "不是 JSON", []);
+        expect(result.metadata?.toonflow?.status).toBe("failed");
+        expect(result.metadata?.toonflow?.output?.error).toContain("JSON 解析失败");
+        expect(result.metadata?.errorDetails).toContain("JSON 解析失败");
+    });
+
+    it("分镜决策锁定表缺 A 表必填字段时按校验失败转 failed", () => {
+        const target = node("lock", "directing-lock", "", "generating");
+        const result = applyGenerationSuccess(target, JSON.stringify({ global: { visualStyle: "王家卫" } }), []);
+        expect(result.metadata?.toonflow?.status).toBe("failed");
+        expect(result.metadata?.toonflow?.output?.error).toContain("JSON 校验失败");
+    });
+
+    it("跨段继承表解析为对象并落进 payload.continuityTable", () => {
+        const target = node("continuity", "continuity-table", "", "generating");
+        const result = applyGenerationSuccess(target, continuityTableJson(), []);
+        expect(result.metadata?.toonflow?.status).toBe("review");
+        expect(result.metadata?.toonflow?.output?.payload.text).toBeUndefined();
+        expect(result.metadata?.toonflow?.output?.payload.continuityTable?.propWhitelist).toEqual([{ name: "茶杯", lockedValue: "桌右侧，杯口朝上" }]);
+    });
+
+    it("跨段继承表条目缺 lockedValue 时转 failed 且错误可见", () => {
+        const target = node("continuity", "continuity-table", "", "generating");
+        const result = applyGenerationSuccess(target, JSON.stringify({ propWhitelist: [{ name: "茶杯" }] }), []);
+        expect(result.metadata?.toonflow?.status).toBe("failed");
+        expect(result.metadata?.toonflow?.output?.error).toContain("JSON 校验失败");
+    });
+
+    it("锁定表与继承表的结构化产出能被下游读成上下文(payload 无 text 也不丢)", () => {
+        const lock = node("lock", "directing-lock", "", "review");
+        lock.metadata!.toonflow!.output = { ...output("lock", "directing-lock", 1), payload: JSON.parse(`{"directingLock":${directingLockJson()}}`) };
+        // 清掉 content 兜底,确保读到的是 payload 而不是 metadata.content。
+        lock.metadata!.content = "";
+        const storyboard = node("storyboard", "storyboard-table");
+        const result = buildToonflowGeneration([lock, storyboard], [connection("lock", "storyboard")], "storyboard");
+        expect(result.finalPrompt).toContain("【directing-lock】");
+        expect(result.finalPrompt).toContain("cinematic teal-orange");
+    });
+});
+
+describe("选修节点(skipped)的启用与级联豁免", () => {
+    it("手动生成 skipped 的选修节点可行:直接进入 generating", () => {
+        const creative = node("creative", "creative", "", "skipped");
+        const result = applyRegenerate([creative], [], creative.id);
+        expect(result[0].metadata?.toonflow?.status).toBe("generating");
+    });
+
+    it("一键跑全链不执行 skipped 节点,但下游仍被穿透纳入", () => {
+        const nodes = [node("creative", "creative", "", "skipped"), node("script", "script"), node("space", "space-contract")];
+        const graph = buildTextCascadeGraph(nodes, [connection("creative", "script"), connection("script", "space")]);
+        expect(cascadeOrder(graph.nodes, graph.edges, "creative")).toEqual(["script", "space"]);
+    });
+
+    it("选修节点被手动生成后不再豁免,后续一键跑全链会带上它", () => {
+        const nodes = [node("creative", "creative", "创意产出", "review"), node("script", "script")];
+        const graph = buildTextCascadeGraph(nodes, [connection("creative", "script")]);
+        expect(cascadeOrder(graph.nodes, graph.edges, "creative")).toEqual(["creative", "script"]);
     });
 });
 
