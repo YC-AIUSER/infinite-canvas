@@ -115,6 +115,62 @@ export const ActionContractSchema = z.object({
 
 export type ActionContract = z.infer<typeof ActionContractSchema>;
 
+// ============================================================
+// 「一键修改方案」定点修补丁(设计文档 4.5)
+// 检查器判不达标后调模型产出的定点修改集:只改点名的那几镜、其余字段原样不动(不是整表重生成)。
+// prompt 见 prompts.ts 的 buildDiversityRepairPrompt,应用逻辑见 node-runtime.ts 的 applyDiversityPatch。
+// ============================================================
+
+/** 补丁能落到的两类产物。四维里的运镜只存在于镜头合同(ShotContract.movement),不在分镜表行上。 */
+export const DIVERSITY_PATCH_TARGETS = ["storyboardRow", "shotContract"] as const;
+
+export type DiversityPatchTarget = (typeof DIVERSITY_PATCH_TARGETS)[number];
+
+/** 分镜表行上允许被定点修的字段:只开放四维多样性涉及的镜级字段,不开放 action/line 等内容字段,避免补丁越权改剧情。 */
+export const STORYBOARD_ROW_PATCH_FIELDS = ["scale", "angle"] as const;
+
+/** 镜头合同上允许被定点修的字段。 */
+export const SHOT_CONTRACT_PATCH_FIELDS = ["scale", "angle", "movement"] as const;
+
+/**
+ * 指回某一条质量检查项:kind 逐字对应 QualityCheckItem.kind,段级项另带 segmentId。
+ * 刻意用 z.string() 而非 QualityCheckKind 枚举——quality-check.ts 依赖本文件,反向引用会成环;
+ * 且模型把 kind 写错时不该让整批补丁解析失败(决策 D4:只提示不阻断)。
+ */
+export const QualityCheckRefSchema = z.object({
+    kind: z.string(),
+    segmentId: z.string().optional(),
+});
+
+export type QualityCheckRef = z.infer<typeof QualityCheckRefSchema>;
+
+/**
+ * 一条补丁 = 对某一镜的某一个字段的一次定点修改。target + shotId + field 三者共同定位,不产生歧义
+ * (scale/angle 在分镜表行与镜头合同上同名,只给 field 无法区分改的是哪一份产物)。
+ * field 用 z.string() 而非枚举:字段名非法时由 applyDiversityPatch 跳过并报告,不连累同批其余补丁。
+ */
+export const DiversityPatchItemSchema = z.object({
+    shotId: z.string(),
+    target: z.enum(DIVERSITY_PATCH_TARGETS),
+    field: z.string(),
+    oldValue: z.string(),
+    newValue: z.string(),
+    reason: z.string(),
+    /** 本条修改解决的是哪几条不达标项 */
+    fixes: z.array(QualityCheckRefSchema).optional(),
+});
+
+export type DiversityPatchItem = z.infer<typeof DiversityPatchItemSchema>;
+
+export const DiversityPatchSchema = z.object({
+    /** 本补丁集对应的不达标检查项,供 UI 回链到标红项并支持「忽略」 */
+    targets: z.array(QualityCheckRefSchema),
+    patches: z.array(DiversityPatchItemSchema),
+    summary: z.string().optional(),
+});
+
+export type DiversityPatch = z.infer<typeof DiversityPatchSchema>;
+
 // P3 分镜决策锁定表 A 表:全局一次锁死,后续环节只引用不复判(设计文档 4.1)。
 // 词条值一律用 z.string():封闭词库合规由检查器报告,不在 schema 层硬阻断(决策 D4)。
 export const DirectingLockGlobalSchema = z.object({

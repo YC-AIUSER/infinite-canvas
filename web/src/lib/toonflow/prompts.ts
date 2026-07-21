@@ -9,8 +9,10 @@
 import forbiddenTerms from "./seedance-forbidden-terms.json";
 
 import { renderLibraries, type ClosedLibraryCategory } from "./closed-libraries";
+import type { QualityCheckItem } from "./quality-check";
 import { TOONFLOW_NODE_KINDS } from "./schema";
 import type { ActionContract, ShotContract, StoryboardRow } from "./schema";
+import { groupRowsBySegment } from "./segments";
 import type { ToonflowNodeKind } from "../../types/canvas";
 
 type PromptNodeKind =
@@ -311,6 +313,54 @@ export function buildActionContractPrompt(context: string) {
 5. 动作必须服从镜头合同的落点、空间合同的轴线与运动方向锁、分镜表的单镜意图，不得改写、补造或重排 shotId。
 
 仅输出 JSON 数组。每项格式（键名必须逐字使用英文，含义：cause=起因、process=过程、consequence=物理后果、endState=结束状态）：{"shotId":"","cause":"","process":"","consequence":"","endState":""}。`, context);
+}
+
+/**
+ * 一键修改方案（设计文档 4.5）：质量检查判不达标后，让模型只对不达标项点名的那几镜出定点修补丁。
+ * 之所以不整表重生成——整表重生成会毁掉用户已经满意的镜头，也白白多花一次完整生成。
+ * 产出由 DiversityPatchSchema 校验、由 applyDiversityPatch 落回分镜表与镜头合同。
+ */
+export function buildDiversityRepairPrompt(input: { rows: StoryboardRow[]; shotContracts?: ShotContract[]; failedItems: QualityCheckItem[] }): string {
+    const contractByShotId = new Map((input.shotContracts ?? []).map((contract) => [contract.shotId, contract]));
+    // 可改范围严格取自不达标项的 shotIds——检查器已经定位到镜头，这里不再自行推断。
+    const editableShotIds = [...new Set(input.failedItems.flatMap((item) => item.shotIds))];
+    const failures = input.failedItems.map((item) => {
+        const scope = item.segmentId ? `段 ${item.segmentId}` : item.segmentIds?.length ? `段 ${item.segmentIds.join("、")}` : "全片";
+        return `- ${item.label}（kind=${item.kind}｜${scope}）：实际 ${item.actualValue}；要求 ${item.expectedValue}；${item.reason}涉及镜头：${item.shotIds.join("、") || "（无）"}`;
+    });
+    const segments = [...groupRowsBySegment(input.rows)].map(([segmentId, rows]) => {
+        const lines = rows.map((row) => {
+            const contract = contractByShotId.get(row.shotId);
+            const movement = contract ? contract.movement || "（镜头合同未填运镜）" : "（该镜没有镜头合同）";
+            return `- ${row.shotId}（shotNo ${row.shotNo}）景别=${row.scale}｜角度=${row.angle}｜运镜=${movement}｜动作=${row.action}`;
+        });
+        return `段 ${segmentId}\n${lines.join("\n")}`;
+    });
+
+    return withLibraries(
+        `你是 AI 短剧的分镜质检修复员。下面这份分镜表已经生成完毕、用户基本满意，只有几项镜头语言多样性没达标。请只对点名的那几镜出定点修补丁——这是定点修，不是重做：没被点名的镜头、以及被点名镜头的其它字段，一个字都不许动。
+
+【不达标项（逐条都要修掉）】
+${failures.join("\n") || "（无）"}
+
+【只许修改这些 shotId】
+${editableShotIds.join("、") || "（无，直接输出空补丁）"}
+
+【当前分镜表与镜头合同（只读，用于比对，不要回传）】
+${segments.join("\n\n") || "（无分镜数据）"}
+
+【定点修铁律】
+1. 只许修改上面【只许修改这些 shotId】清单里的镜头。清单外的镜头一个字不许动；清单内镜头也只许改景别、角度、运镜这三个字段，动作、台词、音效、情绪、时长一律保持原样。禁止新增、删除、重排镜头。
+2. 每条修改必须写明理由（reason），并在 fixes 里逐字回填它解决的那条不达标项的 kind（段级项一并回填 segmentId）。写不出理由的修改就是多余的修改，删掉。
+3. 新值必须从下方封闭词库里逐字选取名称：景别抄景别 L0-L5 的完整名称（如「L4 特写」），运镜抄运镜 8 种的名称。角度没有封闭词库，只许在 平视 / 俯视 / 仰视 / 倾斜荷兰角 四者中选（分镜决策锁定表 B 表的角度类型）。禁止自创名称，禁止“综合考虑”“灵活运用”这类架空措辞。
+4. 改完不许引入新的不达标——输出前拿新值逐段重算一遍，确认这三条同时成立：运镜每段 ≥2 种且同种运镜连续 <3 镜；景别每段 ≥3 档且含 L0 或 L5、连续同景别 <3 镜；角度每段 ≥2 种且平视连续 ≤2 镜。为了凑一项多样性而让相邻镜头撞成连续 3 镜同景别/同运镜，等于没修。
+5. 改景别或角度时必须成对给两条补丁：一条 target=storyboardRow、一条 target=shotContract，字段同名、新值逐字相同（两处不一致会让分镜表与镜头合同对不上）；该镜没有镜头合同时只给 storyboardRow 那条。运镜只存在于镜头合同，target 一律写 shotContract。
+6. oldValue 必须逐字等于上面表里的当前值，写错即视为改错了镜头。
+
+仅输出合法 JSON 对象，不要 Markdown 代码块、前言或解释。格式（键名必须逐字使用英文，含义：targets=本次修复针对的不达标项、kind=检查项标识、patches=定点修改清单、shotId=被改的镜头、target=改在哪份产物（storyboardRow 分镜表行 / shotContract 镜头合同）、field=被改字段（scale 景别 / angle 角度 / movement 运镜，movement 只存在于 shotContract）、oldValue=原值、newValue=新值、reason=改它的理由、fixes=本条解决的不达标项、summary=整体说明）：
+{"targets":[{"kind":"","segmentId":""}],"patches":[{"shotId":"","target":"shotContract","field":"movement","oldValue":"","newValue":"","reason":"","fixes":[{"kind":"","segmentId":""}]}],"summary":""}`,
+        ["cameraMovement", "shotScale"],
+    );
 }
 
 // 资产锚点卡与派生资产，方法论源 manga-drama asset-card / ai-short-drama S4。

@@ -22,6 +22,8 @@ import {
     ContinuityTableSchema,
     DirectingLockSchema,
     NODE_STATUSES,
+    SHOT_CONTRACT_PATCH_FIELDS,
+    STORYBOARD_ROW_PATCH_FIELDS,
     ShotContractSchema,
     StoryboardRowSchema,
     VERSION_LIMIT_IMAGE,
@@ -31,6 +33,7 @@ import {
     parseModelJson,
     type ActionContract,
     type AssetCard,
+    type DiversityPatchItem,
     type NodeOutput,
     type NodeStatus,
     type ShotContract,
@@ -972,6 +975,93 @@ export function approveChain(nodes: CanvasNodeData[], connections: CanvasConnect
     }
 
     return { nodes: next, approvedCount };
+}
+
+// ============================================================
+// 一键修改方案(设计文档 4.5):把定点修补丁落回分镜表与镜头合同
+// ============================================================
+
+type StoryboardRowPatchField = (typeof STORYBOARD_ROW_PATCH_FIELDS)[number];
+type ShotContractPatchField = (typeof SHOT_CONTRACT_PATCH_FIELDS)[number];
+
+const STORYBOARD_ROW_PATCH_FIELD_SET: ReadonlySet<string> = new Set(STORYBOARD_ROW_PATCH_FIELDS);
+const SHOT_CONTRACT_PATCH_FIELD_SET: ReadonlySet<string> = new Set(SHOT_CONTRACT_PATCH_FIELDS);
+
+function isStoryboardRowPatchField(field: string): field is StoryboardRowPatchField {
+    return STORYBOARD_ROW_PATCH_FIELD_SET.has(field);
+}
+
+function isShotContractPatchField(field: string): field is ShotContractPatchField {
+    return SHOT_CONTRACT_PATCH_FIELD_SET.has(field);
+}
+
+export type DiversityPatchApplyInput = {
+    rows: StoryboardRow[];
+    shotContracts?: ShotContract[];
+};
+
+/** 被跳过的补丁 + 跳过原因;UI 需要如实告诉用户"这条没应用",不能静默丢弃。 */
+export type DiversityPatchSkip = {
+    patch: DiversityPatchItem;
+    reason: string;
+};
+
+export type DiversityPatchApplyResult = {
+    rows: StoryboardRow[];
+    shotContracts: ShotContract[];
+    applied: DiversityPatchItem[];
+    skipped: DiversityPatchSkip[];
+};
+
+/**
+ * 应用定点修补丁,返回新的分镜表行与镜头合同。纯函数:入参不被修改,未被补丁点名的行/合同原样沿用引用。
+ *
+ * 部分应用由调用方决定——只传用户勾选的那几条即可,本函数不做筛选。
+ * 补丁指向不存在的 shotId 或非法字段时跳过该条并记进 skipped,同批其余补丁照常应用(不静默丢弃、不整批失败)。
+ * 应用后不重跑质量检查,由调用方自行再调 runQualityCheck。
+ */
+export function applyDiversityPatch(input: DiversityPatchApplyInput, patches: DiversityPatchItem[]): DiversityPatchApplyResult {
+    let rows = input.rows;
+    let shotContracts = input.shotContracts ?? [];
+    const applied: DiversityPatchItem[] = [];
+    const skipped: DiversityPatchSkip[] = [];
+
+    for (const patch of patches) {
+        if (patch.target === "storyboardRow") {
+            if (!isStoryboardRowPatchField(patch.field)) {
+                skipped.push({ patch, reason: `分镜表行没有可定点修的字段「${patch.field}」(可改字段:${STORYBOARD_ROW_PATCH_FIELDS.join("、")})` });
+                continue;
+            }
+            const index = rows.findIndex((row) => row.shotId === patch.shotId);
+            if (index === -1) {
+                skipped.push({ patch, reason: `分镜表里找不到镜头 ${patch.shotId}` });
+                continue;
+            }
+            if (rows === input.rows) rows = [...rows];
+            const nextRow = { ...rows[index] };
+            nextRow[patch.field] = patch.newValue;
+            rows[index] = nextRow;
+            applied.push(patch);
+            continue;
+        }
+
+        if (!isShotContractPatchField(patch.field)) {
+            skipped.push({ patch, reason: `镜头合同没有可定点修的字段「${patch.field}」(可改字段:${SHOT_CONTRACT_PATCH_FIELDS.join("、")})` });
+            continue;
+        }
+        const index = shotContracts.findIndex((contract) => contract.shotId === patch.shotId);
+        if (index === -1) {
+            skipped.push({ patch, reason: `镜头合同里找不到镜头 ${patch.shotId}` });
+            continue;
+        }
+        if (shotContracts === input.shotContracts) shotContracts = [...shotContracts];
+        const nextContract = { ...shotContracts[index] };
+        nextContract[patch.field] = patch.newValue;
+        shotContracts[index] = nextContract;
+        applied.push(patch);
+    }
+
+    return { rows, shotContracts, applied, skipped };
 }
 
 /**
