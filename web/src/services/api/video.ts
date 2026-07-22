@@ -244,13 +244,14 @@ async function createCanoTask(
         if (payload?.success === false) throw new Error(canoErrorMessage(payload) || "Cano 视频任务创建失败");
         const created = unwrapCano(payload);
         if (!created?.id) throw new Error(canoErrorMessage(payload) || "Cano 视频接口没有返回任务 ID");
-        // 只在字段真的回传时才校验。任务此刻已在 cano 侧建好并计费,拿"字段缺失"当失败会把已计费的任务
-        // 直接丢掉;而 refAudioCount 依赖的音频字段名本身还是待核实状态(见上方 audios 注释),不能当阻断级真值。
-        if (created.multipart !== undefined && created.multipart !== true) {
-            throw new Error(`Cano 视频接口未按 multipart 接收本次生成请求（任务 ${created.id}）`);
-        }
-        if (created.refAudioCount !== undefined && created.refAudioCount !== refAudioCount) {
-            throw new Error(`Cano 视频接口接收的参考音频数量不一致：提交 ${refAudioCount}，实际 ${created.refAudioCount}（任务 ${created.id}）`);
+        // 回显字段只记不拦。2026-07-22 真实调用实测:一次 0 参考图的请求正常建出任务(拿到 id、已计费),
+        // 但响应里的 multipart 并非 true、refAudioCount 根本没回传——把它们当阻断条件会在任务已创建之后
+        // 把结果丢掉,而 cano 侧的任务照样跑照样扣费。这两个字段的真实语义未经确认,不给它们否决权;
+        // 任务成没成以轮询结果为准。
+        if (created.multipart !== true || (created.refAudioCount !== undefined && created.refAudioCount !== refAudioCount)) {
+            console.warn(
+                `[cano] 建任务回显与提交不一致（任务 ${created.id}）：multipart=${String(created.multipart)}，refAudioCount=${String(created.refAudioCount)}（提交 ${refAudioCount}）。仅记录，不影响本次生成。`,
+            );
         }
         const task: VideoGenerationTask = { id: created.id, provider: "cano", model };
         canoRetryRequests.set(task, { model, prompt, references, audioReferences, contentBlockedRetries });

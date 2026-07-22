@@ -104,19 +104,23 @@ describe("cano 内容审核重试", () => {
         expect(keys[1]).toBe(keys[0]);
     });
 
-    it("创建响应必须确认 multipart 与实际参考音频接收数", async () => {
-        post.mockResolvedValueOnce({ data: { success: true, data: { id: "bad-multipart", multipart: false, refAudioCount: 0 } } });
-        await expect(createVideoGenerationTask(canoConfig, "multipart 校验")).rejects.toThrow("未按 multipart 接收");
+    // 2026-07-22 真实调用实测:cano 建任务成功(有 id、已计费)但回显 multipart 不为 true、refAudioCount
+    // 不回传。回显字段一旦有否决权,就会在任务已创建之后把结果丢掉,而 cano 侧照跑照扣费。故只记不拦。
+    it("回显 multipart 不为 true / refAudioCount 缺失或对不上,一律不丢弃已建任务", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        post.mockResolvedValueOnce({ data: { success: true, data: { id: "bad-audio-count", multipart: true, refAudioCount: 1 } } });
-        await expect(createVideoGenerationTask(canoConfig, "音频数校验")).rejects.toThrow("提交 0，实际 1");
-    });
+        post.mockResolvedValueOnce({ data: { success: true, data: { id: "not-multipart", multipart: false, refAudioCount: 0 } } });
+        await expect(createVideoGenerationTask(canoConfig, "multipart 非 true")).resolves.toMatchObject({ id: "not-multipart" });
 
-    // 校验只对"回报了且对不上"生效。cano 是否回传这两个字段未经实测,把缺失当失败会让每一次
-    // 无音频卡的正常生成都在任务已建好、已计费之后抛错。
-    it("响应缺 multipart / refAudioCount 时放行，不丢弃已建任务", async () => {
+        post.mockResolvedValueOnce({ data: { success: true, data: { id: "audio-count-off", multipart: true, refAudioCount: 1 } } });
+        await expect(createVideoGenerationTask(canoConfig, "音频数对不上")).resolves.toMatchObject({ id: "audio-count-off" });
+
         post.mockResolvedValueOnce({ data: { success: true, data: { id: "no-echo-fields" } } });
         await expect(createVideoGenerationTask(canoConfig, "字段缺失")).resolves.toMatchObject({ id: "no-echo-fields", provider: "cano" });
+
+        expect(warn).toHaveBeenCalledTimes(3);
+        expect(warn.mock.calls.every(([msg]) => String(msg).includes("仅记录，不影响本次生成"))).toBe(true);
+        warn.mockRestore();
     });
 
     it("409 按 cano 幂等语义暴露，不作为网络错误重试", async () => {
