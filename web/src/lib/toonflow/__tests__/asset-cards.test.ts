@@ -130,11 +130,12 @@ describe("AssetCardSchema", () => {
         ).toBe(true);
     });
 
-    it("接受动作、表情、服装和形态卡并拒绝非法类型", () => {
+    it("接受动作、表情、服装、形态和质感样板卡并拒绝非法类型", () => {
         expect(AssetCardSchema.safeParse({ cardId: "action-1", cardType: "action", parentCardId: "card-1", name: "拔剑", anchor: "拔剑前冲" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "expression-1", cardType: "expression", parentCardId: "card-1", name: "惊讶", anchor: "瞳孔放大" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "outfit-1", cardType: "outfit", parentCardId: "card-1", name: "夜行装", anchor: "黑色束袖夜行衣" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "form-1", cardType: "form", name: "青龙形态", anchor: "青色龙鳞覆盖全身" }).success).toBe(true);
+        expect(AssetCardSchema.safeParse({ cardId: "swatch-1", cardType: "styleSwatch", name: "全片质感样板", anchor: "" }).success).toBe(true);
         expect(AssetCardSchema.safeParse({ cardId: "bad", cardType: "vehicle", name: "车", anchor: "红色" }).success).toBe(false);
     });
 
@@ -155,6 +156,10 @@ describe("validateAssetCards", () => {
 
     it("允许形态卡不挂父角色", () => {
         expect(validateAssetCards([{ cardId: "form-1", cardType: "form", name: "青龙形态", anchor: "青色龙鳞覆盖全身" }])).toEqual([]);
+    });
+
+    it("质感样板是独立卡，不要求父角色", () => {
+        expect(validateAssetCards([{ cardId: "swatch-1", cardType: "styleSwatch", name: "全片质感样板", anchor: "" }])).toEqual([]);
     });
 
     it("报告形态卡父卡不是角色卡", () => {
@@ -266,6 +271,32 @@ describe("buildAssetCardPrompt", () => {
         expect(prompt).toContain("HEX 色号与一句中文色彩描述");
         expect(prompt).toContain("低饱和冷调都市夜色");
     });
+
+    it("质感样板生成六格无人物材质微距，并收回布光权", () => {
+        const prompt = buildAssetCardPrompt({ cardType: "styleSwatch", name: "全片质感样板", anchor: "" });
+        expect(prompt).toContain("16:9 横版的 2×3 六格质感样板");
+        expect(prompt).toContain("全部是在漫射光下拍摄的材质微距");
+        expect(prompt).toContain("主服装织物");
+        expect(prompt).toContain("织带与金属扣具接合处");
+        expect(prompt).toContain("旧皮革");
+        expect(prompt).toContain("橡胶鞋底齿纹");
+        expect(prompt).toContain("干燥土石");
+        expect(prompt).toContain("粗织帆布褶皱");
+        expect(prompt).toContain("不得出现人物、人脸、人手、人体、剪影人形");
+        expect(prompt).toContain("不得出现天空、地平线、远景、光束、太阳或任何环境空镜");
+        expect(prompt).toContain("不表达任何光位");
+        expect(prompt).not.toContain(PALETTE_ANCHOR_SENTENCE);
+    });
+
+    it("质感样板锚点替换默认取材，但保留版式、硬约束与照明要求", () => {
+        const prompt = buildAssetCardPrompt({ cardType: "styleSwatch", name: "定制样板", anchor: "陶瓷釉面、锈蚀铁板、湿润苔藓、碳纤维、磨砂塑料、烧焦木纹" });
+        expect(prompt).toContain("六格取材全部替换为以下具体材质描述");
+        expect(prompt).toContain("陶瓷釉面、锈蚀铁板、湿润苔藓、碳纤维、磨砂塑料、烧焦木纹");
+        expect(prompt).not.toContain("主服装织物");
+        expect(prompt).toContain("2×3 六格质感样板");
+        expect(prompt).toContain("不得出现人物、人脸");
+        expect(prompt).toContain("中性柔和漫射光");
+    });
 });
 
 // ST 色板全局锚定（03-assets.md §6.3，阻断级）。两句一体：第二句是防泄漏句，
@@ -292,6 +323,10 @@ describe("色板锚定句", () => {
 
     it("色板卡自身不追加锚定句（它的成品就是色卡，带防泄漏句自相矛盾）", () => {
         expect(buildAssetCardPrompt({ cardType: "palette", name: "全片色板", anchor: "冷调" })).not.toContain(PALETTE_ANCHOR_SENTENCE);
+    });
+
+    it("质感样板自身不追加色板锚定句，避免两路基准互相打架", () => {
+        expect(buildAssetCardPrompt({ cardType: "styleSwatch", name: "全片质感样板", anchor: "" })).not.toContain(PALETTE_ANCHOR_SENTENCE);
     });
 
     it("Module3 blockout 故事板不追加色板锚定句", () => {

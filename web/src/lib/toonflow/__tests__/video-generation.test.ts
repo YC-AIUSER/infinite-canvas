@@ -104,6 +104,14 @@ describe("buildVideoWorkbenchPrompt", () => {
         expect(prompt).not.toContain("首帧组为上色与一致性锚点");
     });
 
+    it("质感样板只锁表面质感，不让渡布光权", () => {
+        const { prompt } = buildVideoWorkbenchPrompt({ rows: [row(1)], shotContracts: [], actionContracts: [], anchors: ["【质感样板】全片质感：织物、皮革与金属"] });
+        const division = prompt.match(/质感样板只提供[^。]+。/)?.[0] || "";
+        expect(division).toContain("织物/皮革/金属/地面的表面纹理、磨损程度、颗粒感与色调基准");
+        expect(division).toContain("不提供光位、光比与光线方向");
+        expect(division).not.toContain("光影");
+    });
+
     it("注入合同落点/排除项/动作后果,note 进入本次调整", () => {
         const { prompt, shotPrompts } = buildVideoWorkbenchPrompt({
             rows: [row(1)],
@@ -142,6 +150,21 @@ describe("buildVideoWorkbenchPrompt", () => {
         expect(prompt).toContain("【空间与轴线规则（全段共用，逐镜不重复）】");
         for (const shotId of Object.keys(shotPrompts)) expect(shotPrompts[shotId]).not.toContain(spaceRules);
     });
+
+    it("结构化布光主策略作为全段独立小节只出现一次，不写入逐镜提示词", () => {
+        const lighting = "L3 柔侧后光，主光从画面左后侧进入";
+        const { prompt, shotPrompts } = buildVideoWorkbenchPrompt({
+            rows: [row(1), row(2)],
+            shotContracts: [],
+            actionContracts: [],
+            anchors: [],
+            lighting,
+        });
+        expect(prompt).toContain("【布光基准（全段共用，逐镜不重复）】");
+        expect(prompt.split(lighting).length - 1).toBe(1);
+        expect(prompt).toContain("任何参考图都不得决定光位、光比与光线方向");
+        for (const shotPrompt of Object.values(shotPrompts)) expect(shotPrompt).not.toContain(lighting);
+    });
 });
 
 describe("buildToonflowVideoGeneration", () => {
@@ -151,6 +174,51 @@ describe("buildToonflowVideoGeneration", () => {
         expect(result.mandatoryKeys).toEqual(["image:storyboard"]);
         expect(result.shotPrompts["seg-a-shot-1"]).toBeTruthy();
         expect(result.shotPrompts["seg-a-shot-1"]).toContain("主角在画面左，反派在画面右");
+    });
+
+    it("质感样板排在独立形态卡之后，作为最后一张全片级参考", () => {
+        const nodes = baseNodes().filter((item) => item.id !== "assets");
+        nodes.push(
+            node("assets", "assets", {
+                cards: [
+                    { cardId: "swatch", cardType: "styleSwatch", name: "全片质感", anchor: "", storageKey: "image:swatch" },
+                    { cardId: "form", cardType: "form", name: "机械核心", anchor: "球形核心", storageKey: "image:form" },
+                    { cardId: "prop", cardType: "prop", name: "门把", anchor: "黄铜圆形", storageKey: "image:prop" },
+                    { cardId: "character", cardType: "character", name: "主角", anchor: "红衣黑发", storageKey: "image:character" },
+                    { cardId: "scene", cardType: "scene", name: "走廊", anchor: "冷蓝顶灯", storageKey: "image:scene" },
+                ],
+            }),
+        );
+        expect(buildToonflowVideoGeneration(nodes, [], "target").referenceKeys).toEqual([
+            "image:storyboard",
+            "image:character",
+            "image:scene",
+            "image:prop",
+            "image:form",
+            "image:swatch",
+        ]);
+    });
+
+    it("视频运行时读取 directing-lock.global.lighting 作为布光基准", () => {
+        const nodes = baseNodes();
+        nodes.push(
+            node("lock", "directing-lock", {
+                directingLock: {
+                    global: {
+                        visualStyle: "写实",
+                        colorGrading: "冷暖双调",
+                        lighting: "L3 柔侧后光，主光从画面左后侧进入",
+                        cameraTone: "克制固定机位",
+                        performanceLevel: "L3",
+                        unifiedStyleString: "统一风格",
+                        motifs: [],
+                    },
+                },
+            }),
+        );
+        const result = buildToonflowVideoGeneration(nodes, [], "target");
+        expect(result.finalPrompt).toContain("结构化布光主策略：L3 柔侧后光，主光从画面左后侧进入");
+        expect(result.shotPrompts["seg-a-shot-1"]).not.toContain("L3 柔侧后光");
     });
 
     it("缺同段故事板页图时抛错(九宫格是第一参考,必须先有)", () => {

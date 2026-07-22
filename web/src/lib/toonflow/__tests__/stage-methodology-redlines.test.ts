@@ -17,6 +17,10 @@ describe("STAGE_METHODOLOGY_REDLINES", () => {
         expect(redline).toContain("逐镜写死谁在画面左、谁在画面右");
         expect(redline).toContain("ST色板锚定句");
         expect(redline).toContain("首尾帧");
+        expect(redline).toContain("质感样板只提供织物/皮革/金属/地面的表面纹理、磨损程度、颗粒感与色调基准");
+        expect(redline).toContain("不提供光位、光比与光线方向");
+        expect(redline).toContain("画风参考禁用照片级真人质感的成片抽帧");
+        expect(redline).not.toContain("光影");
     });
 
     it("无专属红线的环节回落全局三铁律", () => {

@@ -199,7 +199,7 @@ export function ToonflowNodeContent({
                   summary[card.cardType] += 1;
                   return summary;
               },
-              { character: 0, scene: 0, prop: 0, action: 0, expression: 0, outfit: 0, form: 0, audio: 0, palette: 0 },
+              { character: 0, scene: 0, prop: 0, action: 0, expression: 0, outfit: 0, form: 0, audio: 0, palette: 0, styleSwatch: 0 },
           )
         : null;
 
@@ -255,6 +255,7 @@ export function ToonflowNodeContent({
                     {assetCardSummary.action + assetCardSummary.expression + assetCardSummary.outfit + assetCardSummary.form > 0
                         ? ` · 衍生${assetCardSummary.action + assetCardSummary.expression + assetCardSummary.outfit + assetCardSummary.form}`
                         : ""}
+                    {assetCardSummary.styleSwatch > 0 ? ` · 质感样板${assetCardSummary.styleSwatch}` : ""}
                 </p>
             ) : null}
 

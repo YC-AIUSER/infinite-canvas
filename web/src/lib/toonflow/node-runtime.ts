@@ -73,6 +73,7 @@ const ASSET_CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     form: "形态",
     audio: "音频",
     palette: "色板",
+    styleSwatch: "质感样板",
 };
 
 function formatAssetCard(card: AssetCard, parentNameById: Map<string, string>) {
@@ -171,6 +172,7 @@ function assetCardSortKey(card: AssetCard, characterOrder: Map<string, number>):
         if (card.cardType === "form") return [4, 0, 0];
         return [1, 0, derivedOrder];
     }
+    if (card.cardType === "styleSwatch") return [5, 0, 0];
     return [card.cardType === "scene" ? 2 : 3, 0, 0];
 }
 
@@ -271,6 +273,7 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
     const shotContracts = segmentContracts<ShotContract>(nodes, "shot-contract", ShotContractSchema, shotIds, warnings);
     const actionContracts = segmentContracts<ActionContract>(nodes, "action-contract", ActionContractSchema, shotIds, warnings);
     const spaceRules = nodes.find((node) => node.metadata?.toonflow?.kind === "space-contract")?.metadata?.toonflow?.output?.payload.text;
+    const lighting = nodes.find((node) => node.metadata?.toonflow?.kind === "directing-lock")?.metadata?.toonflow?.output?.payload.directingLock?.global.lighting;
     const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
     const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
     const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
@@ -301,6 +304,7 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
         actionContracts,
         anchors: cards.map((card) => formatAssetCard(card, parentNameById)),
         spaceRules,
+        lighting,
         note,
     });
     const referenceKeys = [storyboardKey, ...assetKeys];

@@ -260,7 +260,7 @@ export const AssetCardSchema = z.object({
     cardId: z.string(),
     // palette = ST 全片色板（13 色冷暖双调），P2 资产阶段开头出、之后所有图像生成拿它当调色参考。
     // 追加枚举值只放宽取值域,旧画布的卡不带 palette、读取不受影响(设计文档 4.8)。
-    cardType: z.enum(["character", "scene", "prop", "action", "expression", "outfit", "form", "audio", "palette"]),
+    cardType: z.enum(["character", "scene", "prop", "action", "expression", "outfit", "form", "audio", "palette", "styleSwatch"]),
     name: z.string(),
     anchor: z.string(),
     parentCardId: z.string().optional(),

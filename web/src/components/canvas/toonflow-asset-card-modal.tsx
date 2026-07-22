@@ -19,6 +19,7 @@ const CARD_TYPE_LABELS: Record<AssetCard["cardType"], string> = {
     form: "形态",
     audio: "音频",
     palette: "色板",
+    styleSwatch: "质感样板",
 };
 
 const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
@@ -31,6 +32,7 @@ const CARD_TYPE_COLORS: Record<AssetCard["cardType"], string> = {
     form: "gold",
     audio: "volcano",
     palette: "geekblue",
+    styleSwatch: "lime",
 };
 
 type ToonflowAssetCardModalProps = {
@@ -144,6 +146,7 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
     const cardGroups = [
         { key: "base", label: "基础卡", cards: cards.filter((card) => card.cardType === "character" || card.cardType === "scene" || card.cardType === "prop") },
         { key: "derived", label: "衍生卡", cards: cards.filter((card) => card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit" || card.cardType === "form") },
+        { key: "reference", label: "全片基准卡", cards: cards.filter((card) => card.cardType === "palette" || card.cardType === "styleSwatch") },
         { key: "audio", label: "音频卡（人声参考）", cards: cards.filter((card) => card.cardType === "audio") },
     ].filter((group) => group.cards.length);
 
@@ -168,8 +171,8 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
             message.warning("请填写名称");
             return;
         }
-        // 音频卡是上传的人声参考,不注入文字锚点,描述可选;其余卡必须有锚点文字(下游逐字复用)。
-        if (draft.cardType !== "audio" && !draft.anchor.trim()) {
+        // 音频卡的描述可选；质感样板留空时使用默认六种材质，填写后才替换取材内容。
+        if (draft.cardType !== "audio" && draft.cardType !== "styleSwatch" && !draft.anchor.trim()) {
             message.warning("请填写锚点文字");
             return;
         }
@@ -414,6 +417,11 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                             />
                             <Input value={draft.name} placeholder="名称" onChange={(event) => setDraft((current) => (current ? { ...current, name: event.target.value } : current))} />
                         </div>
+                        {draft.cardType === "styleSwatch" ? (
+                            <p className="mt-3 text-xs leading-5" style={{ color: token.colorWarningText }}>
+                                禁止上传成片抽帧作质感参考，实测拦截率 4/4。请使用无人物材质微距样板。
+                            </p>
+                        ) : null}
                         {draft.cardType === "action" || draft.cardType === "expression" || draft.cardType === "outfit" || draft.cardType === "form" ? (
                             <Select
                                 className="mt-3 w-full"
@@ -432,7 +440,13 @@ export function ToonflowAssetCardModal({ open, node, scriptText, onSave, onGener
                                 }
                             />
                         ) : null}
-                        <Input.TextArea className="mt-3" value={draft.anchor} autoSize={{ minRows: 3, maxRows: 7 }} placeholder="外貌、外形或场景锚点文字；保存后下游逐字复用" onChange={(event) => setDraft((current) => (current ? { ...current, anchor: event.target.value } : current))} />
+                        <Input.TextArea
+                            className="mt-3"
+                            value={draft.anchor}
+                            autoSize={{ minRows: 3, maxRows: 7 }}
+                            placeholder={draft.cardType === "styleSwatch" ? "留空使用默认六种材质；填写后替换六格取材内容" : "外貌、外形或场景锚点文字；保存后下游逐字复用"}
+                            onChange={(event) => setDraft((current) => (current ? { ...current, anchor: event.target.value } : current))}
+                        />
                         <div className="mt-3 flex justify-end gap-2">
                             <Button onClick={() => setDraft(null)}>取消</Button>
                             <Button type="primary" onClick={saveDraft}>

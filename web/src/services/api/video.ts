@@ -142,7 +142,18 @@ function canoVideoDuration(value: string) {
     return duration === -1 ? 5 : duration;
 }
 
-type CanoJobData = { id?: string; status?: string; errorClass?: string; errorMessage?: string; error?: { message?: string } | string; msg?: string; message?: string; videos?: Array<{ url?: string }> };
+type CanoJobData = {
+    id?: string;
+    status?: string;
+    multipart?: boolean;
+    refAudioCount?: number;
+    errorClass?: string;
+    errorMessage?: string;
+    error?: { message?: string } | string;
+    msg?: string;
+    message?: string;
+    videos?: Array<{ url?: string }>;
+};
 // cano 用 {success, data|error} 信封包裹(与 /models 一致);兼容个别扁平响应。
 type CanoEnvelope = CanoJobData & { success?: boolean; data?: CanoJobData | null; error?: { message?: string } | string };
 type CanoRetryRequest = { model: string; prompt: string; references: ReferenceImage[]; audioReferences: ReferenceAudio[]; contentBlockedRetries: number };
@@ -174,6 +185,23 @@ function canoErrorClass(payload: CanoEnvelope): string {
     return (unwrapCano(payload).errorClass || payload.errorClass || "").trim().toUpperCase();
 }
 
+async function postCanoGeneration(config: AiConfig, body: FormData, idempotencyKey: string, options?: RequestOptions): Promise<CanoEnvelope> {
+    const requestConfig = { headers: { ...aiHeaders(config), "Idempotency-Key": idempotencyKey }, signal: options?.signal };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            return (await axios.post<CanoEnvelope>(aiApiUrl(config, "/videos/generations"), body, requestConfig)).data;
+        } catch (error) {
+            if (axios.isAxiosError(error) && error.response?.status === 409) {
+                throw new Error("Cano 幂等键冲突：同一 Idempotency-Key 不能用于不同请求内容（409）");
+            }
+            const canRetryTransport = axios.isAxiosError(error) && !error.response && !axios.isCancel(error) && !options?.signal?.aborted;
+            if (attempt === 0 && canRetryTransport) continue;
+            throw error;
+        }
+    }
+    throw new Error("Cano 视频任务创建失败");
+}
+
 async function createCanoTask(
     config: AiConfig,
     model: string,
@@ -199,16 +227,31 @@ async function createCanoTask(
     files.forEach((file) => body.append("images", file));
     // 参考音频(人声):cano 音频接口 2026-07-13 承诺次日修复,字段名/格式待核实,暂按 images 模式用 "audios";
     // 仅在有音频卡时附加,不影响现有纯图请求。拿到 cano 音频 API 文档后核对字段名与是否需要 base64/URL。
+    let refAudioCount = 0;
     for (const audio of audioReferences.slice(0, 9)) {
         if (!audio.storageKey) continue;
         const blob = await getMediaBlob(audio.storageKey);
-        if (blob) body.append("audios", new File([blob], `${audio.storageKey.replace(/[^a-zA-Z0-9]/g, "_")}.mp3`, { type: blob.type || "audio/mpeg" }));
+        if (blob) {
+            body.append("audios", new File([blob], `${audio.storageKey.replace(/[^a-zA-Z0-9]/g, "_")}.mp3`, { type: blob.type || "audio/mpeg" }));
+            refAudioCount += 1;
+        }
     }
+    // 同一次建任务的传输层重试必须复用此 Key，才能让 cano 重放原任务而不是重复扣费；
+    // CONTENT_BLOCKED 的 job 已终态，handleCanoFailure 会重新调用本函数生成新 Key，否则只会取回被拦的旧任务。
+    const idempotencyKey = globalThis.crypto.randomUUID();
     try {
-        const payload = (await axios.post<CanoEnvelope>(aiApiUrl(config, "/videos/generations"), body, { headers: aiHeaders(config), signal: options?.signal })).data;
+        const payload = await postCanoGeneration(config, body, idempotencyKey, options);
         if (payload?.success === false) throw new Error(canoErrorMessage(payload) || "Cano 视频任务创建失败");
         const created = unwrapCano(payload);
         if (!created?.id) throw new Error(canoErrorMessage(payload) || "Cano 视频接口没有返回任务 ID");
+        // 只在字段真的回传时才校验。任务此刻已在 cano 侧建好并计费,拿"字段缺失"当失败会把已计费的任务
+        // 直接丢掉;而 refAudioCount 依赖的音频字段名本身还是待核实状态(见上方 audios 注释),不能当阻断级真值。
+        if (created.multipart !== undefined && created.multipart !== true) {
+            throw new Error(`Cano 视频接口未按 multipart 接收本次生成请求（任务 ${created.id}）`);
+        }
+        if (created.refAudioCount !== undefined && created.refAudioCount !== refAudioCount) {
+            throw new Error(`Cano 视频接口接收的参考音频数量不一致：提交 ${refAudioCount}，实际 ${created.refAudioCount}（任务 ${created.id}）`);
+        }
         const task: VideoGenerationTask = { id: created.id, provider: "cano", model };
         canoRetryRequests.set(task, { model, prompt, references, audioReferences, contentBlockedRetries });
         return task;
