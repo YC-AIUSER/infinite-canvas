@@ -294,18 +294,18 @@ describe("色板锚定句", () => {
         expect(buildAssetCardPrompt({ cardType: "palette", name: "全片色板", anchor: "冷调" })).not.toContain(PALETTE_ANCHOR_SENTENCE);
     });
 
-    it("Module3 故事板同样追加锚定句", () => {
+    it("Module3 blockout 故事板不追加色板锚定句", () => {
         const prompt = buildStoryboardPagePrompt({
             rows: [{ segmentId: "seg-a", shotId: "seg-a-shot-1", shotNo: 1, scale: "L3 近景", angle: "平视", action: "抬手", line: "", sfx: "", mood: "紧张", durationSec: 3 }],
             shotContracts: [],
             actionContracts: [],
         });
-        expect(prompt).toContain(PALETTE_ANCHOR_SENTENCE);
+        expect(prompt).not.toContain(PALETTE_ANCHOR_SENTENCE);
     });
 });
 
 describe("buildToonflowImageGeneration 衍生资产", () => {
-    it("参考图按父角色、动作、表情、场景、道具排序", () => {
+    it("兼容 keyframes 参考图按故事板、父角色、动作、表情、场景、道具排序", () => {
         const table = node("table", "storyboard-table", "approved");
         table.metadata!.toonflow!.output = output("table", "storyboard-table", 1, "approved", {
             table: [
@@ -333,11 +333,14 @@ describe("buildToonflowImageGeneration 衍生资产", () => {
                 { cardId: "action-1", cardType: "action", parentCardId: "card-1", name: "阿青·拔剑", anchor: "拔剑前冲", storageKey: "image:action" },
             ],
         });
-        const target = node("target", "storyboard-page", "generating", CanvasNodeType.Image);
+        const storyboard = node("storyboard", "storyboard-page", "approved", CanvasNodeType.Image);
+        storyboard.metadata!.toonflow!.segmentId = "seg-a";
+        storyboard.metadata!.toonflow!.output = output("storyboard", "storyboard-page", 1, "approved", { imageKeys: ["image:storyboard"] });
+        const target = node("target", "keyframes", "generating", CanvasNodeType.Image);
         target.metadata!.toonflow!.segmentId = "seg-a";
 
-        const result = buildToonflowImageGeneration([table, assets, target], [], "target");
-        expect(result.referenceKeys).toEqual(["image:anchor-1", "image:action", "image:expression", "image:scene", "image:prop"]);
+        const result = buildToonflowImageGeneration([table, assets, storyboard, target], [], "target");
+        expect(result.referenceKeys).toEqual(["image:storyboard", "image:anchor-1", "image:action", "image:expression", "image:scene", "image:prop"]);
     });
 
     it("挂父形态跟随角色，独立形态排在道具之后", () => {
@@ -373,11 +376,15 @@ describe("buildToonflowImageGeneration 衍生资产", () => {
                 { cardId: "scene-1", cardType: "scene", name: "院落", anchor: "青砖院墙", storageKey: "image:scene" },
             ],
         });
-        const target = node("target", "storyboard-page", "generating", CanvasNodeType.Image);
+        const storyboard = node("storyboard", "storyboard-page", "approved", CanvasNodeType.Image);
+        storyboard.metadata!.toonflow!.segmentId = "seg-a";
+        storyboard.metadata!.toonflow!.output = output("storyboard", "storyboard-page", 1, "approved", { imageKeys: ["image:storyboard"] });
+        const target = node("target", "keyframes", "generating", CanvasNodeType.Image);
         target.metadata!.toonflow!.segmentId = "seg-a";
 
-        const result = buildToonflowImageGeneration([table, assets, target], [], "target");
+        const result = buildToonflowImageGeneration([table, assets, storyboard, target], [], "target");
         expect(result.referenceKeys).toEqual([
+            "image:storyboard",
             "image:anchor-1",
             "image:action",
             "image:expression",

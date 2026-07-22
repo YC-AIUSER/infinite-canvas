@@ -129,13 +129,13 @@ const templateNodes: ToonflowTemplateNode[] = [
         kind: "storyboard-page",
         type: CanvasNodeType.Image,
         title: "故事板页",
-        stage: "Module3 首帧",
-        summary: "照相级故事板，这张图就是该段首帧；格子与镜头一一对应，三层空间语法，缝画进首末格。",
-        checks: ["格子=镜头", "三层空间", "装备画全"],
-        outputs: ["Module3 照相级故事板"],
+        stage: "Module3 粗模预演",
+        summary: "blockout 未贴图灰模，只锁镜序、机位、站位、姿态与纵深遮挡；格子与镜头一一对应，缝画进首末格。",
+        checks: ["格子=镜头", "三层空间", "只画体块"],
+        outputs: ["Module3 blockout 故事板"],
         accent: "#4f46e5",
     },
-    // plus 线没有「线稿上色」这一步——Module3 故事板本身就是首帧，故本环节默认跳过。
+    // plus 线已退役首帧环节，当前流程不生成或消费首帧组，故本环节默认跳过。
     // 但 keyframes 这个 kind 不能删：旧画布（如跑刀）里存着 keyframes 节点，删了 kind 旧画布就打不开。
     {
         kind: "keyframes",

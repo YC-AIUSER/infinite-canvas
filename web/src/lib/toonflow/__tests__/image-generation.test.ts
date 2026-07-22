@@ -10,7 +10,7 @@ import {
     buildToonflowImageGeneration,
     splitMediaKeysByStore,
 } from "../node-runtime";
-import { buildKeyframesPrompt, buildStoryboardPagePrompt } from "../prompts";
+import { PALETTE_ANCHOR_SENTENCE, buildKeyframesPrompt, buildStoryboardPagePrompt } from "../prompts";
 import { VERSION_LIMIT_IMAGE, type NodeOutput, type StoryboardRow } from "../schema";
 
 function row(shotNo: number, segmentId = "seg-a"): StoryboardRow {
@@ -111,9 +111,10 @@ describe("Toonflow 图像提示词", () => {
         expect(prompt.indexOf("shotNo 1")).toBeLessThan(prompt.indexOf("shotNo 2"));
         expect(prompt).toContain("景别：近景（本格只有这一个景别）");
         expect(prompt).toContain("机位角度：低机位");
-        expect(prompt).toContain("前景（浅灰亮面）：主角抬手");
-        expect(prompt).toContain("中景（中灰暗面）：");
-        expect(prompt).toContain("背景（深灰阴影）：");
+        expect(prompt).toContain("前景（浅灰亮面，画面最大体块）：主角抬手");
+        expect(prompt).toContain("中景（中灰暗面，体块小于前景）：");
+        expect(prompt).toContain("背景（深灰阴影，体块最小）：");
+        expect(prompt).toContain("体块大小与遮挡");
     });
 
     it("故事板页注入镜头落点、排除项和动作关键瞬间", () => {
@@ -126,14 +127,17 @@ describe("Toonflow 图像提示词", () => {
         expect(prompt).toContain("必须排除：路人");
         expect(prompt).toContain("停在这一瞬间：手指触到门把");
         // 主体关系有值时吃进中景层，没有才回落到「按空间合同补足」。
-        expect(prompt).toContain("中景（中灰暗面）：单人");
+        expect(prompt).toContain("中景（中灰暗面，体块小于前景）：单人");
     });
 
-    // Module3 是照相级首帧，plus 线弃用「黑白粗线稿 + 首帧上色」两步走。
-    it("故事板页是 Module3 照相级首帧，不再出现黑白线稿表述", () => {
+    it("故事板页是 blockout 未贴图灰模，不承担首帧、外观或色彩", () => {
         const prompt = buildStoryboardPagePrompt({ rows: [row(1)], shotContracts: [], actionContracts: [] });
-        expect(prompt).toContain("这张图就是该段视频的首帧主参考");
-        for (const retired of ["monochrome", "黑白", "线稿"]) expect(prompt).not.toContain(retired);
+        expect(prompt).toContain("Module3 blockout 粗模故事板");
+        expect(prompt).toContain("三维预演稿、未贴图灰模");
+        expect(prompt).toContain("同一种哑光中性灰材质");
+        expect(prompt).toContain("blockout 只负责五件事");
+        expect(prompt).not.toContain(PALETTE_ANCHOR_SENTENCE);
+        for (const retired of ["照相级", "首帧主参考", "按成片画面质量", "关键装备一起画全"]) expect(prompt).not.toContain(retired);
     });
 
     it("故事板页按镜数给出画格排列矩阵（3-5→3+2、6→3+3、7-8→4+4）", () => {
@@ -163,12 +167,21 @@ describe("Toonflow 图像提示词", () => {
         expect(prompt).toContain("因果锚点、主视觉任务标签、空间锚点编号、道具状态链一律不画、不写");
     });
 
-    // §1.8 实证：故事板是首帧主参考，其外观污染强于 Module4 文字绑定句，裸称人物会丢装备。
-    it("故事板页要求人物标签携带装备特征，禁止裸称", () => {
+    it("故事板页只用体块区分角色，装备不画型号、零件和重复结构", () => {
         const prompt = buildStoryboardPagePrompt({ rows: [row(1)], shotContracts: [], actionContracts: [] });
-        expect(prompt).toContain("人物标签必须携带装备特征");
-        expect(prompt).toContain("头戴四镜筒头盔的瘦高男");
-        expect(prompt).toContain("一件都不能省");
+        expect(prompt).toContain("头部是光滑卵形体块");
+        expect(prompt).toContain("角色之间只靠壮实宽肩、瘦高、蓬松体积持杖这类体块差异区分");
+        expect(prompt).toContain("装备只保留最大一级的体积轮廓");
+        expect(prompt).toContain("不画筒数、扣具、线缆、纹样或标识");
+        expect(prompt).toContain("人物外观一律由角色卡在视频生成时保真");
+        expect(prompt).not.toContain("一件都不能省");
+    });
+
+    it("POV 镜头要求点明前景锚点物", () => {
+        const povRow = { ...row(1), angle: "POV 主观视点" };
+        const prompt = buildStoryboardPagePrompt({ rows: [povRow], shotContracts: [], actionContracts: [] });
+        expect(prompt).toContain("POV 视点前景锚点");
+        expect(prompt).toContain("没有可靠信息时不得凭空新增道具");
     });
 
     it("故事板页把缝合同落进首末格", () => {
@@ -206,17 +219,17 @@ describe("Toonflow 图像提示词", () => {
 });
 
 describe("buildToonflowImageGeneration", () => {
-    it("故事板页按角色、场景、道具顺序返回资产卡参考", () => {
+    it("故事板页走文生图，不传角色、场景、道具或色板参考", () => {
         const result = buildToonflowImageGeneration(baseNodes(), [], "target");
-        expect(result.referenceKeys).toEqual(["image:character", "image:scene", "image:prop"]);
+        expect(result.referenceKeys).toEqual([]);
         expect(result.finalPrompt).toContain("主角恒左，反派恒右，摄影机不得越轴。");
     });
 
-    it("故事板页没有资产卡时给出一致性 warning", () => {
+    it("故事板页没有资产卡时不产生外观一致性 warning", () => {
         const nodes = baseNodes().filter((item) => item.id !== "assets");
         const result = buildToonflowImageGeneration(nodes, [], "target");
         expect(result.referenceKeys).toEqual([]);
-        expect(result.warnings).toContain("无资产卡锚点,画面一致性可能漂移");
+        expect(result.warnings.some((warning) => warning.includes("资产卡") || warning.includes("一致性可能漂移"))).toBe(false);
     });
 
     it("首帧参考首位固定为同段故事板页图", () => {

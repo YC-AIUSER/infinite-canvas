@@ -157,7 +157,7 @@ export type ToonflowImageGeneration = {
     finalPrompt: string;
     washHits: Array<{ term: string; replacement: string }>;
     referenceKeys: string[];
-    /** 构图锁等硬约束参考图:任一读取失败必须中止生成,不得降级(首帧只上色不改构图)。 */
+    /** 构图锁等硬约束参考图:任一读取失败必须中止生成,不得降级。 */
     mandatoryKeys: string[];
     warnings: string[];
 };
@@ -229,9 +229,9 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
     let referenceKeys: string[];
     let mandatoryKeys: string[] = [];
     if (targetToonflow.kind === "storyboard-page") {
-        if (!cards.length) warnings.push("无资产卡锚点,画面一致性可能漂移");
         prompt = buildStoryboardPagePrompt({ rows, shotContracts, actionContracts, spaceRules });
-        referenceKeys = assetKeys;
+        // blockout 只锁构图与体块，传角色/装备/色板参考会把不该出现的细节带进粗模。
+        referenceKeys = [];
     } else {
         // 必须排除已归档实例:分镜表回退使旧段重现时,同 segmentId 会同时存在归档与活跃两个实例,
         // 命中归档节点会拿到过期线稿、掩盖"请先生成该段故事板页"的报错。
@@ -270,6 +270,7 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
     const shotIds = new Set(rows.map((row) => row.shotId));
     const shotContracts = segmentContracts<ShotContract>(nodes, "shot-contract", ShotContractSchema, shotIds, warnings);
     const actionContracts = segmentContracts<ActionContract>(nodes, "action-contract", ActionContractSchema, shotIds, warnings);
+    const spaceRules = nodes.find((node) => node.metadata?.toonflow?.kind === "space-contract")?.metadata?.toonflow?.output?.payload.text;
     const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
     const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
     const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
@@ -286,22 +287,24 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
     const assetKeys = cards.map((card) => card.storageKey);
 
     // 排除已归档实例:分镜表回退使旧段重现时,同 segmentId 会同时存在归档与活跃两个实例,命中归档会拿到过期产物。
-    const activeSegmentImageKey = (kind: "storyboard-page" | "keyframes") =>
-        nodes.find(
-            (node) =>
-                node.metadata?.toonflow?.kind === kind &&
-                node.metadata.toonflow.segmentId === targetToonflow.segmentId &&
-                !node.metadata.toonflow.archived,
-        )?.metadata?.toonflow?.output?.payload.imageKeys?.[0];
-
-    const storyboardKey = activeSegmentImageKey("storyboard-page");
+    const storyboardKey = nodes.find(
+        (node) =>
+            node.metadata?.toonflow?.kind === "storyboard-page" &&
+            node.metadata.toonflow.segmentId === targetToonflow.segmentId &&
+            !node.metadata.toonflow.archived,
+    )?.metadata?.toonflow?.output?.payload.imageKeys?.[0];
     if (!storyboardKey) throw new Error("请先生成该段故事板页");
-    const keyframesKey = activeSegmentImageKey("keyframes");
-    if (!keyframesKey) warnings.push("该段尚无首帧组,视频上色一致性可能漂移,建议先生成首帧");
 
-    const { prompt, shotPrompts } = buildVideoWorkbenchPrompt({ rows, shotContracts, actionContracts, anchors: cards.map((card) => formatAssetCard(card, parentNameById)), note });
-    const referenceKeys = [storyboardKey, ...(keyframesKey ? [keyframesKey] : []), ...assetKeys];
-    // 九宫格故事板页是视频的第一构图参考,读取失败必须中止:失去多镜头直出的构图锁会退化为文生视频。
+    const { prompt, shotPrompts } = buildVideoWorkbenchPrompt({
+        rows,
+        shotContracts,
+        actionContracts,
+        anchors: cards.map((card) => formatAssetCard(card, parentNameById)),
+        spaceRules,
+        note,
+    });
+    const referenceKeys = [storyboardKey, ...assetKeys];
+    // blockout 故事板页是视频的构图基准,读取失败必须中止:失去镜序与构图锁会退化为文生视频。
     const mandatoryKeys = [storyboardKey];
 
     const { washed, hits } = washPrompt(prompt);
