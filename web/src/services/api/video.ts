@@ -142,9 +142,17 @@ function canoVideoDuration(value: string) {
     return duration === -1 ? 5 : duration;
 }
 
-type CanoJobData = { id?: string; status?: string; error?: { message?: string } | string; msg?: string; message?: string; videos?: Array<{ url?: string }> };
+type CanoJobData = { id?: string; status?: string; errorClass?: string; errorMessage?: string; error?: { message?: string } | string; msg?: string; message?: string; videos?: Array<{ url?: string }> };
 // cano 用 {success, data|error} 信封包裹(与 /models 一致);兼容个别扁平响应。
 type CanoEnvelope = CanoJobData & { success?: boolean; data?: CanoJobData | null; error?: { message?: string } | string };
+type CanoRetryRequest = { model: string; prompt: string; references: ReferenceImage[]; audioReferences: ReferenceAudio[]; contentBlockedRetries: number };
+
+const CANO_CONTENT_BLOCKED_MAX_RETRIES = 2;
+const CANO_CONTENT_BLOCKED_RETRY_DELAY_MS = 3000;
+// 用 WeakMap 以 task 对象为键:重试上下文随 task 一起被回收。
+// 不能用 Map<taskId>——参考图带 base64 dataUrl(单次生成 7-9 张、数十 MB),
+// 而任务被取消/轮询超时/轮询抛错这几条路径都不会走到删除分支,模块级 Map 会一直累积。
+const canoRetryRequests = new WeakMap<VideoGenerationTask, CanoRetryRequest>();
 
 function unwrapCano(payload: CanoEnvelope): CanoJobData {
     return payload && typeof payload === "object" && "data" in payload && payload.data ? payload.data : payload;
@@ -154,13 +162,27 @@ function canoErrorMessage(payload: CanoEnvelope): string {
     // cano 的失败原因既可能在信封顶层 error(HTTP 级 success:false),也可能在 data 内(success:true 但 data.status=FAILED)。
     const data = unwrapCano(payload);
     return (
+        readApiErrorMessage(payload.errorMessage) ||
+        readApiErrorMessage(data.errorMessage) ||
         readApiErrorMessage((payload as { error?: unknown })?.error) ||
         readApiErrorMessage((data as { error?: unknown })?.error) ||
         readApiErrorMessage(data)
     );
 }
 
-async function createCanoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+function canoErrorClass(payload: CanoEnvelope): string {
+    return (unwrapCano(payload).errorClass || payload.errorClass || "").trim().toUpperCase();
+}
+
+async function createCanoTask(
+    config: AiConfig,
+    model: string,
+    prompt: string,
+    references: ReferenceImage[],
+    audioReferences: ReferenceAudio[],
+    options?: RequestOptions,
+    contentBlockedRetries = 0,
+): Promise<VideoGenerationTask> {
     const body = new FormData();
     body.append("model", modelOptionName(model));
     body.append("type", references.length ? "multimodal2video" : "text2video");
@@ -187,24 +209,50 @@ async function createCanoTask(config: AiConfig, model: string, prompt: string, r
         if (payload?.success === false) throw new Error(canoErrorMessage(payload) || "Cano 视频任务创建失败");
         const created = unwrapCano(payload);
         if (!created?.id) throw new Error(canoErrorMessage(payload) || "Cano 视频接口没有返回任务 ID");
-        return { id: created.id, provider: "cano", model };
+        const task: VideoGenerationTask = { id: created.id, provider: "cano", model };
+        canoRetryRequests.set(task, { model, prompt, references, audioReferences, contentBlockedRetries });
+        return task;
     } catch (error) {
         throw new Error(readAxiosError(error, "Cano 视频任务创建失败"));
     }
 }
 
+async function handleCanoFailure(config: AiConfig, task: VideoGenerationTask, payload: CanoEnvelope, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    const error = canoErrorMessage(payload) || "Cano 视频生成失败";
+    if (canoErrorClass(payload) !== "CONTENT_BLOCKED") {
+        canoRetryRequests.delete(task);
+        return { status: "failed", error };
+    }
+
+    const retryRequest = canoRetryRequests.get(task);
+    if (!retryRequest || retryRequest.contentBlockedRetries >= CANO_CONTENT_BLOCKED_MAX_RETRIES) {
+        canoRetryRequests.delete(task);
+        return { status: "failed", error: `${error}；这是内容安全审核随机拦截，可再次尝试。` };
+    }
+
+    const nextRetries = retryRequest.contentBlockedRetries + 1;
+    await delay(CANO_CONTENT_BLOCKED_RETRY_DELAY_MS * nextRetries, options?.signal);
+    const retriedTask = await createCanoTask(config, retryRequest.model, retryRequest.prompt, retryRequest.references, retryRequest.audioReferences, options, nextRetries);
+    // 就地改 id 让调用方的轮询循环跟上新 job;重试上下文转写到同一个 task 键上。
+    task.id = retriedTask.id;
+    canoRetryRequests.set(task, { ...retryRequest, contentBlockedRetries: nextRetries });
+    canoRetryRequests.delete(retriedTask);
+    return { status: "pending" };
+}
+
 async function pollCanoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     try {
         const payload = (await axios.get<CanoEnvelope>(aiApiUrl(config, `/jobs/${encodeURIComponent(task.id)}`), { headers: aiHeaders(config), signal: options?.signal })).data;
-        if (payload?.success === false) return { status: "failed", error: canoErrorMessage(payload) || "Cano 视频生成失败" };
+        if (payload?.success === false) return handleCanoFailure(config, task, payload, options);
         const job = unwrapCano(payload);
         const status = (job.status || "").toUpperCase();
         if (status === "SUCCEEDED") {
             const url = job.videos?.find((video) => typeof video.url === "string" && video.url)?.url;
+            canoRetryRequests.delete(task);
             if (!url) return { status: "failed", error: "Cano 任务成功但没有返回视频 URL" };
             return { status: "completed", result: await videoResultFromUrl(url, options) };
         }
-        if (status === "FAILED" || status === "CANCELLED") return { status: "failed", error: canoErrorMessage(payload) || "Cano 视频生成失败" };
+        if (status === "FAILED" || status === "CANCELLED") return handleCanoFailure(config, task, payload, options);
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, "Cano 视频任务查询失败"));

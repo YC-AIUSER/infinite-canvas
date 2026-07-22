@@ -385,6 +385,7 @@ function withPaletteAnchor(prompt: string) {
 export function buildAssetCardPrompt(
     card: { cardType: "character" | "scene" | "prop" | "action" | "expression" | "outfit" | "form" | "audio" | "palette"; name: string; anchor: string },
     parent?: { name: string; anchor: string },
+    keyState?: { name: string; description: string },
 ): string {
     const subject = card.name.trim() || "未命名主体";
     // 色板卡是全片色彩锚点（ST## 风格锚定图），P2 资产阶段开头先出、经用户确认才 approved，
@@ -393,8 +394,11 @@ export function buildAssetCardPrompt(
         return `生成一张全片色板图：film color palette, 13 color swatches, warm-cool dual tone system。13 个色块按冷暖双调分区排列——暖调一组、冷调一组，分区边界清晰；每个色块内或紧邻处标注该色的 HEX 色号与一句中文色彩描述。整体调性必须逐字遵守：${card.anchor}\n色块为纯色平涂，无渐变、无材质、无光影、无投影。画面里只有色块与其 HEX 与中文标注，不画任何人物、场景、道具、示意图形、装饰边框、水印或 logo。单图输出。`;
     }
     if (card.cardType === "character") {
+        const keyStateName = keyState?.name.trim() || "代表性动态姿态";
+        const keyStateDescription = keyState?.description.trim() || "角色的代表性动态姿态，动作清晰，体现人物性格与识别特征";
+        // cano 全能参考模式允许并需要中文标注，帮助模型识别每格用途；文字禁令只适用于会逐像素复刻的 libtv 真首帧。
         return withPaletteAnchor(
-            `生成一张角色全身立绘锚点卡，只画“${subject}”这一个主体。正面全身，自然站姿，服装完整可见，干净纯色浅底，构图简洁。外貌与服装锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo、水印或边框。单图输出。`,
+            `生成一张 16:9 横版人物设定页，白色纸面版式、细线分格，所有格子都是“${subject}”这同一个人物。外貌与服装锚点必须逐字遵守：${card.anchor}\n顶部标题栏：居中显示中文标题“人物设定——${subject}”。\n上区占画面高度约 60%，横向四格：第一格标注“正面”，正面全身自然站姿；第二格标注“侧面”，正侧面全身，展示身体与装备侧面轮廓；第三格标注“背面”，背面全身，展示服装与装备背部结构；第四格标注“面部特写”，头肩入画的大图，角色的识别特征需在此格可见。\n下区占约 40%，横向两块：左块为关键状态，左上角标注“${keyStateName}”，内容为${keyStateDescription}，按成片质感渲染，带环境光影与虚化背景；右块标注“装备细节”，横向排开 4-6 个服装或装备局部特写，每格下方带一行准确的中文说明。\n页面底部一行中文总述，概括角色身份、肤色、识别特征与主装备。除关键状态格外，其余各格统一中性白底与柔和三点光，光位、色温、曝光一致，无地面投影。全页人物身份与装备位置、款式逐格一致，不得增删。有参考图时风格跟随参考图。中文标题、格名、装备说明与底部总述必须清晰可读，禁止乱码；画面禁止 logo 或水印。单图输出。`,
         );
     }
     if (card.cardType === "prop") {

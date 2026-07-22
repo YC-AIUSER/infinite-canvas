@@ -5,6 +5,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- Toonflow 人物资产卡：角色卡生成提示词改为 16:9 横版人物设定页，需验证正面、侧面、背面、面部特写、关键状态、装备细节和底部中文总述均能稳定生成，且面部特写能展示角色识别特征。
+- cano 视频生成：任务被随机内容审核以 `CONTENT_BLOCKED` 拦截时会自动重新提交最多 2 次，间隔从 3 秒起；需验证重试期间不会提前报错，全部失败后仍展示 cano 原文与可再次尝试提示，`VALIDATION_ERROR` 等其他错误不重试。
 - Codex App 插件：修复插件通过 `mode=new/recent/choose` 打开画布后未自动连接本地 Agent 的问题，并将端口冲突回退命令从 Next.js 更新为 Vite；需验证新建、最近和选择画布三种模式都能自动连接。
 - 本地 Agent 连接说明：新增提醒说明只有安装 Codex 插件或手动添加 MCP 后才会增加 Codex token 消耗，直接运行 `npx -y @yinchenhuang/canvas-agent` 不会安装 MCP；需验证文案位置清晰。
 - 本地 Agent 连接说明：画布面板和配置页 Codex Tab 改为区分“Codex 插件启动画布”和“直接运行 Agent 后网页连接”两种方式，需验证文案和布局清晰。

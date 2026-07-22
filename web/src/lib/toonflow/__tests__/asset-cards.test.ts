@@ -200,6 +200,37 @@ describe("validateAssetCards", () => {
 });
 
 describe("buildAssetCardPrompt", () => {
+    it("角色卡生成 16:9 横版人物设定页并覆盖四视图、装备细节与底部总述", () => {
+        const prompt = buildAssetCardPrompt({ cardType: "character", name: "阿青", anchor: "黑色短发，青色长衫" });
+        expect(prompt).toContain("16:9 横版人物设定页");
+        expect(prompt).toContain("顶部标题栏");
+        expect(prompt).toContain("正面");
+        expect(prompt).toContain("侧面");
+        expect(prompt).toContain("背面");
+        expect(prompt).toContain("面部特写");
+        expect(prompt).toContain("角色的识别特征需在此格可见");
+        expect(prompt).toContain("装备细节");
+        expect(prompt).toContain("中文说明");
+        expect(prompt).toContain("底部一行中文总述");
+    });
+
+    it("角色卡使用传入的关键状态，未传时降级为代表性动态姿态且没有空占位符", () => {
+        const keyStatePrompt = buildAssetCardPrompt(
+            { cardType: "character", name: "阿青", anchor: "黑色短发，青色长衫" },
+            undefined,
+            { name: "负伤迎战状态", description: "左臂带伤，右手持剑前冲" },
+        );
+        const fallbackPrompt = buildAssetCardPrompt({ cardType: "character", name: "阿青", anchor: "黑色短发，青色长衫" });
+
+        expect(keyStatePrompt).toContain("负伤迎战状态");
+        expect(keyStatePrompt).toContain("左臂带伤，右手持剑前冲");
+        expect(fallbackPrompt).toContain("角色的代表性动态姿态");
+        expect(fallbackPrompt).not.toContain("undefined");
+        expect(fallbackPrompt).not.toContain("null");
+        expect(fallbackPrompt).not.toContain("{{");
+        expect(fallbackPrompt).not.toContain("待填写");
+    });
+
     it("动作卡逐字注入父锚点并约束只改动作", () => {
         const prompt = buildAssetCardPrompt({ cardType: "action", name: "阿青·拔剑", anchor: "右手拔剑，侧身前倾" }, { name: "阿青", anchor: "黑色短发，青色长衫" });
         expect(prompt).toContain("黑色短发，青色长衫");
