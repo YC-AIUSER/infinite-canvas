@@ -31,6 +31,10 @@
 - [ ] **E2E 自动化(playwright)** — 一期两条 E2E(全链生成、支配度闭环)用 /qa 人工验收;用户量起来后自动化。起点:eng-review test plan 的 Critical Paths 两条。
 - [ ] **分镜表模板 eval** — 阶段 1 模板定稿后,建 3 个固定剧本输入的小型 eval:段划分合理性、格子=镜头纪律、字段完整率(zod 通过率)。背景:分镜表是全链咽喉,模板迭代需要回归防线;基准判定需人工标注一次。依赖:阶段 1 完成。
 
+## 画布 Agent 体验
+
+- [ ] **Codex 线程过长提醒/瘦身(2026-07-24 立项,用户拍板)** — 问题:上游同步把 Codex 会话改成全站单一连续线程,历史无限累积(实测一天 0.8MB rollout、单条 canvas_get_state 快照 2 万+字),每轮都要重读全史,回复逐轮变慢,用户体感"agent 反应很慢"。方案两档递进:①轻(先做):面板检测线程规模(消息数或拉取历史的字节数)超阈值时,在输入框上方常驻提示「会话较长会拖慢响应,建议新建会话」+一键新建;②重(视①效果):自动瘦身——超阈值时把旧轮次经模型压缩成摘要注入新线程头部,平移上下文再续聊(注意与"运行中不能新建/删除会话"的约束协调)。起点:web/src/components/canvas/canvas-local-agent-panel.tsx(loadThreads 已拿到消息列表)+ canvas-agent threads API;阈值先拍脑袋(如 50 条消息或 300KB)再按体感调。临时缓解已告知用户:感觉慢就手动新建会话。
+
 ## Toonflow plus 重构（2026-07-21 起，分三块）
 
 方法论源：`ai-manga-workflow/.claude/skills/ai-short-drama-plus`。设计文档：`docs/superpowers/specs/2026-07-21-toonflow-plus-refactor-design.md`（含八条已批准决策）。
