@@ -25,6 +25,7 @@
 - [ ] **repair-tail + 段内拼接** — 只重生成段尾坏掉几秒并回并进段视频。背景:一期"单镜修改=整段重生成"(段为原子产物)是为避开拼接依赖的刻意取舍;若阶段 3 数据显示整段重摇成本过高,本项优先级提升。起点:web/src/services/api/video.ts + canvas-agent/src/stitch.ts(ffmpeg 基建已就绪:本地 Agent 调系统 ffmpeg,2026-07-16 成片拼接已落地,可直接复用裁剪+拼接)。
 - [x] **成片拼接导出(本地路线)** — 已实现(2026-07-16):canvas-agent 本地 ffmpeg 无损拼接(参数不一致自动转码兜底),导出弹窗「拼接成片」按钮 + export_stitch MCP 工具两入口,产物落 ~/Videos/Toonflow。设计文档 docs/superpowers/specs/2026-07-16-final-cut-stitch-design.md。ffmpeg 决策=本地 Agent 调系统 ffmpeg(repair-tail 可共用);浏览器端 ffmpeg.wasm 路线留对外部署时升级。
 - [ ] **避雷词表更新机制** — seedance_forbidden_terms.json 随即梦平台规则更新的流程(手动季检或社区源)。背景:一期只做静态快照。起点:web/src/lib/toonflow/prompts.ts 词表段。
+- [ ] **控制台 "empty string src" 警告清理(Low,存量)** — 画布/生图页加载时约 14 条 React `<img src="">` 警告。2026-07-24 /qa 核实与 feat/upstream-sync-batch1 无关(分支 diff 零 src 改动)。排查空缩略图/封面渲染,改条件渲染或传 null。证据:.gstack/qa-reports/qa-report-localhost-3000-2026-07-24.md ISSUE-001。
 - [ ] **空间合同点位图交互** — 画布内嵌简易俯视图绘制器或图片上传。背景:方法论要求手绘(AI 生成会漂移),一期只做文本版空间规则。起点:space-contract 节点 UI。
 - [ ] **C 路线:粗版一键生成对接** — 一键产出(剧本/分镜/素材)结构化导出并展开进 Toonflow 画布,现有客户直接变画布用户。背景:office-hours 方案 C,被拍板为 B 之后的演化路径;做之前先摸清粗版产物格式与代码库位置(design doc Open Q3)。
 - [ ] **E2E 自动化(playwright)** — 一期两条 E2E(全链生成、支配度闭环)用 /qa 人工验收;用户量起来后自动化。起点:eng-review test plan 的 Critical Paths 两条。
