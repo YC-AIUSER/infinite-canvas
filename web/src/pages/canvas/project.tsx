@@ -44,6 +44,7 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { computeFocusViewport, computeNodesBounds, easeInOutCubic, interpolateViewport, VIEWPORT_CAMERA_COOLDOWN, VIEWPORT_CAMERA_DURATION } from "@/lib/canvas/viewport-camera";
+import { resolveFreePosition, resolveFreePositionsForNodes } from "@/lib/canvas/free-position";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "@/lib/canvas/canvas-resource-references";
 import { isAssetsProjectionNode, reconcileAssetsProjection, removeCardFromStageCards } from "@/lib/canvas/toonflow-assets-projection";
 import { isInstanceGroupMemberNode, isInstanceGroupNode, reconcileInstanceGroups } from "@/lib/canvas/toonflow-instance-groups";
@@ -2455,7 +2456,9 @@ function InfiniteCanvasPage() {
                             imageBatchExpanded: count > 1 ? true : undefined,
                         },
                     };
-                    const childNodes: CanvasNodeData[] = childIds.map((id, index) => ({
+                    // 原位复用的空图节点不能挪;新建根节点先让位,子节点再基于让位后的根排布。
+                    if (!isEmptyImageNode) rootNode.position = resolveFreePosition(rootNode.position, { width: rootNode.width, height: rootNode.height }, nodesRef.current);
+                    const desiredBatchChildren: CanvasNodeData[] = childIds.map((id, index) => ({
                         id,
                         type: CanvasNodeType.Image,
                         title: effectivePrompt.slice(0, 32) || "Generated Image",
@@ -2467,6 +2470,8 @@ function InfiniteCanvasPage() {
                         height: imageConfig.height,
                         metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, batchRootId: count > 1 ? rootId : undefined, ...generationMetadata },
                     }));
+                    const batchChildPositions = resolveFreePositionsForNodes(desiredBatchChildren, [...nodesRef.current, rootNode]);
+                    const childNodes = desiredBatchChildren.map((node, index) => ({ ...node, position: batchChildPositions[index] }));
                     const batchConnections = [...(isEmptyImageNode ? [] : [{ id: nanoid(), fromNodeId: nodeId, toNodeId: rootId }]), ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: rootId, toNodeId: childId }))];
 
                     setNodes((prev) => [
@@ -2590,7 +2595,7 @@ function InfiniteCanvasPage() {
                         id: videoId,
                         type: CanvasNodeType.Video,
                         title: effectivePrompt.slice(0, 32) || "Generated Video",
-                        position: isEmptyVideoNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y },
+                        position: isEmptyVideoNode ? sourceNode.position : resolveFreePosition({ x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y }, { width: spec.width, height: spec.height }, nodesRef.current),
                         width: isEmptyVideoNode ? sourceNode.width : spec.width,
                         height: isEmptyVideoNode ? sourceNode.height : spec.height,
                         metadata: {
@@ -2658,7 +2663,7 @@ function InfiniteCanvasPage() {
                         id: audioId,
                         type: CanvasNodeType.Audio,
                         title: effectivePrompt.slice(0, 32) || "Generated Audio",
-                        position: isEmptyAudioNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y + ((sourceNode?.height || spec.height) - spec.height) / 2 },
+                        position: isEmptyAudioNode ? sourceNode.position : resolveFreePosition({ x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y + ((sourceNode?.height || spec.height) - spec.height) / 2 }, { width: spec.width, height: spec.height }, nodesRef.current),
                         width: isEmptyAudioNode ? sourceNode.width : spec.width,
                         height: isEmptyAudioNode ? sourceNode.height : spec.height,
                         metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, ...buildAudioGenerationMetadata(generationConfig) },
@@ -2690,7 +2695,7 @@ function InfiniteCanvasPage() {
                 const childIds = isConfigNode || editingTextNode ? Array.from({ length: textCount }, () => nanoid()) : [];
                 pendingChildIds = childIds;
                 if (isConfigNode || editingTextNode) {
-                    const childNodes: CanvasNodeData[] = childIds.map((id, index) => ({
+                    const desiredChildNodes: CanvasNodeData[] = childIds.map((id, index) => ({
                         id,
                         type: CanvasNodeType.Text,
                         title: effectivePrompt.slice(0, 32) || "Generated Text",
@@ -2702,6 +2707,8 @@ function InfiniteCanvasPage() {
                         height: textConfig.height,
                         metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, fontSize: 14 },
                     }));
+                    const childPositions = resolveFreePositionsForNodes(desiredChildNodes, nodesRef.current);
+                    const childNodes = desiredChildNodes.map((node, index) => ({ ...node, position: childPositions[index] }));
                     setNodes((prev) => [...prev.map((node) => (node.id === nodeId && isConfigNode ? { ...node, metadata: { ...node.metadata, prompt: effectivePrompt, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)), ...childNodes]);
                     setConnections((prev) => [...prev, ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: nodeId, toNodeId: childId }))]);
                     focusNodes(childNodes);
