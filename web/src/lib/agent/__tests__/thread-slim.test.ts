@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     SLIM_CHARS_THRESHOLD,
     SLIM_MESSAGE_THRESHOLD,
+    SLIM_ROLLOUT_BYTES_THRESHOLD,
     buildSlimSummaryInput,
     buildSlimSummaryPrompt,
     composeSlimPrefixedPrompt,
@@ -10,21 +11,21 @@ import {
 } from "../thread-slim";
 
 describe("shouldSuggestSlim", () => {
-    it("等于两个阈值时不触发", () => {
+    it("有 rolloutBytes 时超过真实大小阈值才触发", () => {
+        expect(shouldSuggestSlim({ messageCount: 0, totalChars: 0, rolloutBytes: SLIM_ROLLOUT_BYTES_THRESHOLD + 1 })).toBe(true);
+        expect(shouldSuggestSlim({ messageCount: SLIM_MESSAGE_THRESHOLD + 1, totalChars: SLIM_CHARS_THRESHOLD + 1, rolloutBytes: SLIM_ROLLOUT_BYTES_THRESHOLD })).toBe(false);
+    });
+
+    it("无 rolloutBytes 时等于兜底阈值不触发", () => {
         expect(shouldSuggestSlim({ messageCount: SLIM_MESSAGE_THRESHOLD, totalChars: SLIM_CHARS_THRESHOLD })).toBe(false);
     });
 
-    it("消息数超过阈值时触发", () => {
+    it("无 rolloutBytes 时 121 条消息触发", () => {
         expect(shouldSuggestSlim({ messageCount: SLIM_MESSAGE_THRESHOLD + 1, totalChars: 0 })).toBe(true);
     });
 
-    it("字符数超过阈值时触发", () => {
+    it("无 rolloutBytes 时字符数兜底仍然生效", () => {
         expect(shouldSuggestSlim({ messageCount: 0, totalChars: SLIM_CHARS_THRESHOLD + 1 })).toBe(true);
-    });
-
-    it("任一阈值超过即触发", () => {
-        expect(shouldSuggestSlim({ messageCount: SLIM_MESSAGE_THRESHOLD + 1, totalChars: SLIM_CHARS_THRESHOLD })).toBe(true);
-        expect(shouldSuggestSlim({ messageCount: SLIM_MESSAGE_THRESHOLD, totalChars: SLIM_CHARS_THRESHOLD + 1 })).toBe(true);
     });
 });
 

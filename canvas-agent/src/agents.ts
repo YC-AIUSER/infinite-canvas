@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,10 @@ type AgentEvent = Json & { type: string; usage?: unknown };
 type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 type CodexRunOptions = { threadId?: string; cwd?: string; appEmit?: AgentEmit; onStart?: () => void; onThread?: (threadId: string) => void; onTurn?: (turnId: string) => void; onFinish?: () => void };
 type AgentHistoryMessage = { id: string; role: "user" | "assistant" | "tool" | "error"; title?: string; text: string; detail?: unknown; streamId?: string };
+type RolloutFileAccess = {
+    readDir: (directory: string) => Promise<Dirent[]>;
+    stat: (filePath: string) => Promise<Pick<Stats, "size">>;
+};
 
 let codexQueue: Promise<unknown> = Promise.resolve();
 let codexApp: CodexAppClient | null = null;
@@ -20,6 +25,7 @@ let codexAppStart: Promise<CodexAppClient> | null = null;
 let codexThreadId = "";
 const canvasAgentMcp = canvasAgentMcpCommand();
 const require = createRequire(import.meta.url);
+const lookupCodexRolloutBytes = createCodexRolloutBytesLookup();
 
 export function withAgentPrompt(prompt: string) {
     return prompt.trim() ? `${AGENT_PROMPT}\n\n用户请求：${prompt}` : "";
@@ -93,7 +99,12 @@ export async function listCodexThreads(emit: AgentEmit, options: { cwd: string; 
         cwd: options.cwd,
         ...(options.searchTerm ? { searchTerm: options.searchTerm } : {}),
     });
-    const data = Array.isArray(field(result, "data")) ? (field(result, "data") as unknown[]).map(summarizeCodexThread).filter((thread) => threadInWorkspace(thread, options.cwd)) : [];
+    const threads = Array.isArray(field(result, "data")) ? (field(result, "data") as unknown[]).filter((thread) => threadInWorkspace(thread, options.cwd)) : [];
+    const rolloutBytesByThreadId = await lookupCodexRolloutBytes(threads.map((thread) => String(field(thread, "id") || "")));
+    const data = threads.map((thread) => {
+        const threadId = String(field(thread, "id") || "");
+        return summarizeCodexThread(thread, rolloutBytesByThreadId.get(threadId));
+    });
     return { data, nextCursor: field(result, "nextCursor") || null, backwardsCursor: field(result, "backwardsCursor") || null };
 }
 
@@ -415,7 +426,7 @@ function field(value: unknown, key: string) {
     return value && typeof value === "object" ? (value as Json)[key] : undefined;
 }
 
-export function summarizeCodexThread(thread: unknown) {
+export function summarizeCodexThread(thread: unknown, rolloutBytes?: number) {
     return {
         id: String(field(thread, "id") || ""),
         sessionId: String(field(thread, "sessionId") || ""),
@@ -427,7 +438,64 @@ export function summarizeCodexThread(thread: unknown) {
         threadSource: field(thread, "threadSource"),
         createdAt: Number(field(thread, "createdAt") || 0),
         updatedAt: Number(field(thread, "updatedAt") || 0),
+        ...(rolloutBytes === undefined ? {} : { rolloutBytes }),
     };
+}
+
+// Codex 不直接返回线程记录大小：首次批量扫描 sessions 找到文件，后续只 stat 缓存路径刷新字节数。
+export function createCodexRolloutBytesLookup({
+    sessionsDir = path.join(os.homedir(), ".codex", "sessions"),
+    readDir = (directory) => fs.readdir(directory, { withFileTypes: true }),
+    stat = (filePath) => fs.stat(filePath),
+}: Partial<RolloutFileAccess> & { sessionsDir?: string } = {}) {
+    const rolloutPathByThreadId = new Map<string, string>();
+
+    return async (threadIds: readonly string[]) => {
+        const sizes = new Map<string, number>();
+        const uncached = new Set(threadIds.filter((threadId) => threadId && !rolloutPathByThreadId.has(threadId)));
+        await Promise.all(
+            threadIds.map(async (threadId) => {
+                const filePath = rolloutPathByThreadId.get(threadId);
+                if (!filePath) return;
+                const fileStat = await stat(filePath).catch(() => undefined);
+                if (fileStat) sizes.set(threadId, fileStat.size);
+            }),
+        );
+
+        const found = await findRolloutPaths(sessionsDir, uncached, readDir);
+        await Promise.all(
+            [...found].map(async ([threadId, filePath]) => {
+                rolloutPathByThreadId.set(threadId, filePath);
+                const fileStat = await stat(filePath).catch(() => undefined);
+                if (fileStat) sizes.set(threadId, fileStat.size);
+            }),
+        );
+        return sizes;
+    };
+}
+
+async function findRolloutPaths(sessionsDir: string, threadIds: Set<string>, readDir: RolloutFileAccess["readDir"]) {
+    const found = new Map<string, string>();
+    const directories = [sessionsDir];
+    while (directories.length && threadIds.size) {
+        const directory = directories.pop()!;
+        const entries = await readDir(directory).catch(() => []);
+        for (const entry of entries) {
+            const filePath = path.join(directory, entry.name);
+            if (entry.isDirectory()) {
+                directories.push(filePath);
+                continue;
+            }
+            if (!entry.isFile() || !entry.name.startsWith("rollout-") || !entry.name.endsWith(".jsonl")) continue;
+            for (const threadId of threadIds) {
+                if (!entry.name.endsWith(`-${threadId}.jsonl`)) continue;
+                found.set(threadId, filePath);
+                threadIds.delete(threadId);
+                break;
+            }
+        }
+    }
+    return found;
 }
 
 function threadMessages(thread: unknown): AgentHistoryMessage[] {

@@ -1,5 +1,6 @@
-// 先拍脑袋后按体感调：任一阈值超过时提示用户主动瘦身，不自动切换会话。
-export const SLIM_MESSAGE_THRESHOLD = 50;
+// 有线程记录大小时只按真实 rollout 字节数判断；旧版 Agent 或文件查找失败时才用宽松兜底。
+export const SLIM_ROLLOUT_BYTES_THRESHOLD = 500_000;
+export const SLIM_MESSAGE_THRESHOLD = 120;
 export const SLIM_CHARS_THRESHOLD = 300_000;
 
 const SLIM_INPUT_MAX_CHARS = 12_000;
@@ -11,7 +12,8 @@ type SlimMessage = {
     text?: string;
 };
 
-export function shouldSuggestSlim({ messageCount, totalChars }: { messageCount: number; totalChars: number }): boolean {
+export function shouldSuggestSlim({ messageCount, totalChars, rolloutBytes }: { messageCount: number; totalChars: number; rolloutBytes?: number }): boolean {
+    if (rolloutBytes !== undefined) return rolloutBytes > SLIM_ROLLOUT_BYTES_THRESHOLD;
     return messageCount > SLIM_MESSAGE_THRESHOLD || totalChars > SLIM_CHARS_THRESHOLD;
 }
 

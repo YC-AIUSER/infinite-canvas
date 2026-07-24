@@ -109,8 +109,8 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     const loadThreadsSequenceRef = useRef(0);
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
     const slimSuggested = useMemo(
-        () => shouldSuggestSlim({ messageCount: messages.length, totalChars: messages.reduce((total, item) => total + item.text.length, 0) }),
-        [messages],
+        () => shouldSuggestSlim({ messageCount: messages.length, totalChars: messages.reduce((total, item) => total + item.text.length, 0), rolloutBytes: threads.find((thread) => thread.id === activeThreadId)?.rolloutBytes }),
+        [activeThreadId, messages, threads],
     );
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
     const loadThreads = useCallback(async (skipHistory = false) => {
