@@ -12,6 +12,10 @@ const binaries = new Map<string, string>();
 export type VideoProbe = { videoCodec: string; audioCodec?: string; width: number; height: number; frameRate: string; hasAudio: boolean; durationSec: number };
 export type StitchMode = "copy" | "reencode";
 export type StitchResult = { outputPath: string; mode: StitchMode; bytes: number; durationSec: number };
+export type DubbingInput = { segmentIndex: number; offsetSec: number; bytes: Buffer; mimeType?: string };
+export type DubbingFile = Omit<DubbingInput, "bytes" | "mimeType"> & { file: string };
+export type ExtractedFrames = { firstFrame: Buffer; lastFrame: Buffer };
+export type StitchCommandRunner = (command: string, args: string[]) => Promise<unknown>;
 
 export function isValidJobId(value: unknown): value is string {
     return typeof value === "string" && JOB_ID_RE.test(value);
@@ -29,6 +33,31 @@ export async function writeSegment(jobId: string, index: number, body: Buffer) {
     const dir = jobDirectory(jobId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(segmentPath(jobId, index), body);
+}
+
+export async function extractVideoFrames(
+    jobId: string,
+    body: Buffer,
+    dependencies: { ensureFfmpeg?: () => Promise<void>; runCommand?: StitchCommandRunner } = {},
+): Promise<ExtractedFrames> {
+    if (!isValidJobId(jobId) || !body.length) throw new Error("jobId 或视频字节无效");
+    const ensure = dependencies.ensureFfmpeg ?? ensureFfmpeg;
+    const runCommand = dependencies.runCommand ?? run;
+    await writeSegment(jobId, 0, body);
+    await ensure();
+    const input = segmentPath(jobId, 0);
+    const firstPath = path.join(jobDirectory(jobId), "first.png");
+    const lastPath = path.join(jobDirectory(jobId), "last.png");
+    await Promise.all([
+        runCommand("ffmpeg", ["-y", "-i", input, "-frames:v", "1", firstPath]),
+        runCommand("ffmpeg", ["-y", "-sseof", "-1", "-i", input, "-vf", "reverse", "-frames:v", "1", lastPath]),
+    ]);
+    const [firstFrame, lastFrame] = await Promise.all([fs.readFile(firstPath), fs.readFile(lastPath)]);
+    return { firstFrame, lastFrame };
+}
+
+export function pngDataUrl(bytes: Buffer) {
+    return `data:image/png;base64,${bytes.toString("base64")}`;
 }
 
 export async function hasAllSegments(jobId: string, count: number) {
@@ -85,17 +114,38 @@ export function parseProbeOutput(stdout: string, file = "video.mp4"): VideoProbe
     return { videoCodec: video.codec_name, audioCodec: audio?.codec_name, width: video.width, height: video.height, frameRate: video.r_frame_rate, hasAudio: Boolean(audio), durationSec: Number(data.format?.duration || 0) };
 }
 
-export async function stitchSegments({ jobId, count, title, outputDirectory }: { jobId: string; count: number; title?: string; outputDirectory?: string }): Promise<StitchResult> {
+export async function stitchSegments({
+    jobId,
+    count,
+    title,
+    outputDirectory,
+    dubbing = [],
+    loudnorm = false,
+}: {
+    jobId: string;
+    count: number;
+    title?: string;
+    outputDirectory?: string;
+    dubbing?: DubbingInput[];
+    loudnorm?: boolean;
+}): Promise<StitchResult> {
     if (!isValidJobId(jobId) || !Number.isInteger(count) || count < 1) throw new Error("jobId 或 count 无效");
     if (!await hasAllSegments(jobId, count)) throw new Error("段文件不完整");
     await ensureFfmpeg();
     const files = Array.from({ length: count }, (_, index) => segmentPath(jobId, index));
     const probes = await Promise.all(files.map(probeVideo));
-    const mode = count === 1 ? "copy" : chooseStitchMode(probes);
+    const mode = dubbing.length || loudnorm ? "reencode" : count === 1 ? "copy" : chooseStitchMode(probes);
     const outputPath = outputFilePath(title, new Date(), outputDirectory);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     if (mode === "copy") await concatCopy(files, outputPath, jobDirectory(jobId));
-    else await concatReencode(files, probes, outputPath);
+    else {
+        const dubbingFiles = await Promise.all(dubbing.map(async (item, index): Promise<DubbingFile> => {
+            const file = path.join(jobDirectory(jobId), `dubbing-${index}.audio`);
+            await fs.writeFile(file, item.bytes);
+            return { file, segmentIndex: item.segmentIndex, offsetSec: item.offsetSec };
+        }));
+        await concatReencode(files, probes, outputPath, dubbingFiles, loudnorm);
+    }
     const output = await fs.stat(outputPath);
     return { outputPath, mode, bytes: output.size, durationSec: probes.reduce((sum, probe) => sum + probe.durationSec, 0) };
 }
@@ -118,9 +168,9 @@ async function concatCopy(files: string[], outputPath: string, dir: string) {
     await run("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outputPath]);
 }
 
-async function concatReencode(files: string[], probes: VideoProbe[], outputPath: string) {
+export function buildReencodeArgs(files: string[], probes: VideoProbe[], outputPath: string, dubbing: DubbingFile[] = [], loudnorm = false) {
     const first = probes[0];
-    const inputs = files.flatMap((file) => ["-i", file]);
+    const inputs = [...files, ...dubbing.map((item) => item.file)].flatMap((file) => ["-i", file]);
     const filters: string[] = [];
     const concatInputs: string[] = [];
     probes.forEach((probe, index) => {
@@ -129,7 +179,27 @@ async function concatReencode(files: string[], probes: VideoProbe[], outputPath:
         concatInputs.push(`[v${index}][a${index}]`);
     });
     filters.push(`${concatInputs.join("")}concat=n=${files.length}:v=1:a=1[v][a]`);
-    await run("ffmpeg", ["-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "18", "-c:a", "aac", "-movflags", "+faststart", outputPath]);
+    let audioLabel = "a";
+    if (dubbing.length) {
+        const dubbingLabels = dubbing.map((item, index) => {
+            const inputIndex = files.length + index;
+            const segmentOffsetSec = probes.slice(0, item.segmentIndex).reduce((sum, probe) => sum + probe.durationSec, 0);
+            const delayMs = Math.max(0, Math.round((segmentOffsetSec + item.offsetSec) * 1000));
+            filters.push(`[${inputIndex}:a]aresample=48000,adelay=${delayMs}|${delayMs}[d${index}]`);
+            return `[d${index}]`;
+        });
+        filters.push(`[a]${dubbingLabels.join("")}amix=inputs=${dubbing.length + 1}:duration=longest:dropout_transition=0[mix]`);
+        audioLabel = "mix";
+    }
+    if (loudnorm) {
+        filters.push(`[${audioLabel}]loudnorm=I=-16:TP=-1.5:LRA=11[aout]`);
+        audioLabel = "aout";
+    }
+    return ["-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", `[${audioLabel}]`, "-c:v", "libx264", "-crf", "18", "-c:a", "aac", "-movflags", "+faststart", ...(dubbing.length || loudnorm ? ["-shortest"] : []), outputPath];
+}
+
+async function concatReencode(files: string[], probes: VideoProbe[], outputPath: string, dubbing: DubbingFile[] = [], loudnorm = false) {
+    await run("ffmpeg", buildReencodeArgs(files, probes, outputPath, dubbing, loudnorm));
 }
 
 async function run(command: string, args: string[]) {

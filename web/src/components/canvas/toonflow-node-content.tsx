@@ -5,7 +5,8 @@ import { z } from "zod";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { runQualityCheck, type QualityCheckItem } from "@/lib/toonflow/quality-check";
-import { parseModelJson, ShotContractSchema, type StoryboardRow } from "@/lib/toonflow/schema";
+import { canApproveSegment, segmentApprovalBlockReason } from "@/lib/toonflow/node-runtime";
+import { parseModelJson, ShotContractSchema, type DubbingTrack, type QualityReview, type StoryboardRow } from "@/lib/toonflow/schema";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
@@ -13,6 +14,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasNodeData, ToonflowNodeStageStatus } from "@/types/canvas";
 
 import { ToonflowContinuityTableView, ToonflowDirectingLockView, ToonflowQualityCheckPanel } from "./toonflow-plus-node-views";
+import { ToonflowAudioMixPanel, ToonflowSegmentQualityReview } from "./toonflow-delivery-node-views";
 
 const statusTone: Record<ToonflowNodeStageStatus, string> = {
     empty: "#78716c",
@@ -57,6 +59,8 @@ type ToonflowNodeContentProps = {
     onOpenSeam?: (nodeId: string) => void;
     onSeamSkip?: (nodeId: string) => void;
     seamSummary?: { checkedCount: number; total: number };
+    onQualityReviewChange?: (nodeId: string, review: QualityReview) => void;
+    onVoiceMapChange?: (nodeId: string, voiceMap: Record<string, string>) => void;
     batchCount?: number;
     batchExpanded?: boolean;
     onToggleBatch?: (nodeId: string) => void;
@@ -141,6 +145,17 @@ function StoryboardQualityCheck({ nodeId, rows, background, onDiversityRepair }:
     return <ToonflowQualityCheckPanel report={report} background={background} onRepair={onDiversityRepair ? (failedItems) => onDiversityRepair(nodeId, failedItems) : undefined} />;
 }
 
+/**
+ * 音频混音节点的分镜行选取。selector 只准返回稳定引用（分镜表 payload 本体），
+ * 段内过滤放 useMemo——在 selector 里 filter 或返回 [] 字面量都是每次新引用，
+ * 快照比较永远不等，会无限重渲染直接把画布页打崩（Maximum update depth exceeded，实测）。
+ */
+function AudioMixSection({ nodeId, segmentId, voiceMap, dubbing, background, onVoiceMapChange }: { nodeId: string; segmentId: string; voiceMap: Record<string, string>; dubbing: DubbingTrack[]; background: string; onVoiceMapChange: (voiceMap: Record<string, string>) => void }) {
+    const table = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "storyboard-table")?.output?.payload.table);
+    const rows = useMemo(() => (table ?? []).filter((row) => row.segmentId === segmentId), [table, segmentId]);
+    return <ToonflowAudioMixPanel rows={rows} voiceMap={voiceMap} dubbing={dubbing} background={background} onVoiceMapChange={onVoiceMapChange} />;
+}
+
 export function ToonflowNodeContent({
     node,
     cascadeLocked = false,
@@ -160,6 +175,8 @@ export function ToonflowNodeContent({
     onOpenSeam,
     onSeamSkip,
     seamSummary,
+    onQualityReviewChange,
+    onVoiceMapChange,
     batchCount = 0,
     batchExpanded = false,
     onToggleBatch,
@@ -183,10 +200,10 @@ export function ToonflowNodeContent({
             : toonflow.status;
     const statusColor = statusTone[displayStatus] || theme.node.muted;
     const isActionable = actionableKinds.has(toonflow.kind);
-    const isInstance = (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench") && Boolean(toonflow.segmentId);
+    const isInstance = (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench" || toonflow.kind === "audio-mix") && Boolean(toonflow.segmentId);
     const instanceImageKey = toonflow.output?.payload.imageKeys?.[0];
     const instanceVideoKey = toonflow.output?.payload.videoKeys?.[0];
-    const generationKindLabel = toonflow.kind === "video-workbench" ? "文本" : "图像";
+    const generationKindLabel = toonflow.kind === "video-workbench" ? "文本" : toonflow.kind === "audio-mix" ? "音频" : "图像";
     const error = toonflow.output?.error || node.metadata?.errorDetails;
     const directingLock = toonflow.kind === "directing-lock" ? toonflow.output?.payload.directingLock : undefined;
     const continuityTable = toonflow.kind === "continuity-table" ? toonflow.output?.payload.continuityTable : undefined;
@@ -195,6 +212,9 @@ export function ToonflowNodeContent({
     const assetCards = toonflow.output?.payload.cards;
     const module4Text = toonflow.kind === "video-workbench" ? toonflow.output?.payload.text : undefined;
     const module4Issues = toonflow.kind === "video-workbench" ? toonflow.output?.payload.module4Issues ?? [] : [];
+    const qualityReview = toonflow.kind === "video-workbench" ? toonflow.output?.payload.qualityReview : undefined;
+    const approvalBlockReason = toonflow.kind === "video-workbench" && instanceVideoKey ? segmentApprovalBlockReason(qualityReview) : undefined;
+    const dubbing = toonflow.kind === "audio-mix" ? toonflow.output?.payload.dubbing ?? [] : [];
     const awaitingVideoConfirmation = toonflow.kind === "video-workbench" && toonflow.status === "review" && Boolean(module4Text) && !instanceVideoKey;
     const assetCardSummary = assetCards?.length
         ? assetCards.reduce(
@@ -360,6 +380,10 @@ export function ToonflowNodeContent({
                 <ToonflowContinuityTableView table={continuityTable} background={theme.node.fill} />
             ) : storyboardRows?.length ? (
                 <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} onDiversityRepair={onDiversityRepair} />
+            ) : toonflow.kind === "video-workbench" && instanceVideoKey ? (
+                <ToonflowSegmentQualityReview review={qualityReview} background={theme.node.fill} blockReason={approvalBlockReason} onChange={(review) => onQualityReviewChange?.(node.id, review)} />
+            ) : toonflow.kind === "audio-mix" && toonflow.segmentId ? (
+                <AudioMixSection nodeId={node.id} segmentId={toonflow.segmentId} voiceMap={toonflow.voiceMap ?? {}} dubbing={dubbing} background={theme.node.fill} onVoiceMapChange={(voiceMap) => onVoiceMapChange?.(node.id, voiceMap)} />
             ) : module4Text ? (
                 <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
                     {module4Text}
@@ -455,7 +479,8 @@ export function ToonflowNodeContent({
                         ) : (
                             <Button
                                 size="small"
-                                disabled={cascadeLocked}
+                                disabled={cascadeLocked || (toonflow.kind === "video-workbench" && Boolean(instanceVideoKey) && !canApproveSegment(qualityReview))}
+                                title={toonflow.kind === "video-workbench" ? approvalBlockReason : undefined}
                                 onClick={(event) => {
                                     event.stopPropagation();
                                     onApprove?.(node.id);

@@ -1,9 +1,11 @@
-import type { ExportSegment } from "./node-runtime";
+import type { ExportDubbingTrack, ExportSegment } from "./node-runtime";
 import { getMediaBlob } from "../../services/file-storage";
 import { useAgentStore } from "../../stores/use-agent-store";
 
 export type StitchProgress = { phase: "uploading"; current: number; total: number } | { phase: "stitching" };
 export type FinalCutResult = { outputPath: string; mode: "copy" | "reencode" };
+export type SegmentFrames = { firstFrame: string; lastFrame: string };
+export type StitchOptions = { dubbing?: ExportDubbingTrack[]; loudnorm?: boolean };
 
 function agentConnection() {
     const { url, token } = useAgentStore.getState();
@@ -22,7 +24,19 @@ export async function checkStitchAgentHealth() {
     }
 }
 
-export async function stitchFinalCut(segments: ExportSegment[], title?: string, onProgress?: (progress: StitchProgress) => void): Promise<FinalCutResult> {
+export async function extractSegmentFrames(videoKey: string): Promise<SegmentFrames> {
+    const blob = await getMediaBlob(videoKey);
+    if (!blob) throw new Error("段视频数据缺失");
+    const { endpoint, token } = agentConnection();
+    const jobId = crypto.randomUUID();
+    return request<SegmentFrames>(`${endpoint}/stitch/frames?jobId=${encodeURIComponent(jobId)}`, {
+        method: "POST",
+        headers: { "x-canvas-agent-token": token, "content-type": "application/octet-stream" },
+        body: blob,
+    });
+}
+
+export async function stitchFinalCut(segments: ExportSegment[], title?: string, onProgress?: (progress: StitchProgress) => void, options?: StitchOptions): Promise<FinalCutResult> {
     if (!segments.length) throw new Error("请先通过至少一段视频");
     const { endpoint, token } = agentConnection();
     const jobId = crypto.randomUUID();
@@ -34,13 +48,28 @@ export async function stitchFinalCut(segments: ExportSegment[], title?: string, 
         if (!blob) throw new Error(`第 ${index + 1} 段「${segment.title}」的视频数据缺失，无法拼接`);
         blobs.push(blob);
     }
+    const dubbing = [];
+    for (const track of options?.dubbing ?? []) {
+        const blob = await getMediaBlob(track.audioKey);
+        if (!blob) throw new Error(`配音「${track.speaker} · ${track.text}」的数据缺失，无法混音`);
+        dubbing.push({ segmentIndex: track.segmentIndex, offsetSec: track.plannedOffsetSec, bytes: await blobBase64(blob), mimeType: blob.type });
+    }
     for (const [index, blob] of blobs.entries()) {
         onProgress?.({ phase: "uploading", current: index + 1, total: blobs.length });
         await request(`${endpoint}/export/segments?jobId=${encodeURIComponent(jobId)}&index=${index}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: blob });
     }
     onProgress?.({ phase: "stitching" });
-    const result = await request<{ outputPath: string; mode: "copy" | "reencode" }>(`${endpoint}/export/stitch`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ jobId, count: segments.length, title }) });
+    const enhanced = dubbing.length > 0 || options?.loudnorm === true;
+    const stitchBody = enhanced ? { jobId, count: segments.length, title, ...(dubbing.length ? { dubbing } : {}), ...(options?.loudnorm ? { loudnorm: true } : {}) } : { jobId, count: segments.length, title };
+    const result = await request<{ outputPath: string; mode: "copy" | "reencode" }>(`${endpoint}/export/stitch`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(stitchBody) });
     return { outputPath: result.outputPath, mode: result.mode };
+}
+
+async function blobBase64(blob: Blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    return btoa(binary);
 }
 
 export async function revealFinalCut(outputPath: string) {

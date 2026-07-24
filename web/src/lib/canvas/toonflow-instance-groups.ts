@@ -1,6 +1,6 @@
 import { CanvasNodeType, type CanvasNodeData, type ToonflowNodeKind } from "../../types/canvas";
 
-const INSTANCE_KINDS: ReadonlySet<ToonflowNodeKind> = new Set(["storyboard-page", "keyframes", "video-workbench"]);
+const INSTANCE_KINDS: ReadonlySet<ToonflowNodeKind> = new Set(["storyboard-page", "keyframes", "video-workbench", "audio-mix"]);
 const GROUP_PREFIX = "instance-group-";
 const GROUP_PAD = 40;
 const GRID_COLS = 4; // 组内段实例每行个数
@@ -8,7 +8,7 @@ const CELL_GAP = 32; // 段实例间距
 const LANE_GAP = 140; // 组与组之间的横向间隔
 const BASELINE_GAP = 220; // 组整体摆到模板下方的纵向间隔
 // 流水线序:组按此顺序从左到右分道
-const KIND_ORDER: ToonflowNodeKind[] = ["storyboard-page", "keyframes", "video-workbench"];
+const KIND_ORDER: ToonflowNodeKind[] = ["storyboard-page", "keyframes", "video-workbench", "audio-mix"];
 
 export function instanceGroupId(rootNodeId: string): string {
     return `${GROUP_PREFIX}${rootNodeId}`;

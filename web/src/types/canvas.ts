@@ -55,6 +55,7 @@ export type ToonflowNodeMetadata = {
     archived?: boolean;
     outputs?: string[];
     accent?: string;
+    voiceMap?: Record<string, string>;
     output?: NodeOutput;
     history?: NodeOutput[];
     pendingVideoTask?: {

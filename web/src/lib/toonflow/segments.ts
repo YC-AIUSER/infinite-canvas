@@ -16,6 +16,7 @@ export type SegmentInstance = {
         storyboardPage?: string;
         keyframes?: string;
         video?: string;
+        audioMix?: string;
     };
 };
 

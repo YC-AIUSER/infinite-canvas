@@ -36,10 +36,16 @@ import {
     type ActionContract,
     type AssetCard,
     type DiversityPatchItem,
+    type DirectingLock,
+    type DubbingTrack,
     type NodeOutput,
     type NodeStatus,
+    type QualityReview,
+    type QualityReviewKey,
+    type SeamContract,
     type ShotContract,
     type StoryboardRow,
+    QUALITY_REVIEW_KEYS,
 } from "./schema";
 import { assignIds, validateSegmentRows } from "./segments";
 import { approveNode, nextStatusOnGenerate, onGenerateFailure, onGenerateSuccess, propagateStale, rollbackToVersion, saveEditedNode, type GraphNode } from "./state-machine";
@@ -60,6 +66,60 @@ const PROMPT_BUILDERS: Record<GeneratableToonflowKind, (context: string) => stri
 
 const GENERATABLE_KINDS: ReadonlySet<ToonflowNodeKind> = new Set(Object.keys(PROMPT_BUILDERS) as GeneratableToonflowKind[]);
 const NODE_STATUS_SET: ReadonlySet<string> = new Set(NODE_STATUSES);
+
+export const QUALITY_REVIEW_LABELS: Record<QualityReviewKey, string> = {
+    identity: "身份连续性",
+    assets: "资产连续性",
+    cinematography: "摄影连续性",
+    action: "动作连续性",
+    narrative: "叙事与节奏",
+    audio: "声音与字幕",
+    technical: "技术质量",
+};
+
+export function emptyQualityReview(): QualityReview {
+    return { items: QUALITY_REVIEW_KEYS.map((key) => ({ key, checked: false })) };
+}
+
+export function canApproveSegment(review?: QualityReview): boolean {
+    if (!review) return false;
+    const itemByKey = new Map(review.items.map((item) => [item.key, item]));
+    return QUALITY_REVIEW_KEYS.every((key) => itemByKey.get(key)?.checked === true) && !review.items.some((item) => item.severity === "P0");
+}
+
+export function segmentApprovalBlockReason(review?: QualityReview): string | undefined {
+    if (!review) return "请先完成七项质检";
+    if (review.items.some((item) => item.severity === "P0")) return "仍有未清 P0 问题";
+    const itemByKey = new Map(review.items.map((item) => [item.key, item]));
+    const unchecked = QUALITY_REVIEW_KEYS.filter((key) => itemByKey.get(key)?.checked !== true).map((key) => QUALITY_REVIEW_LABELS[key]);
+    return unchecked.length ? `尚未检查：${unchecked.join("、")}` : undefined;
+}
+
+export type DubbingPlanItem = Omit<DubbingTrack, "audioKey" | "durationMs">;
+
+function parseDubbingLine(line: string): Pick<DubbingPlanItem, "type" | "speaker" | "text"> | undefined {
+    const value = line.trim();
+    if (!value) return undefined;
+    const dialogue = value.match(/^出口对白-([^：:]+)[：:]\s*(.+)$/);
+    if (dialogue) return { type: "dialogue", speaker: dialogue[1].trim(), text: dialogue[2].trim() };
+    const os = value.match(/^OS-([^：:]+)[：:]\s*(.+)$/i);
+    if (os) return { type: "os", speaker: os[1].trim(), text: os[2].trim() };
+    return { type: "os", speaker: "旁白", text: value };
+}
+
+export function buildDubbingPlan(rows: StoryboardRow[], voiceMap: Record<string, string> = {}, defaultVoice = "alloy"): DubbingPlanItem[] {
+    let offsetSec = 0;
+    const plan: DubbingPlanItem[] = [];
+    for (const row of [...rows].sort((left, right) => left.shotNo - right.shotNo)) {
+        const line = parseDubbingLine(row.line);
+        if (line) {
+            const voice = line.type === "os" ? voiceMap[line.speaker] || voiceMap["旁白"] || defaultVoice : voiceMap[line.speaker] || defaultVoice;
+            plan.push({ shotId: row.shotId, ...line, plannedOffsetSec: offsetSec, voice });
+        }
+        offsetSec += Math.max(0, row.durationSec);
+    }
+    return plan;
+}
 
 function isGeneratableKind(kind: ToonflowNodeKind): kind is GeneratableToonflowKind {
     return GENERATABLE_KINDS.has(kind);
@@ -673,6 +733,7 @@ export function applyApprove(nodes: CanvasNodeData[], _connections: CanvasConnec
         const toonflow = metadata?.toonflow;
         const currentOutput = toonflow?.output;
         if (node.id !== nodeId || !metadata || !toonflow || !currentOutput) return node;
+        if (toonflow.kind === "video-workbench" && currentOutput.payload.videoKeys?.length && !canApproveSegment(currentOutput.payload.qualityReview)) return node;
         const result = approveNode(currentOutput);
         return {
             ...node,
@@ -682,6 +743,56 @@ export function applyApprove(nodes: CanvasNodeData[], _connections: CanvasConnec
             },
         };
     });
+}
+
+export function applySegmentQualityReview(nodes: CanvasNodeData[], nodeId: string, qualityReview: QualityReview): CanvasNodeData[] {
+    return nodes.map<CanvasNodeData>((node) => {
+        const toonflow = node.metadata?.toonflow;
+        const output = toonflow?.output;
+        if (node.id !== nodeId || toonflow?.kind !== "video-workbench" || !output?.payload.videoKeys?.length) return node;
+        return {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                toonflow: { ...toonflow, output: { ...output, payload: { ...output.payload, qualityReview } } },
+            },
+        };
+    });
+}
+
+export function applyAudioMixVoiceMap(nodes: CanvasNodeData[], nodeId: string, voiceMap: Record<string, string>): CanvasNodeData[] {
+    return nodes.map<CanvasNodeData>((node) => {
+        const toonflow = node.metadata?.toonflow;
+        if (node.id !== nodeId || toonflow?.kind !== "audio-mix") return node;
+        return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow, voiceMap } } };
+    });
+}
+
+export function applyAudioMixSuccess(node: CanvasNodeData, dubbing: DubbingTrack[], upstreamVersions?: Record<string, number>): { node: CanvasNodeData; orphanedKeys: string[] } {
+    const toonflow = node.metadata?.toonflow;
+    if (toonflow?.kind !== "audio-mix" || !toonflow.segmentId) return { node, orphanedKeys: [] };
+    const previous = toonflow.output;
+    const allHistory = previous ? [...(toonflow.history ?? []), previous] : [...(toonflow.history ?? [])];
+    const history = allHistory.slice(-VERSION_LIMIT_TEXT);
+    const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - VERSION_LIMIT_TEXT));
+    const audioKeys = dubbing.map((item) => item.audioKey);
+    const referencedKeys = new Set([...audioKeys, ...history.flatMap((output) => output.payload.audioKeys ?? [])]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((output) => output.payload.audioKeys ?? []))).filter((key) => !referencedKeys.has(key));
+    const output: NodeOutput = {
+        nodeId: node.id,
+        kind: "audio-mix",
+        version: (previous?.version ?? 0) + 1,
+        status: onGenerateSuccess(toonflow.status),
+        segmentIndex: toonflow.segmentIndex,
+        payload: { audioKeys, dubbing },
+        upstreamVersions: upstreamVersions ?? previous?.upstreamVersions ?? {},
+        generationMeta: generationMeta(node, []),
+        generatedAt: new Date().toISOString(),
+    };
+    return {
+        node: { ...node, metadata: { ...node.metadata, status: "success", errorDetails: undefined, toonflow: { ...toonflow, status: output.status, output, history } } },
+        orphanedKeys,
+    };
 }
 
 /**
@@ -836,6 +947,47 @@ export function collectExportSegments(nodes: CanvasNodeData[]): ExportCollection
     return { segments, totalSegments: segmentIds.size, approvedCount: segments.length };
 }
 
+export type ExportDubbingTrack = DubbingTrack & { segmentId: string; segmentIndex: number };
+
+export type ExportDubbingCollection = {
+    tracks: ExportDubbingTrack[];
+    approvedSegments: number;
+    totalSegments: number;
+    allApproved: boolean;
+};
+
+export function collectExportDubbing(nodes: CanvasNodeData[]): ExportDubbingCollection {
+    const video = collectExportSegments(nodes);
+    const allSegmentIds = new Set<string>();
+    for (const node of nodes) {
+        const toonflow = node.metadata?.toonflow;
+        if (toonflow?.kind === "video-workbench" && toonflow.segmentId && !toonflow.archived) allSegmentIds.add(toonflow.segmentId);
+    }
+    const audioBySegment = new Map<string, CanvasNodeData>();
+    for (const node of nodes) {
+        const toonflow = node.metadata?.toonflow;
+        if (toonflow?.kind !== "audio-mix" || !toonflow.segmentId || toonflow.archived) continue;
+        const existing = audioBySegment.get(toonflow.segmentId);
+        if (!existing || (toonflow.output?.version ?? 0) > (existing.metadata?.toonflow?.output?.version ?? 0)) audioBySegment.set(toonflow.segmentId, node);
+    }
+    const approvedSegments = [...allSegmentIds].filter((segmentId) => audioBySegment.get(segmentId)?.metadata?.toonflow?.status === "approved").length;
+    const exportIndexBySegment = new Map(video.segments.map((segment, index) => [segment.segmentId, index]));
+    const tracks: ExportDubbingTrack[] = [];
+    for (const [segmentId, node] of audioBySegment) {
+        const toonflow = node.metadata?.toonflow;
+        const segmentIndex = exportIndexBySegment.get(segmentId);
+        if (segmentIndex === undefined || toonflow?.status !== "approved") continue;
+        for (const track of toonflow.output?.payload.dubbing ?? []) tracks.push({ ...track, segmentId, segmentIndex });
+    }
+    const totalSegments = allSegmentIds.size;
+    return {
+        tracks,
+        approvedSegments,
+        totalSegments,
+        allApproved: totalSegments > 0 && video.approvedCount === totalSegments && approvedSegments === totalSegments,
+    };
+}
+
 export type SeamBoundary = {
     /** 稳定边界身份:两段 segmentId 拼接。 */
     key: string;
@@ -850,6 +1002,10 @@ export type SeamBoundary = {
 };
 
 export type SeamReview = { key: string; fromVersion: number; toVersion: number };
+
+export function matchSeamContract(boundary: Pick<SeamBoundary, "fromSegmentId" | "toSegmentId">, lock?: DirectingLock): SeamContract | undefined {
+    return lock?.seams?.find((seam) => seam.fromSegmentId === boundary.fromSegmentId && seam.toSegmentId === boundary.toSegmentId);
+}
 
 /** #12 接缝检查:相邻已通过段两两配对(N 段 → N-1 个接缝),按段序。 */
 export function collectSeamBoundaries(nodes: CanvasNodeData[]): SeamBoundary[] {

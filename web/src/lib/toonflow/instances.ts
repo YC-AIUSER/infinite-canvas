@@ -2,14 +2,15 @@ import type { CanvasConnection, CanvasNodeData, ToonflowNodeKind } from "../../t
 import { resolveFreePosition } from "../canvas/free-position";
 import { diffSegments, groupRowsBySegment, reconcileInstances, type SegmentInstance, type SegmentPlan } from "./segments";
 
-const INSTANCE_KINDS = ["storyboard-page", "keyframes", "video-workbench"] as const;
+const REQUIRED_INSTANCE_KINDS = ["storyboard-page", "keyframes", "video-workbench"] as const;
+const INSTANCE_KINDS = [...REQUIRED_INSTANCE_KINDS, "audio-mix"] as const;
 
 type InstanceKind = (typeof INSTANCE_KINDS)[number];
 
 export type InstanceSyncPlan = {
     storyboardNodeId: string;
     segments: Array<{ segmentId: string; segmentIndex: number; shotCount: number }>;
-    toCreate: Array<{ segmentId: string; segmentIndex: number; kind: "storyboard-page" | "keyframes" | "video-workbench" }>;
+    toCreate: Array<{ segmentId: string; segmentIndex: number; kind: InstanceKind }>;
     toStale: string[];
     toArchive: string[];
     reindex: Array<{ nodeId: string; segmentIndex: number }>;
@@ -22,6 +23,10 @@ function isInstanceKind(kind: ToonflowNodeKind): kind is InstanceKind {
 
 function findRoot(nodes: CanvasNodeData[], kind: InstanceKind) {
     return nodes.find((node) => node.metadata?.toonflow?.kind === kind && !node.metadata.toonflow.segmentId && !node.metadata.batchRootId);
+}
+
+function enabledInstanceKinds(nodes: CanvasNodeData[]): InstanceKind[] {
+    return INSTANCE_KINDS.filter((kind) => Boolean(findRoot(nodes, kind)));
 }
 
 function activeInstances(nodes: CanvasNodeData[]) {
@@ -40,6 +45,7 @@ function segmentInstances(nodes: CanvasNodeData[]): SegmentInstance[] {
         if (toonflow.kind === "storyboard-page") instance.nodeIds.storyboardPage = node.id;
         if (toonflow.kind === "keyframes") instance.nodeIds.keyframes = node.id;
         if (toonflow.kind === "video-workbench") instance.nodeIds.video = node.id;
+        if (toonflow.kind === "audio-mix") instance.nodeIds.audioMix = node.id;
         bySegment.set(toonflow.segmentId, instance);
     }
     return [...bySegment.values()];
@@ -51,7 +57,7 @@ export function planInstanceSync(nodes: CanvasNodeData[], storyboardNodeId: stri
     const rows = output?.payload.table;
     if (storyboard?.metadata?.toonflow?.kind !== "storyboard-table" || storyboard.metadata.toonflow.status !== "approved" || output?.status !== "approved" || !rows) return null;
 
-    if (!findRoot(nodes, "storyboard-page") || !findRoot(nodes, "keyframes") || !findRoot(nodes, "video-workbench")) return null;
+    if (REQUIRED_INSTANCE_KINDS.some((kind) => !findRoot(nodes, kind))) return null;
 
     const groups = groupRowsBySegment(rows);
     const segments = [...groups].map(([segmentId, segmentRows], segmentIndex) => ({ segmentId, segmentIndex, shotCount: segmentRows.length }));
@@ -72,7 +78,7 @@ export function planInstanceSync(nodes: CanvasNodeData[], storyboardNodeId: stri
     const reconciled = reconcileInstances(diff, segmentInstances(active));
     const activeBySegmentKind = new Set(active.map((node) => `${node.metadata!.toonflow!.segmentId}:${node.metadata!.toonflow!.kind}`));
     const toCreate = segments.flatMap((segment) =>
-        INSTANCE_KINDS.flatMap((kind) => (activeBySegmentKind.has(`${segment.segmentId}:${kind}`) ? [] : [{ segmentId: segment.segmentId, segmentIndex: segment.segmentIndex, kind }])),
+        enabledInstanceKinds(nodes).flatMap((kind) => (activeBySegmentKind.has(`${segment.segmentId}:${kind}`) ? [] : [{ segmentId: segment.segmentId, segmentIndex: segment.segmentIndex, kind }])),
     );
     const staleCandidates = new Set(reconciled.toStale);
     const toStale = active.flatMap((node) => {
@@ -158,11 +164,11 @@ export function applyInstanceSync(
     createId: () => string,
 ): { nodes: CanvasNodeData[]; connections: CanvasConnection[] } {
     const roots = new Map<InstanceKind, CanvasNodeData>();
-    for (const kind of INSTANCE_KINDS) {
+    for (const kind of enabledInstanceKinds(nodes)) {
         const root = findRoot(nodes, kind);
         if (root) roots.set(kind, root);
     }
-    if (roots.size !== INSTANCE_KINDS.length) return { nodes, connections };
+    if (REQUIRED_INSTANCE_KINDS.some((kind) => !roots.has(kind))) return { nodes, connections };
 
     const staleIds = new Set(plan.toStale);
     const archiveIds = new Set(plan.toArchive);
@@ -201,8 +207,7 @@ export function applyInstanceSync(
 
     let nextConnections = connections.filter((connection) => !archiveIds.has(connection.fromNodeId) && !archiveIds.has(connection.toNodeId));
     const instances = activeInstances(nextNodes);
-    for (const kind of INSTANCE_KINDS) {
-        const root = roots.get(kind)!;
+    for (const [kind, root] of roots) {
         for (const instance of instances) {
             if (instance.metadata!.toonflow!.kind === kind) nextConnections = appendConnection(nextConnections, root.id, instance.id, createId);
         }
@@ -215,6 +220,9 @@ export function applyInstanceSync(
         }
         if (instance.nodeIds.keyframes && instance.nodeIds.video) {
             nextConnections = appendConnection(nextConnections, instance.nodeIds.keyframes, instance.nodeIds.video, createId);
+        }
+        if (instance.nodeIds.video && instance.nodeIds.audioMix) {
+            nextConnections = appendConnection(nextConnections, instance.nodeIds.video, instance.nodeIds.audioMix, createId);
         }
     }
 

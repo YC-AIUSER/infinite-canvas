@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { App, Button, Empty, Modal } from "antd";
+import { App, Button, Checkbox, Empty, Modal } from "antd";
 import { Download, FolderOpen, Package, Play, Scissors } from "lucide-react";
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
 
-import type { ExportCollection, ExportSegment } from "@/lib/toonflow/node-runtime";
+import type { ExportCollection, ExportDubbingCollection, ExportSegment } from "@/lib/toonflow/node-runtime";
 import { getMediaBlob, resolveMediaUrl } from "@/services/file-storage";
 import { checkStitchAgentHealth, revealFinalCut, stitchFinalCut, type FinalCutResult, type StitchProgress } from "@/lib/toonflow/final-cut";
 import { useAgentStore } from "@/stores/use-agent-store";
+import { SEAM_EDITING_METHODS } from "@/lib/toonflow/seam-editing-menu";
 
 // 文件名安全化:去掉 Windows/Unix 都禁止的字符,避免下载/打包时非法名。
 function safeName(name: string) {
@@ -18,7 +19,7 @@ function segmentFileName(segment: ExportSegment, order: number) {
     return `${String(order).padStart(2, "0")}-${safeName(segment.title)}.mp4`;
 }
 
-export function ToonflowExportModal({ open, collection, onCancel }: { open: boolean; collection: ExportCollection | null; onCancel: () => void }) {
+export function ToonflowExportModal({ open, collection, dubbingCollection, onCancel }: { open: boolean; collection: ExportCollection | null; dubbingCollection: ExportDubbingCollection; onCancel: () => void }) {
     const { message } = App.useApp();
     const agentUrl = useAgentStore((state) => state.url);
     const agentToken = useAgentStore((state) => state.token);
@@ -31,6 +32,9 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
     const [agentReady, setAgentReady] = useState(false);
     const [stitchProgress, setStitchProgress] = useState<StitchProgress | null>(null);
     const [finalCut, setFinalCut] = useState<FinalCutResult | null>(null);
+    const [mixDubbing, setMixDubbing] = useState(false);
+    const [loudnorm, setLoudnorm] = useState(false);
+    const canMixDubbing = dubbingCollection.allApproved && dubbingCollection.tracks.length > 0;
 
     // 越界兜底:段集收缩后 currentIndex 停在旧值时钳到最后一段,不整体重置(见下方重置 effect 只认 open 上升沿)。
     const clampedIndex = segments.length ? Math.min(currentIndex, segments.length - 1) : 0;
@@ -39,8 +43,16 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
 
     // 仅在打开(上升沿)时回到第一段;段集因无关 nodes 变更换身份时不打断正在预览的段。
     useEffect(() => {
-        if (open) setCurrentIndex(0);
+        if (open) {
+            setCurrentIndex(0);
+            setMixDubbing(false);
+            setLoudnorm(false);
+        }
     }, [open]);
+
+    useEffect(() => {
+        if (!canMixDubbing) setMixDubbing(false);
+    }, [canMixDubbing]);
 
     useEffect(() => {
         let active = true;
@@ -131,9 +143,9 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
         if (!segments.length) return;
         setFinalCut(null);
         try {
-            const result = await stitchFinalCut(segments, "toonflow-成片", setStitchProgress);
+            const result = await stitchFinalCut(segments, "toonflow-成片", setStitchProgress, { dubbing: mixDubbing ? dubbingCollection.tracks : undefined, loudnorm });
             setFinalCut(result);
-            if (result.mode === "reencode") message.warning("段参数不一致，已自动转码拼接");
+            if (result.mode === "reencode") message.success(mixDubbing || loudnorm ? "成片转码、混音处理完成" : "段参数不一致，已自动转码拼接");
             else message.success("成片拼接完成");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "拼接失败，请重试");
@@ -158,6 +170,34 @@ export function ToonflowExportModal({ open, collection, onCancel }: { open: bool
             <p className="text-sm leading-6 opacity-70">
                 已通过 {segments.length} / {totalSegments} 段，可顺序预览、逐段下载、打包 ZIP 或在本机拼接为单一成片。
             </p>
+
+            <div className="mt-3 rounded-xl border px-3 py-2.5 text-sm">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                    <Checkbox checked={mixDubbing} disabled={!canMixDubbing} onChange={(event) => setMixDubbing(event.target.checked)}>
+                        混入配音轨
+                    </Checkbox>
+                    <Checkbox checked={loudnorm} onChange={(event) => setLoudnorm(event.target.checked)}>
+                        响度归一 -16 LUFS
+                    </Checkbox>
+                </div>
+                <p className="mt-1.5 text-xs opacity-55">
+                    {canMixDubbing
+                        ? `配音已就绪：${dubbingCollection.approvedSegments}/${dubbingCollection.totalSegments} 段，${dubbingCollection.tracks.length} 句。`
+                        : `混入配音需全段 audio-mix 人工试听并通过；当前 ${dubbingCollection.approvedSegments}/${dubbingCollection.totalSegments} 段。`}
+                    任一选项开启都会走转码；全部关闭时保留原无损拼接路径。
+                </p>
+                <details className="mt-2 text-xs">
+                    <summary className="cursor-pointer select-none font-medium opacity-65">剪辑手法十条提示</summary>
+                    <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+                        {SEAM_EDITING_METHODS.map((method) => (
+                            <div key={method.number} className="rounded-md bg-black/[0.035] px-2 py-1.5 dark:bg-white/[0.05]">
+                                <span className="font-medium">{method.number}. {method.name}</span>
+                                <span className="ml-1 opacity-60">{method.execution}</span>
+                            </div>
+                        ))}
+                    </div>
+                </details>
+            </div>
 
             {segments.length ? (
                 <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[1.6fr_1fr]">

@@ -256,6 +256,24 @@ export const AudioLineSchema = z.object({
 
 export type AudioLine = z.infer<typeof AudioLineSchema>;
 
+export const QUALITY_REVIEW_KEYS = ["identity", "assets", "cinematography", "action", "narrative", "audio", "technical"] as const;
+
+export type QualityReviewKey = (typeof QUALITY_REVIEW_KEYS)[number];
+
+export const QualityReviewItemSchema = z.object({
+    key: z.enum(QUALITY_REVIEW_KEYS),
+    checked: z.boolean(),
+    severity: z.enum(["P0", "P1", "P2"]).optional(),
+    note: z.string().optional(),
+});
+
+export const QualityReviewSchema = z.object({
+    items: z.array(QualityReviewItemSchema),
+});
+
+export type QualityReviewItem = z.infer<typeof QualityReviewItemSchema>;
+export type QualityReview = z.infer<typeof QualityReviewSchema>;
+
 export const AssetCardSchema = z.object({
     cardId: z.string(),
     // palette = ST 全片色板（13 色冷暖双调），P2 资产阶段开头出、之后所有图像生成拿它当调色参考。
@@ -313,6 +331,19 @@ export const MediaKeySchema = z.string().refine((value) => !value.startsWith("da
 
 export type MediaKey = z.infer<typeof MediaKeySchema>;
 
+export const DubbingTrackSchema = z.object({
+    shotId: z.string(),
+    type: z.enum(["dialogue", "os"]),
+    speaker: z.string(),
+    text: z.string(),
+    plannedOffsetSec: z.number(),
+    voice: z.string(),
+    audioKey: MediaKeySchema,
+    durationMs: z.number().optional(),
+});
+
+export type DubbingTrack = z.infer<typeof DubbingTrackSchema>;
+
 export const NodeOutputSchema = z.object({
     nodeId: z.string(),
     kind: ToonflowNodeKindSchema,
@@ -325,6 +356,8 @@ export const NodeOutputSchema = z.object({
         imageKeys: z.array(MediaKeySchema).optional(),
         videoKeys: z.array(MediaKeySchema).optional(),
         audioKeys: z.array(MediaKeySchema).optional(),
+        dubbing: z.array(DubbingTrackSchema).optional(),
+        qualityReview: QualityReviewSchema.optional(),
         module4Issues: z.array(z.string()).optional(),
         audioLines: z.array(AudioLineSchema).optional(),
         cards: z.array(AssetCardSchema).optional(),

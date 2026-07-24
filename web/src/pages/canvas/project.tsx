@@ -56,11 +56,11 @@ import { ToonflowSeamCheckModal } from "@/components/canvas/toonflow-seam-check-
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
 import { ToonflowDiversityPatchModal, type DiversityPatchOutcome } from "@/components/canvas/toonflow-plus-node-views";
-import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyDiversityPatch, applyImageGenerationSuccess, applyModule4CompositionFailure, applyModule4CompositionSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowModule4Composition, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyAudioMixSuccess, applyAudioMixVoiceMap, applyDiversityPatch, applyImageGenerationSuccess, applyModule4CompositionFailure, applyModule4CompositionSuccess, applySegmentQualityReview, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildDubbingPlan, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowModule4Composition, buildToonflowVideoGeneration, canApproveSegment, collectExportDubbing, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, segmentApprovalBlockReason, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
 import { buildAssetCardPrompt, buildDiversityRepairPrompt, washPrompt } from "@/lib/toonflow/prompts";
 import { validateModule4 } from "@/lib/toonflow/module4-check";
 import type { QualityCheckItem } from "@/lib/toonflow/quality-check";
-import { DiversityPatchSchema, ShotContractSchema, parseModelJson, type AssetCard, type DiversityPatch, type DiversityPatchItem, type ShotContract } from "@/lib/toonflow/schema";
+import { DiversityPatchSchema, ShotContractSchema, parseModelJson, type AssetCard, type DiversityPatch, type DiversityPatchItem, type DubbingTrack, type QualityReview, type ShotContract } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
@@ -970,8 +970,10 @@ function InfiniteCanvasPage() {
     }, [nodes]);
     // #14 成片导出:汇总已通过的视频工作台段实例(全画布扫一次,随 nodes 变化重算),供导出节点显示"X/Y 段已通过"与成片 Modal。
     const exportCollection = useMemo(() => collectExportSegments(nodes), [nodes]);
+    const exportDubbingCollection = useMemo(() => collectExportDubbing(nodes), [nodes]);
     // #12 接缝检查:相邻已通过段配对 + 该接缝节点已检进度。
     const seamNode = useMemo(() => nodes.find((node) => node.metadata?.toonflow?.kind === "seam-check"), [nodes]);
+    const directingLock = useMemo(() => nodes.find((node) => node.metadata?.toonflow?.kind === "directing-lock")?.metadata?.toonflow?.output?.payload.directingLock, [nodes]);
     const seamBoundaries = useMemo(() => collectSeamBoundaries(nodes), [nodes]);
     const seamReviews = useMemo(() => parseSeamReviews(seamNode), [seamNode]);
     const seamSummary = useMemo(() => seamReviewSummary(nodes, seamNode), [nodes, seamNode]);
@@ -3103,6 +3105,80 @@ function InfiniteCanvasPage() {
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
 
+    const runToonflowAudioMixGeneration = useCallback(
+        async (nodeId: string) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            const sourceToonflow = sourceNode?.metadata?.toonflow;
+            if (!sourceNode || sourceToonflow?.kind !== "audio-mix" || !sourceToonflow.segmentId) {
+                message.error("当前节点不支持配音生成");
+                return;
+            }
+            const table = nodesRef.current.find((node) => node.metadata?.toonflow?.kind === "storyboard-table")?.metadata?.toonflow?.output?.payload.table ?? [];
+            const rows = table.filter((row) => row.segmentId === sourceToonflow.segmentId);
+            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, "audio");
+            const plan = buildDubbingPlan(rows, sourceToonflow.voiceMap ?? {}, generationConfig.audioVoice || "alloy");
+            if (plan.length && !isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            const preparedNodes = applyRegenerate(nodesRef.current, connectionsRef.current, nodeId);
+            const upstreamSnapshot = computeUpstreamVersions(preparedNodes, connectionsRef.current, nodeId);
+            nodesRef.current = preparedNodes;
+            setNodes(preparedNodes);
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            const createdKeys: string[] = [];
+
+            try {
+                const dubbing: DubbingTrack[] = [];
+                for (const item of plan) {
+                    const blob = await requestAudioGeneration({ ...generationConfig, audioVoice: item.voice }, item.text, { signal: controller.signal });
+                    const uploaded = await storeGeneratedAudio(blob, generationConfig.audioFormat);
+                    if (!uploaded.storageKey) throw new Error(`镜头 ${item.shotId} 的配音未能保存`);
+                    createdKeys.push(uploaded.storageKey);
+                    dubbing.push({ ...item, audioKey: uploaded.storageKey, durationMs: uploaded.durationMs });
+                }
+
+                const currentNode = nodesRef.current.find((node) => node.id === nodeId);
+                const currentToonflow = currentNode?.metadata?.toonflow;
+                if (!currentNode || currentToonflow?.kind !== "audio-mix" || currentToonflow.status !== "generating" || currentToonflow.segmentId !== sourceToonflow.segmentId || currentToonflow.archived) {
+                    await deleteStoredMedia(createdKeys);
+                    message.warning("该配音实例在生成期间已变化，本次结果已丢弃");
+                    return;
+                }
+
+                const result = applyAudioMixSuccess(currentNode, dubbing, upstreamSnapshot);
+                let next = nodesRef.current.map((node) => (node.id === nodeId ? result.node : node));
+                next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                nodesRef.current = next;
+                setNodes(next);
+                createdKeys.length = 0;
+
+                const referencedKeys = new Set(collectMediaStorageKeys(next));
+                const orphanedKeys = result.orphanedKeys.filter((key) => !referencedKeys.has(key));
+                if (orphanedKeys.length) {
+                    try {
+                        await deleteStoredMedia(orphanedKeys);
+                    } catch {
+                        message.warning("历史配音清理失败");
+                    }
+                }
+            } catch (error) {
+                if (createdKeys.length) await deleteStoredMedia(createdKeys).catch(() => undefined);
+                const errorDetails = isGenerationCanceled(error) ? "生成已取消" : error instanceof Error ? error.message : "配音生成失败";
+                if (!isGenerationCanceled(error)) message.error(errorDetails);
+                const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                nodesRef.current = next;
+                setNodes(next);
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
     useEffect(() => {
         if (!projectLoaded) return;
         const controllers: AbortController[] = [];
@@ -3230,9 +3306,13 @@ function InfiniteCanvasPage() {
                 await runToonflowInstanceGeneration(nodeId);
                 return;
             }
+            if (toonflow?.segmentId && toonflow.kind === "audio-mix") {
+                await runToonflowAudioMixGeneration(nodeId);
+                return;
+            }
             await runToonflowNodeGeneration(nodeId);
         },
-        [runToonflowInstanceGeneration, runToonflowModule4Composition, runToonflowNodeGeneration],
+        [runToonflowAudioMixGeneration, runToonflowInstanceGeneration, runToonflowModule4Composition, runToonflowNodeGeneration],
     );
 
     const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
@@ -3264,14 +3344,30 @@ function InfiniteCanvasPage() {
                 await runToonflowInstanceGeneration(nodeId);
                 return;
             }
+            if (current?.kind === "video-workbench" && current.output?.payload.videoKeys?.length && !canApproveSegment(current.output.payload.qualityReview)) {
+                message.warning(segmentApprovalBlockReason(current.output.payload.qualityReview) || "七项质检未通过");
+                return;
+            }
             const next = applyApprove(nodesRef.current, connectionsRef.current, nodeId);
             nodesRef.current = next;
             setNodes(next);
             const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
             if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
         },
-        [runToonflowInstanceGeneration, syncStoryboardInstances],
+        [message, runToonflowInstanceGeneration, syncStoryboardInstances],
     );
+
+    const handleToonflowQualityReviewChange = useCallback((nodeId: string, review: QualityReview) => {
+        const next = applySegmentQualityReview(nodesRef.current, nodeId, review);
+        nodesRef.current = next;
+        setNodes(next);
+    }, []);
+
+    const handleToonflowVoiceMapChange = useCallback((nodeId: string, voiceMap: Record<string, string>) => {
+        const next = applyAudioMixVoiceMap(nodesRef.current, nodeId, voiceMap);
+        nodesRef.current = next;
+        setNodes(next);
+    }, []);
 
     // #12 接缝检查:保存勾选(全勾即 approved)/ 跳过。
     const handleToonflowSeamSave = useCallback((nodeId: string, reviews: SeamReview[]) => {
@@ -3978,6 +4074,8 @@ function InfiniteCanvasPage() {
                                         onOpenSeam={setToonflowSeamNodeId}
                                         onSeamSkip={handleToonflowSeamSkip}
                                         seamSummary={contentNode.metadata?.toonflow?.kind === "seam-check" ? seamSummary : undefined}
+                                        onQualityReviewChange={handleToonflowQualityReviewChange}
+                                        onVoiceMapChange={handleToonflowVoiceMapChange}
                                         onToggleBatch={toggleBatchExpanded}
                                     />
                                 ) : (
@@ -4144,12 +4242,13 @@ function InfiniteCanvasPage() {
 
                 <ToonflowHistoryModal open={Boolean(toonflowHistoryNode)} node={toonflowHistoryNode} onRollback={handleToonflowRollback} onCancel={() => setToonflowHistoryNodeId(null)} />
 
-                <ToonflowExportModal open={Boolean(toonflowExportNodeId)} collection={exportCollection} onCancel={() => setToonflowExportNodeId(null)} />
+                <ToonflowExportModal open={Boolean(toonflowExportNodeId)} collection={exportCollection} dubbingCollection={exportDubbingCollection} onCancel={() => setToonflowExportNodeId(null)} />
 
                 <ToonflowSeamCheckModal
                     open={Boolean(toonflowSeamNodeId)}
                     boundaries={seamBoundaries}
                     initialReviews={seamReviews}
+                    directingLock={directingLock}
                     onSave={(reviews) => {
                         if (toonflowSeamNodeId) handleToonflowSeamSave(toonflowSeamNodeId, reviews);
                     }}

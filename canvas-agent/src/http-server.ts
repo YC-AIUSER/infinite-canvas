@@ -1,10 +1,10 @@
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 
 import { DEFAULT_PORT, ensureSiteWorkspace, loadConfig, saveConfig, updateSiteWorkspace, type CanvasAgentConfig } from "./config.js";
 import { CanvasSession } from "./canvas-session.js";
 import { activeTurnCount, archiveCodexThread, interruptCodexTurn, isRecoverableThreadError, listCodexThreads, readCodexThread, resumeCodexThread, runClaudeTurn, runCodexTurn, startCodexThread, summarizeCodexThread, verifyCodexThreadWorkspace, withAgentPrompt } from "./agents.js";
 import type { AgentAttachment } from "./types.js";
-import { hasAllSegments, isValidJobId, removeJob, revealOutput, stitchSegments, writeSegment } from "./stitch.js";
+import { extractVideoFrames, hasAllSegments, isValidJobId, pngDataUrl, removeJob, revealOutput, stitchSegments, writeSegment, type DubbingInput } from "./stitch.js";
 
 export function startHttpServer() {
     const config = loadConfig(true);
@@ -52,33 +52,7 @@ export function startHttpServer() {
         res.status(ok ? 200 : 409).json({ ok });
     });
     app.post("/api/tools", route(async (req, res) => res.json({ ok: true, result: await session.callTool(req.body?.name, req.body?.input || {}) })));
-    const stitchOutputs = new Set<string>();
-    app.post("/export/segments", express.raw({ type: "application/octet-stream", limit: "200mb" }), route(async (req, res) => {
-        const jobId = String(req.query.jobId || "");
-        const index = Number(req.query.index);
-        if (!isValidJobId(jobId) || !Number.isInteger(index) || index < 0 || !Buffer.isBuffer(req.body)) return void res.status(400).json({ ok: false, error: "jobId 或 index 无效" });
-        await writeSegment(jobId, index, req.body);
-        res.json({ ok: true });
-    }));
-    app.post("/export/stitch", route(async (req, res) => {
-        const jobId = String(req.body?.jobId || "");
-        const count = Number(req.body?.count);
-        const title = typeof req.body?.title === "string" ? req.body.title : undefined;
-        if (!isValidJobId(jobId) || !Number.isInteger(count) || count < 1 || !await hasAllSegments(jobId, count)) return void res.status(400).json({ ok: false, error: "jobId、count 或段文件无效" });
-        try {
-            const result = await stitchSegments({ jobId, count, title });
-            stitchOutputs.add(result.outputPath);
-            res.json({ ok: true, ...result });
-        } finally {
-            await removeJob(jobId);
-        }
-    }));
-    app.post("/export/reveal", route(async (req, res) => {
-        const file = typeof req.body?.path === "string" ? req.body.path : "";
-        if (!stitchOutputs.has(file)) return void res.status(403).json({ ok: false, error: "无权打开此文件" });
-        await revealOutput(file, stitchOutputs);
-        res.json({ ok: true });
-    }));
+    registerExportRoutes(app);
     app.get("/agent/codex/workspace", (_req, res) => {
         const workspace = ensureSiteWorkspace(config);
         res.json({ ok: true, workspace });
@@ -200,6 +174,77 @@ export function startHttpServer() {
         console.log("Optional MCP add: codex mcp add infinite-canvas -- npx -y @yinchenhuang/canvas-agent mcp");
         console.log("Remove manually added MCP: codex mcp remove infinite-canvas");
     });
+}
+
+type ExportRouteDependencies = {
+    extractVideoFrames: typeof extractVideoFrames;
+    hasAllSegments: typeof hasAllSegments;
+    removeJob: typeof removeJob;
+    revealOutput: typeof revealOutput;
+    stitchSegments: typeof stitchSegments;
+    writeSegment: typeof writeSegment;
+};
+
+const defaultExportRouteDependencies: ExportRouteDependencies = { extractVideoFrames, hasAllSegments, removeJob, revealOutput, stitchSegments, writeSegment };
+
+export function registerExportRoutes(app: Express, stitchOutputs = new Set<string>(), overrides: Partial<ExportRouteDependencies> = {}) {
+    const dependencies = { ...defaultExportRouteDependencies, ...overrides };
+    app.post("/export/segments", express.raw({ type: "application/octet-stream", limit: "200mb" }), route(async (req, res) => {
+        const jobId = String(req.query.jobId || "");
+        const index = Number(req.query.index);
+        if (!isValidJobId(jobId) || !Number.isInteger(index) || index < 0 || !Buffer.isBuffer(req.body)) return void res.status(400).json({ ok: false, error: "jobId 或 index 无效" });
+        await dependencies.writeSegment(jobId, index, req.body);
+        res.json({ ok: true });
+    }));
+    app.post("/stitch/frames", express.raw({ type: "application/octet-stream", limit: "200mb" }), route(async (req, res) => {
+        const jobId = String(req.query.jobId || "");
+        if (!isValidJobId(jobId) || !Buffer.isBuffer(req.body) || !req.body.length) return void res.status(400).json({ ok: false, error: "jobId 或视频字节无效" });
+        try {
+            const frames = await dependencies.extractVideoFrames(jobId, req.body);
+            res.json({ ok: true, firstFrame: pngDataUrl(frames.firstFrame), lastFrame: pngDataUrl(frames.lastFrame) });
+        } finally {
+            await dependencies.removeJob(jobId);
+        }
+    }));
+    app.post("/export/stitch", route(async (req, res) => {
+        const jobId = String(req.body?.jobId || "");
+        const count = Number(req.body?.count);
+        const title = typeof req.body?.title === "string" ? req.body.title : undefined;
+        const dubbing = parseDubbingRequest(req.body?.dubbing, count);
+        const loudnorm = req.body?.loudnorm === true;
+        if (!isValidJobId(jobId) || !Number.isInteger(count) || count < 1 || dubbing === null || !await dependencies.hasAllSegments(jobId, count)) return void res.status(400).json({ ok: false, error: "jobId、count、配音轨或段文件无效" });
+        try {
+            const result = await dependencies.stitchSegments({ jobId, count, title, dubbing, loudnorm });
+            stitchOutputs.add(result.outputPath);
+            res.json({ ok: true, ...result });
+        } finally {
+            await dependencies.removeJob(jobId);
+        }
+    }));
+    app.post("/export/reveal", route(async (req, res) => {
+        const file = typeof req.body?.path === "string" ? req.body.path : "";
+        if (!stitchOutputs.has(file)) return void res.status(403).json({ ok: false, error: "无权打开此文件" });
+        await dependencies.revealOutput(file, stitchOutputs);
+        res.json({ ok: true });
+    }));
+    return stitchOutputs;
+}
+
+export function parseDubbingRequest(value: unknown, count: number): DubbingInput[] | null {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) return null;
+    const result: DubbingInput[] = [];
+    for (const item of value) {
+        if (!item || typeof item !== "object") return null;
+        const record = item as Record<string, unknown>;
+        const segmentIndex = Number(record.segmentIndex);
+        const offsetSec = Number(record.offsetSec);
+        if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= count || !Number.isFinite(offsetSec) || offsetSec < 0 || typeof record.bytes !== "string") return null;
+        const bytes = Buffer.from(record.bytes, "base64");
+        if (!bytes.length) return null;
+        result.push({ segmentIndex, offsetSec, bytes, mimeType: typeof record.mimeType === "string" ? record.mimeType : undefined });
+    }
+    return result;
 }
 
 function route(handler: (req: Request, res: Response) => Promise<unknown>) {
