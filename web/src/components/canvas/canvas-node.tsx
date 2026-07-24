@@ -461,6 +461,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.metadata?.toonflow && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
+    if (props.node.type === CanvasNodeType.Text && props.node.metadata?.status === "loading" && props.node.metadata.content) return <TextContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
@@ -578,6 +579,7 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                     onWheel={(event) => event.stopPropagation()}
                 >
                     {node.metadata?.content || <span style={{ color: theme.node.placeholder }}>双击编辑文字</span>}
+                    {node.metadata?.status === "loading" && node.metadata.content ? <span className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse align-[-0.12em]" style={{ background: theme.node.activeStroke }} /> : null}
                 </div>
             )}
         </div>
