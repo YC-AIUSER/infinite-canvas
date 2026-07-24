@@ -7,16 +7,18 @@ import {
     buildContinuityTablePrompt,
     buildCreativePrompt,
     buildDirectingLockPrompt,
+    finalizeModule4Text,
     buildKeyframesPrompt,
+    buildModule4ComposePrompt,
     buildNodeContext,
     buildScriptPrompt,
     buildShotContractPrompt,
     buildSpaceContractPrompt,
     buildStoryboardPagePrompt,
     buildStoryboardTablePrompt,
-    buildVideoWorkbenchPrompt,
     washPrompt,
 } from "./prompts";
+import { validateModule4 } from "./module4-check";
 import {
     ActionContractSchema,
     ContinuityTableSchema,
@@ -254,10 +256,18 @@ export function buildToonflowImageGeneration(nodes: CanvasNodeData[], connection
     return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings };
 }
 
-export type ToonflowVideoGeneration = ToonflowImageGeneration & { shotPrompts: Record<string, string>; audioReferenceKeys: string[] };
+function videoAssetSortKey(card: AssetCard, characterOrder: Map<string, number>): [number, number, number] {
+    if (card.cardType === "character") return [0, characterOrder.get(card.cardId) ?? 0, 0];
+    if (card.cardType === "action" || card.cardType === "expression" || card.cardType === "outfit") {
+        return [0, card.parentCardId ? characterOrder.get(card.parentCardId) ?? Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER, card.cardType === "action" ? 1 : card.cardType === "expression" ? 2 : 3];
+    }
+    if (card.cardType === "prop" || card.cardType === "form") return [1, 0, card.cardType === "prop" ? 0 : 1];
+    if (card.cardType === "scene") return [2, 0, 0];
+    if (card.cardType === "palette") return [3, 0, 0];
+    return [4, 0, 0];
+}
 
-export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, note?: string): ToonflowVideoGeneration {
-    void connections;
+function videoWorkbenchSources(nodes: CanvasNodeData[], nodeId: string) {
     const target = nodes.find((node) => node.id === nodeId);
     const targetToonflow = target?.metadata?.toonflow;
     if (!target || !targetToonflow?.segmentId || targetToonflow.kind !== "video-workbench") {
@@ -273,46 +283,104 @@ export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connection
     const shotContracts = segmentContracts<ShotContract>(nodes, "shot-contract", ShotContractSchema, shotIds, warnings);
     const actionContracts = segmentContracts<ActionContract>(nodes, "action-contract", ActionContractSchema, shotIds, warnings);
     const spaceRules = nodes.find((node) => node.metadata?.toonflow?.kind === "space-contract")?.metadata?.toonflow?.output?.payload.text;
-    const lighting = nodes.find((node) => node.metadata?.toonflow?.kind === "directing-lock")?.metadata?.toonflow?.output?.payload.directingLock?.global.lighting;
+    const directingLock = nodes.find((node) => node.metadata?.toonflow?.kind === "directing-lock")?.metadata?.toonflow?.output?.payload.directingLock;
+    if (!directingLock) throw new Error("请先生成分镜决策锁定表");
+    const scriptText = nodes.find((node) => node.metadata?.toonflow?.kind === "script")?.metadata?.toonflow?.output?.payload.text;
     const allAssetCards = nodes.find((node) => node.metadata?.toonflow?.kind === "assets")?.metadata?.toonflow?.output?.payload.cards ?? [];
     const characterOrder = new Map(allAssetCards.filter((card) => card.cardType === "character").map((card, index) => [card.cardId, index]));
-    const parentNameById = new Map(allAssetCards.map((card) => [card.cardId, card.name]));
     const withStorageKey = allAssetCards.filter((card): card is AssetCard & { storageKey: string } => typeof card.storageKey === "string" && Boolean(card.storageKey));
-    // 音频卡(人声参考)从图像参考/视觉锚点剔除,单独作为视频参考音频(仅火山 Seedance 生效;cano 待其音频接口修复)。
-    const audioReferenceKeys = withStorageKey.filter((card) => card.cardType === "audio").map((card) => card.storageKey);
     const cards = withStorageKey
         .filter((card) => card.cardType !== "audio")
         .sort((left, right) => {
-            const leftKey = assetCardSortKey(left, characterOrder);
-            const rightKey = assetCardSortKey(right, characterOrder);
+            const leftKey = videoAssetSortKey(left, characterOrder);
+            const rightKey = videoAssetSortKey(right, characterOrder);
             return leftKey[0] - rightKey[0] || leftKey[1] - rightKey[1] || leftKey[2] - rightKey[2];
         });
     const assetKeys = cards.map((card) => card.storageKey);
+
+    return {
+        target,
+        segmentId: targetToonflow.segmentId,
+        rows,
+        warnings,
+        shotContracts,
+        actionContracts,
+        spaceRules,
+        directingLock,
+        scriptText,
+        cards,
+        assetKeys,
+        incomingSeam: directingLock.seams?.find((seam) => seam.toSegmentId === targetToonflow.segmentId),
+        outgoingSeam: directingLock.seams?.find((seam) => seam.fromSegmentId === targetToonflow.segmentId),
+    };
+}
+
+export type ToonflowModule4Composition = { finalPrompt: string; washHits: WashHit[]; warnings: string[]; finalize: (text: string) => string };
+
+export function buildToonflowModule4Composition(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string, note?: string, feedback?: string[]): ToonflowModule4Composition {
+    void connections;
+    const source = videoWorkbenchSources(nodes, nodeId);
+    const prompt = buildModule4ComposePrompt({
+        rows: source.rows,
+        shotContracts: source.shotContracts,
+        actionContracts: source.actionContracts,
+        assets: source.cards,
+        directingLock: source.directingLock,
+        incomingSeam: source.incomingSeam,
+        outgoingSeam: source.outgoingSeam,
+        spaceRules: source.spaceRules,
+        scriptText: source.scriptText,
+        note,
+        feedback,
+    });
+    const { washed, hits } = washPrompt(prompt);
+    return {
+        finalPrompt: washed,
+        washHits: hits,
+        warnings: source.warnings,
+        finalize: (text) =>
+            finalizeModule4Text(
+                {
+                    rows: source.rows,
+                    shotContracts: source.shotContracts,
+                    actionContracts: source.actionContracts,
+                    assets: source.cards,
+                    directingLock: source.directingLock,
+                    incomingSeam: source.incomingSeam,
+                    outgoingSeam: source.outgoingSeam,
+                    spaceRules: source.spaceRules,
+                    scriptText: source.scriptText,
+                    note,
+                    feedback,
+                },
+                text,
+            ),
+    };
+}
+
+export type ToonflowVideoGeneration = ToonflowImageGeneration & { module4Text: string };
+
+export function buildToonflowVideoGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string): ToonflowVideoGeneration {
+    void connections;
+    const source = videoWorkbenchSources(nodes, nodeId);
+    const module4Text = source.target.metadata?.toonflow?.output?.payload.text?.trim();
+    if (!module4Text) throw new Error("请先合成并确认Module4提示词");
+    const validation = validateModule4(module4Text);
+    if (!validation.ok) throw new Error(`Module4校验未通过：${validation.issues.map((issue) => issue.message).join("；")}`);
 
     // 排除已归档实例:分镜表回退使旧段重现时,同 segmentId 会同时存在归档与活跃两个实例,命中归档会拿到过期产物。
     const storyboardKey = nodes.find(
         (node) =>
             node.metadata?.toonflow?.kind === "storyboard-page" &&
-            node.metadata.toonflow.segmentId === targetToonflow.segmentId &&
+            node.metadata.toonflow.segmentId === source.segmentId &&
             !node.metadata.toonflow.archived,
     )?.metadata?.toonflow?.output?.payload.imageKeys?.[0];
     if (!storyboardKey) throw new Error("请先生成该段故事板页");
 
-    const { prompt, shotPrompts } = buildVideoWorkbenchPrompt({
-        rows,
-        shotContracts,
-        actionContracts,
-        anchors: cards.map((card) => formatAssetCard(card, parentNameById)),
-        spaceRules,
-        lighting,
-        note,
-    });
-    const referenceKeys = [storyboardKey, ...assetKeys];
+    const referenceKeys = [...source.assetKeys, storyboardKey];
     // blockout 故事板页是视频的构图基准,读取失败必须中止:失去镜序与构图锁会退化为文生视频。
     const mandatoryKeys = [storyboardKey];
-
-    const { washed, hits } = washPrompt(prompt);
-    return { finalPrompt: washed, washHits: hits, referenceKeys, mandatoryKeys, warnings, shotPrompts, audioReferenceKeys };
+    return { finalPrompt: module4Text, module4Text, washHits: [], referenceKeys, mandatoryKeys, warnings: source.warnings };
 }
 
 function generationMeta(node: CanvasNodeData, _washHits: WashHit[]) {
@@ -352,6 +420,65 @@ function failedGenerationNode(node: CanvasNodeData, error: string, washHits: Was
 
 export function applyGenerationFailure(node: CanvasNodeData, error: string): CanvasNodeData {
     return failedGenerationNode(node, error, []);
+}
+
+function videoHistory(toonflow: NonNullable<CanvasNodeData["metadata"]>["toonflow"], currentKeys: string[]) {
+    const previous = toonflow?.output;
+    const allHistory = previous ? [...(toonflow.history ?? []), previous] : [...(toonflow?.history ?? [])];
+    const history = allHistory.slice(-VERSION_LIMIT_VIDEO);
+    const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - VERSION_LIMIT_VIDEO));
+    const referencedKeys = new Set([...currentKeys, ...history.flatMap((output) => output.payload.videoKeys ?? [])]);
+    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((output) => output.payload.videoKeys ?? []))).filter((key) => !referencedKeys.has(key));
+    return { previous, history, orphanedKeys };
+}
+
+export function applyModule4CompositionSuccess(
+    node: CanvasNodeData,
+    rawText: string,
+    washHits: WashHit[],
+    upstreamVersions?: Record<string, number>,
+): { node: CanvasNodeData; orphanedKeys: string[] } {
+    const toonflow = node.metadata?.toonflow;
+    if (!toonflow?.segmentId || toonflow.kind !== "video-workbench") return { node, orphanedKeys: [] };
+    const { previous, history, orphanedKeys } = videoHistory(toonflow, []);
+    const output: NodeOutput = {
+        nodeId: node.id,
+        kind: toonflow.kind,
+        version: (previous?.version ?? 0) + 1,
+        status: onGenerateSuccess(toonflow.status),
+        payload: { text: rawText },
+        upstreamVersions: upstreamVersions ?? previous?.upstreamVersions ?? {},
+        generationMeta: generationMeta(node, washHits),
+        generatedAt: new Date().toISOString(),
+    };
+    return {
+        node: {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                content: rawText,
+                status: "success",
+                errorDetails: undefined,
+                toonflow: { ...toonflow, status: output.status, output, history },
+            },
+        },
+        orphanedKeys,
+    };
+}
+
+export function applyModule4CompositionFailure(node: CanvasNodeData, rawText: string, issues: string[], washHits: WashHit[]): CanvasNodeData {
+    const failed = failedGenerationNode(node, `Module4校验未通过：${issues.join("；")}`, washHits);
+    const toonflow = failed.metadata?.toonflow;
+    const output = toonflow?.output;
+    if (!toonflow || !output) return failed;
+    return {
+        ...failed,
+        metadata: {
+            ...failed.metadata,
+            content: rawText,
+            toonflow: { ...toonflow, output: { ...output, payload: { ...output.payload, text: rawText, module4Issues: issues } } },
+        },
+    };
 }
 
 /** 采集直接上游 toonflow 节点的当前版本快照——写入本次产出的 upstreamVersions,供版本守卫与"沿用旧产出"判定。 */
@@ -476,7 +603,7 @@ export function applyImageGenerationSuccess(
 export function applyVideoGenerationSuccess(
     node: CanvasNodeData,
     storageKeys: string[],
-    shotPrompts: Record<string, string>,
+    module4Text: string,
     washHits: Array<{ term: string; replacement: string }>,
     upstreamVersions?: Record<string, number>,
     taskId?: string,
@@ -486,19 +613,14 @@ export function applyVideoGenerationSuccess(
         return { node, orphanedKeys: [] };
     }
 
-    const previous = toonflow.output;
-    const allHistory = previous ? [...(toonflow.history ?? []), previous] : [...(toonflow.history ?? [])];
-    const history = allHistory.slice(-VERSION_LIMIT_VIDEO);
-    const removedHistory = allHistory.slice(0, Math.max(0, allHistory.length - VERSION_LIMIT_VIDEO));
-    const referencedKeys = new Set([...storageKeys, ...history.flatMap((output) => output.payload.videoKeys ?? [])]);
-    const orphanedKeys = Array.from(new Set(removedHistory.flatMap((output) => output.payload.videoKeys ?? []))).filter((key) => !referencedKeys.has(key));
+    const { previous, history, orphanedKeys } = videoHistory(toonflow, storageKeys);
     const meta = generationMeta(node, washHits);
     const output: NodeOutput = {
         nodeId: node.id,
         kind: toonflow.kind,
         version: (previous?.version ?? 0) + 1,
         status: onGenerateSuccess(toonflow.status),
-        payload: { videoKeys: [...storageKeys], shotPrompts },
+        payload: { text: module4Text, videoKeys: [...storageKeys] },
         upstreamVersions: upstreamVersions ?? previous?.upstreamVersions ?? {},
         generationMeta: taskId ? { ...meta, taskId } : meta,
         generatedAt: new Date().toISOString(),

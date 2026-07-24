@@ -56,8 +56,9 @@ import { ToonflowSeamCheckModal } from "@/components/canvas/toonflow-seam-check-
 import { ToonflowNodeContent } from "@/components/canvas/toonflow-node-content";
 import { ToonflowSegmentSyncModal } from "@/components/canvas/toonflow-segment-sync-modal";
 import { ToonflowDiversityPatchModal, type DiversityPatchOutcome } from "@/components/canvas/toonflow-plus-node-views";
-import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyDiversityPatch, applyImageGenerationSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
+import { applyAdoptStale, applyApprove, applyAssetCardsSave, applyDiversityPatch, applyImageGenerationSuccess, applyModule4CompositionFailure, applyModule4CompositionSuccess, applyVideoGenerationSuccess, approveChain, applyEditSave, applyGenerationFailure, applyGenerationSuccess, applyRegenerate, applyRollback, buildTextCascadeGraph, buildToonflowGeneration, buildToonflowImageGeneration, buildToonflowModule4Composition, buildToonflowVideoGeneration, collectExportSegments, collectSeamBoundaries, parseSeamReviews, seamReviewSummary, applySeamReviewSave, applySeamSkip, computeUpstreamVersions, hydrateToonflowProject, propagateAfterNewVersion, splitMediaKeysByStore, type SeamReview } from "@/lib/toonflow/node-runtime";
 import { buildAssetCardPrompt, buildDiversityRepairPrompt, washPrompt } from "@/lib/toonflow/prompts";
+import { validateModule4 } from "@/lib/toonflow/module4-check";
 import type { QualityCheckItem } from "@/lib/toonflow/quality-check";
 import { DiversityPatchSchema, ShotContractSchema, parseModelJson, type AssetCard, type DiversityPatch, type DiversityPatchItem, type ShotContract } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
@@ -2837,6 +2838,90 @@ function InfiniteCanvasPage() {
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
 
+    const runToonflowModule4Composition = useCallback(
+        async (nodeId: string, note?: string) => {
+            const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
+            if (sourceNode?.metadata?.toonflow?.kind !== "video-workbench") return;
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "text"), count: "1" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            let generation: ReturnType<typeof buildToonflowModule4Composition>;
+            try {
+                generation = buildToonflowModule4Composition(nodesRef.current, connectionsRef.current, nodeId, note);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "Module4合成准备失败");
+                return;
+            }
+            generation.warnings.forEach((warning) => message.warning(warning));
+
+            const preparedNodes = applyRegenerate(nodesRef.current, connectionsRef.current, nodeId).map<CanvasNodeData>((node) =>
+                node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt: generation.finalPrompt, model: generationConfig.model } } : node,
+            );
+            const upstreamSnapshot = computeUpstreamVersions(preparedNodes, connectionsRef.current, nodeId);
+            nodesRef.current = preparedNodes;
+            setNodes(preparedNodes);
+            setRunningNodeId(nodeId);
+            const controller = startGenerationRequest(nodeId, nodeId, nodeId);
+            const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
+
+            try {
+                let resultNode = preparedNode;
+                let orphanedKeys: string[] = [];
+                let feedback: string[] | undefined;
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    if (feedback) generation = buildToonflowModule4Composition(nodesRef.current, connectionsRef.current, nodeId, note, feedback);
+                    const attemptNode = { ...preparedNode, metadata: { ...preparedNode.metadata, prompt: generation.finalPrompt, model: generationConfig.model } };
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: generation.finalPrompt }], () => {}, { signal: controller.signal });
+                    const validation = validateModule4(rawText);
+                    if (validation.ok) {
+                        const module4Text = generation.finalize(rawText);
+                        const finalizedValidation = validateModule4(module4Text);
+                        if (!finalizedValidation.ok) {
+                            feedback = finalizedValidation.issues.map((issue) => issue.message);
+                            if (attempt === 1) resultNode = applyModule4CompositionFailure(attemptNode, module4Text, feedback, generation.washHits);
+                            continue;
+                        }
+                        const applied = applyModule4CompositionSuccess(attemptNode, module4Text, generation.washHits, upstreamSnapshot);
+                        resultNode = applied.node;
+                        orphanedKeys = applied.orphanedKeys;
+                        break;
+                    }
+                    feedback = validation.issues.map((issue) => issue.message);
+                    if (attempt === 1) resultNode = applyModule4CompositionFailure(attemptNode, rawText, feedback, generation.washHits);
+                }
+
+                const generationFailed = resultNode.metadata?.toonflow?.status === "failed";
+                let next = nodesRef.current.map((node) => (node.id === nodeId ? resultNode : node));
+                if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
+                nodesRef.current = next;
+                setNodes(next);
+                if (generationFailed) {
+                    const error = resultNode.metadata?.toonflow?.output?.error;
+                    if (error) message.error(error);
+                    return;
+                }
+                if (orphanedKeys.length) {
+                    const referencedKeys = new Set<string>([...collectImageStorageKeys(next), ...collectMediaStorageKeys(next)]);
+                    void deleteStoredMedia(orphanedKeys.filter((key) => !referencedKeys.has(key)));
+                }
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : "Module4合成失败";
+                message.error(errorDetails);
+                const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
+                nodesRef.current = next;
+                setNodes(next);
+            } finally {
+                finishGenerationRequest(nodeId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+    );
+
     const runToonflowInstanceGeneration = useCallback(
         async (nodeId: string, note?: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
@@ -2853,7 +2938,7 @@ function InfiniteCanvasPage() {
             let videoGeneration: ReturnType<typeof buildToonflowVideoGeneration> | null = null;
             try {
                 if (isVideo) {
-                    videoGeneration = buildToonflowVideoGeneration(nodesRef.current, connectionsRef.current, nodeId, note);
+                    videoGeneration = buildToonflowVideoGeneration(nodesRef.current, connectionsRef.current, nodeId);
                     generation = videoGeneration;
                 } else {
                     generation = buildToonflowImageGeneration(nodesRef.current, connectionsRef.current, nodeId, note);
@@ -2907,16 +2992,14 @@ function InfiniteCanvasPage() {
                 // C3: 构图锁等强制参考图任一读取失败必须中止,不得降级为文生图或仅凭资产卡(首帧只上色不改构图)。
                 const resolvedKeys = new Set(references.map((reference) => reference.storageKey));
                 if (generation.mandatoryKeys.some((key) => !resolvedKeys.has(key))) {
-                    throw new Error(`构图锁参考图读取失败，已中止生成（${isVideo ? "视频必须基于故事板页九宫格" : "首帧必须基于故事板页线稿"}）`);
+                    throw new Error(`构图锁参考图读取失败，已中止生成（${isVideo ? "视频必须基于Module3故事板页" : "首帧必须基于故事板页线稿"}）`);
                 }
                 const failedReferenceCount = generation.referenceKeys.length - references.length;
                 if (failedReferenceCount) message.warning(`${failedReferenceCount} 张参考图读取失败`);
 
                 let storageKey: string;
                 if (videoGeneration) {
-                    // 音频卡→参考音频(人声):storageKey 指向 media_files 音频,video 服务按 provider 处理(火山 Seedance 生效,cano 待其音频接口)。
-                    const audioReferences = videoGeneration.audioReferenceKeys.map((key) => ({ id: key, name: key, type: "audio/mpeg", url: "", storageKey: key }));
-                    const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], audioReferences, { signal: controller.signal });
+                    const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], [], { signal: controller.signal });
                     videoTaskId = task.id;
                     resumedVideoTaskIdsRef.current.add(task.id);
                     const pendingNodes = nodesRef.current.map((node) =>
@@ -2926,7 +3009,7 @@ function InfiniteCanvasPage() {
                                   provider: task.provider,
                                   model: task.model,
                                   upstreamSnapshot,
-                                  shotPrompts: videoGeneration.shotPrompts,
+                                  module4Text: videoGeneration.module4Text,
                                   washHits: generation.washHits,
                                   startedAt: new Date().toISOString(),
                               })
@@ -2972,7 +3055,7 @@ function InfiniteCanvasPage() {
 
                 const resultNode = videoTaskId ? clearPendingVideoTask(currentNode, videoTaskId) : currentNode;
                 const result = videoGeneration
-                    ? applyVideoGenerationSuccess(resultNode, [storageKey], videoGeneration.shotPrompts, generation.washHits, upstreamSnapshot, videoTaskId)
+                    ? applyVideoGenerationSuccess(resultNode, [storageKey], videoGeneration.module4Text, generation.washHits, upstreamSnapshot, videoTaskId)
                     : applyImageGenerationSuccess(resultNode, [storageKey], generation.washHits, upstreamSnapshot);
                 const generationFailed = result.node.metadata?.toonflow?.status === "failed";
                 let next = nodesRef.current.map((node) => (node.id === nodeId ? result.node : node));
@@ -3081,11 +3164,11 @@ function InfiniteCanvasPage() {
                         return;
                     }
 
-                    // 用建任务时持久化的 shotPrompts/washHits,不重算 buildToonflowVideoGeneration(避免期间分镜表变动导致漂移,或抛错把已计费视频丢弃)。
+                    // 用建任务时持久化的已审Module4文本/washHits,不重算上游提示词(避免期间上游变动导致漂移,或抛错把已计费视频丢弃)。
                     const result = applyVideoGenerationSuccess(
                         clearPendingVideoTask(latestNode, pendingTask.taskId),
                         [storageKey],
-                        pendingTask.shotPrompts ?? {},
+                        pendingTask.module4Text,
                         pendingTask.washHits ?? [],
                         pendingTask.upstreamSnapshot,
                         pendingTask.taskId,
@@ -3139,13 +3222,17 @@ function InfiniteCanvasPage() {
     const handleToonflowGenerate = useCallback(
         async (nodeId: string) => {
             const toonflow = nodesRef.current.find((node) => node.id === nodeId)?.metadata?.toonflow;
-            if (toonflow?.segmentId && (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench")) {
+            if (toonflow?.segmentId && toonflow.kind === "video-workbench") {
+                await runToonflowModule4Composition(nodeId);
+                return;
+            }
+            if (toonflow?.segmentId && (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes")) {
                 await runToonflowInstanceGeneration(nodeId);
                 return;
             }
             await runToonflowNodeGeneration(nodeId);
         },
-        [runToonflowInstanceGeneration, runToonflowNodeGeneration],
+        [runToonflowInstanceGeneration, runToonflowModule4Composition, runToonflowNodeGeneration],
     );
 
     const applyStoryboardInstancePlan = useCallback((plan: InstanceSyncPlan) => {
@@ -3171,14 +3258,19 @@ function InfiniteCanvasPage() {
     );
 
     const handleToonflowApprove = useCallback(
-        (nodeId: string) => {
+        async (nodeId: string) => {
+            const current = nodesRef.current.find((node) => node.id === nodeId)?.metadata?.toonflow;
+            if (current?.kind === "video-workbench" && current.status === "review" && current.output?.payload.text && !current.output.payload.videoKeys?.length) {
+                await runToonflowInstanceGeneration(nodeId);
+                return;
+            }
             const next = applyApprove(nodesRef.current, connectionsRef.current, nodeId);
             nodesRef.current = next;
             setNodes(next);
             const toonflow = next.find((node) => node.id === nodeId)?.metadata?.toonflow;
             if (toonflow?.kind === "storyboard-table" && toonflow.status === "approved") syncStoryboardInstances(nodeId);
         },
-        [syncStoryboardInstances],
+        [runToonflowInstanceGeneration, syncStoryboardInstances],
     );
 
     // #12 接缝检查:保存勾选(全勾即 approved)/ 跳过。
@@ -4075,27 +4167,30 @@ function InfiniteCanvasPage() {
                 />
 
                 <Modal
-                    title={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "单镜修改（整段重生成）" : "定点修"}
+                    title={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "调整Module4故事线" : "定点修"}
                     open={Boolean(toonflowRepairNode)}
-                    okText={`确认生成（将调用 1 次${toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "视频" : "图像"}生成）`}
+                    okText={`确认生成（将调用 1 次${toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "文本合成" : "图像生成"}）`}
                     cancelText="取消"
                     onOk={() => {
                         const nodeId = toonflowRepairNodeId;
                         const note = toonflowRepairNote.trim();
                         setToonflowRepairNodeId(null);
                         setToonflowRepairNote("");
-                        if (nodeId) void runToonflowInstanceGeneration(nodeId, note);
+                        if (nodeId) {
+                            if (toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench") void runToonflowModule4Composition(nodeId, note);
+                            else void runToonflowInstanceGeneration(nodeId, note);
+                        }
                     }}
                     onCancel={() => {
                         setToonflowRepairNodeId(null);
                         setToonflowRepairNote("");
                     }}
                 >
-                    <p className="mb-3 text-sm opacity-65">{toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "只描述要改的单镜；提交后会按本段完整镜头脚本整段重生成" : "只描述要改的这一处，其余画面保持不变"}</p>
+                    <p className="mb-3 text-sm opacity-65">{toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "只描述要调整的动作、表演或衔接；先重新合成可审Module4文本，确认后才会生成视频" : "只描述要改的这一处，其余画面保持不变"}</p>
                     <Input.TextArea
                         value={toonflowRepairNote}
                         autoSize={{ minRows: 3, maxRows: 7 }}
-                        placeholder={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "例如：只调整第 2 镜为固定机位，其余镜头、角色和光线保持不变" : "例如：只调整第 2 帧人物手势，其余构图、角色和光线不变"}
+                        placeholder={toonflowRepairNode?.metadata?.toonflow?.kind === "video-workbench" ? "例如：加强门把下压后的迟疑表演，其余动作、角色和光线保持不变" : "例如：只调整第 2 帧人物手势，其余构图、角色和光线不变"}
                         onChange={(event) => setToonflowRepairNote(event.target.value)}
                     />
                 </Modal>

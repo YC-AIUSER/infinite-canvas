@@ -10,17 +10,18 @@ describe("STAGE_METHODOLOGY_REDLINES", () => {
         }
     });
 
-    it("video-workbench 红线明确 blockout 只定构图、资产卡定外观", () => {
+    it("video-workbench 红线锁定Module4两步生成、禁则与缝合同", () => {
         const redline = STAGE_METHODOLOGY_REDLINES["video-workbench"];
-        expect(redline).toContain("第1张blockout故事板页");
-        expect(redline).toContain("永不覆盖外观");
-        expect(redline).toContain("逐镜写死谁在画面左、谁在画面右");
+        expect(redline).toContain("Module4六段文本");
+        expect(redline).toContain("违规带反馈自动重试1次");
+        expect(redline).toContain("用户确认才用该文本调用cano");
+        expect(redline).toContain("按故事板镜头顺序自然推进");
+        expect(redline).toContain("逐句写死左右站位");
         expect(redline).toContain("ST色板锚定句");
-        expect(redline).toContain("首尾帧");
-        expect(redline).toContain("质感样板只提供织物/皮革/金属/地面的表面纹理、磨损程度、颗粒感与色调基准");
-        expect(redline).toContain("不提供光位、光比与光线方向");
-        expect(redline).toContain("画风参考禁用照片级真人质感的成片抽帧");
-        expect(redline).not.toContain("光影");
+        expect(redline).toContain("有入缝首句接同一动作后半");
+        expect(redline).toContain("限制段尾0.5s持续音");
+        expect(redline).toContain("禁人声/对白/旁白与字幕水印");
+        expect(redline).not.toContain("1:1");
     });
 
     it("无专属红线的环节回落全局三铁律", () => {

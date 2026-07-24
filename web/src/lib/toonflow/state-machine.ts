@@ -58,7 +58,7 @@ function clonePayload(payload: NodeOutput["payload"]): NodeOutput["payload"] {
     if (payload.imageKeys) next.imageKeys = [...payload.imageKeys];
     if (payload.videoKeys) next.videoKeys = [...payload.videoKeys];
     if (payload.audioKeys) next.audioKeys = [...payload.audioKeys];
-    if (payload.shotPrompts) next.shotPrompts = { ...payload.shotPrompts };
+    if (payload.module4Issues) next.module4Issues = [...payload.module4Issues];
     if (payload.audioLines) next.audioLines = payload.audioLines.map((line) => ({ ...line }));
 
     return next;

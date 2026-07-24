@@ -352,7 +352,7 @@ describe("状态动作与 hydrate", () => {
             provider: "seedance",
             model: "seedance-2.0",
             upstreamSnapshot: { storyboard: 3 },
-            shotPrompts: { "seg-a-shot-1": "镜1" },
+            module4Text: "已审Module4文本",
             washHits: [],
             startedAt: "2026-07-13T00:00:00.000Z",
         };
@@ -383,7 +383,7 @@ describe("状态动作与 hydrate", () => {
             provider: "cano",
             model: "seedance-2.0-mini-720p",
             upstreamSnapshot: {},
-            shotPrompts: {},
+            module4Text: "已审Module4文本",
             washHits: [],
             startedAt: "2026-07-13T00:00:00.000Z",
         };

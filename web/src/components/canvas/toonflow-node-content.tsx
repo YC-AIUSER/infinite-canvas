@@ -186,13 +186,16 @@ export function ToonflowNodeContent({
     const isInstance = (toonflow.kind === "storyboard-page" || toonflow.kind === "keyframes" || toonflow.kind === "video-workbench") && Boolean(toonflow.segmentId);
     const instanceImageKey = toonflow.output?.payload.imageKeys?.[0];
     const instanceVideoKey = toonflow.output?.payload.videoKeys?.[0];
-    const generationKindLabel = toonflow.kind === "video-workbench" ? "视频" : "图像";
+    const generationKindLabel = toonflow.kind === "video-workbench" ? "文本" : "图像";
     const error = toonflow.output?.error || node.metadata?.errorDetails;
     const directingLock = toonflow.kind === "directing-lock" ? toonflow.output?.payload.directingLock : undefined;
     const continuityTable = toonflow.kind === "continuity-table" ? toonflow.output?.payload.continuityTable : undefined;
     const storyboardRows = toonflow.kind === "storyboard-table" ? toonflow.output?.payload.table : undefined;
     const washHits = toonflow.washReport?.hits || [];
     const assetCards = toonflow.output?.payload.cards;
+    const module4Text = toonflow.kind === "video-workbench" ? toonflow.output?.payload.text : undefined;
+    const module4Issues = toonflow.kind === "video-workbench" ? toonflow.output?.payload.module4Issues ?? [] : [];
+    const awaitingVideoConfirmation = toonflow.kind === "video-workbench" && toonflow.status === "review" && Boolean(module4Text) && !instanceVideoKey;
     const assetCardSummary = assetCards?.length
         ? assetCards.reduce(
               (summary, card) => {
@@ -263,6 +266,13 @@ export function ToonflowNodeContent({
                 <p className="mt-1 line-clamp-1 text-xs" style={{ color: statusColor }} title={error}>
                     {error}
                 </p>
+            ) : null}
+            {toonflow.status === "failed" && module4Issues.length ? (
+                <div className="mt-1 max-h-20 overflow-y-auto rounded-md px-2 py-1.5 text-xs" style={{ background: `${statusColor}12`, color: statusColor }}>
+                    {module4Issues.map((issue) => (
+                        <div key={issue}>· {issue}</div>
+                    ))}
+                </div>
             ) : null}
             {toonflow.status === "stale" ? (
                 <div className="mt-1 flex items-center gap-1 text-xs font-medium" style={{ color: statusColor }}>
@@ -350,6 +360,10 @@ export function ToonflowNodeContent({
                 <ToonflowContinuityTableView table={continuityTable} background={theme.node.fill} />
             ) : storyboardRows?.length ? (
                 <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} onDiversityRepair={onDiversityRepair} />
+            ) : module4Text ? (
+                <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
+                    {module4Text}
+                </div>
             ) : (
                 <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-1.5">
                     {toonflow.checks.slice(0, isActionable ? 2 : 3).map((item) => (
@@ -430,16 +444,26 @@ export function ToonflowNodeContent({
             {isInstance && !toonflow.archived && toonflow.status !== "generating" ? (
                 <div className="mt-2 flex flex-wrap justify-end gap-2" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
                     {toonflow.status === "review" ? (
-                        <Button
-                            size="small"
-                            disabled={cascadeLocked}
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                onApprove?.(node.id);
-                            }}
-                        >
-                            通过
-                        </Button>
+                        // 视频工作台两步生成:review 且已有 Module4 文本但还没有视频时,"通过"实际会调用一次
+                        // 计费的视频生成(handleToonflowApprove 拦截),必须给费用确认;其余实例的通过只是状态流转。
+                        awaitingVideoConfirmation ? (
+                            <Popconfirm title="确认使用当前Module4文本调用 1 次视频生成？" okText="确认生成" cancelText="取消" onConfirm={() => onApprove?.(node.id)}>
+                                <Button size="small" type="primary" disabled={cascadeLocked}>
+                                    确认并生成视频
+                                </Button>
+                            </Popconfirm>
+                        ) : (
+                            <Button
+                                size="small"
+                                disabled={cascadeLocked}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onApprove?.(node.id);
+                                }}
+                            >
+                                通过
+                            </Button>
+                        )
                     ) : null}
                     {toonflow.status === "empty" ? (
                         <Popconfirm title={`将调用 1 次${generationKindLabel}生成`} okText="确认生成" cancelText="取消" onConfirm={() => onGenerate?.(node.id)}>
@@ -495,7 +519,7 @@ export function ToonflowNodeContent({
                                 onRepair?.(node.id);
                             }}
                         >
-                            定点修
+                            {toonflow.kind === "video-workbench" ? "调提示词" : "定点修"}
                         </Button>
                     ) : null}
                 </div>

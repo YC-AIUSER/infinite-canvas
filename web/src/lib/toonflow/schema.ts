@@ -325,7 +325,7 @@ export const NodeOutputSchema = z.object({
         imageKeys: z.array(MediaKeySchema).optional(),
         videoKeys: z.array(MediaKeySchema).optional(),
         audioKeys: z.array(MediaKeySchema).optional(),
-        shotPrompts: z.record(z.string(), z.string()).optional(),
+        module4Issues: z.array(z.string()).optional(),
         audioLines: z.array(AudioLineSchema).optional(),
         cards: z.array(AssetCardSchema).optional(),
         directingLock: DirectingLockSchema.optional(),

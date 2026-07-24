@@ -62,8 +62,8 @@ export type ToonflowNodeMetadata = {
         provider: "openai" | "seedance" | "cano";
         model: string;
         upstreamSnapshot: Record<string, number>;
-        // 建任务时的逐格 shotPrompts 与洗词记录一并持久化:刷新恢复时直接落库,不重算(避免期间分镜表变动导致重算漂移或抛错丢弃已计费视频)。
-        shotPrompts: Record<string, string>;
+        // 建任务时的已审Module4文本与洗词记录一并持久化:刷新恢复时直接落库,不重算(避免期间上游变动导致重算漂移或抛错丢弃已计费视频)。
+        module4Text: string;
         washHits: Array<{ term: string; replacement: string }>;
         startedAt: string;
     };

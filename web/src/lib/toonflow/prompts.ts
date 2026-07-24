@@ -1,9 +1,8 @@
 /**
  * 方法论源：D:\workspaces\ai-manga-workflow\.claude\skills\ai-short-drama-plus
- * 同步日期：2026-07-21（第一块 · 文本决策层；第二块 · 图像层）
+ * 同步日期：2026-07-24（第一块 · 文本决策层；第二块 · 图像层；第三块批A · Module4核心生成链）
  * ai-short-drama-plus 是本文件的唯一裁决源；如有冲突，以该方法论为准。
  * 口型补充源：manga-drama/references/1renmanju-prompt-skills/video-voice-lipsync.md（plus 未收录，台词剥离后必需）。
- * 注：video-workbench 属第三块，仍是旧线（九宫格 1:1）文案，本轮不动。
  */
 
 import forbiddenTerms from "./seedance-forbidden-terms.json";
@@ -11,7 +10,7 @@ import forbiddenTerms from "./seedance-forbidden-terms.json";
 import { renderLibraries, type ClosedLibraryCategory } from "./closed-libraries";
 import type { QualityCheckItem } from "./quality-check";
 import { TOONFLOW_NODE_KINDS } from "./schema";
-import type { ActionContract, SeamContract, ShotContract, StoryboardRow } from "./schema";
+import type { ActionContract, AssetCard, DirectingLock, SeamContract, ShotContract, StoryboardRow } from "./schema";
 import { groupRowsBySegment } from "./segments";
 import type { ToonflowNodeKind } from "../../types/canvas";
 
@@ -23,7 +22,8 @@ type PromptNodeKind =
     | "directing-lock"
     | "storyboard-table"
     | "shot-contract"
-    | "action-contract";
+    | "action-contract"
+    | "video-workbench";
 type ContextInputs = Record<string, string | null | undefined>;
 
 const MAX_CONTEXT_CHARS = 8000;
@@ -37,6 +37,7 @@ const NODE_INPUT_PRIORITIES: Record<PromptNodeKind, readonly string[]> = {
     "storyboard-table": ["existing-ids", "directing-lock", "continuity-table", "script", "space-contract", "assets", "project"],
     "shot-contract": ["storyboard-table", "directing-lock", "space-contract", "assets", "script"],
     "action-contract": ["storyboard-table", "shot-contract", "script", "space-contract"],
+    "video-workbench": ["storyboard-table", "shot-contract", "action-contract", "directing-lock", "seams", "space-contract", "script", "assets"],
 };
 
 function withContext(instructions: string, context: string) {
@@ -566,75 +567,191 @@ ${anchors}
 角色外观与配色、场景光线、道具形态必须按锚点上色。画面禁止台词文字、字幕、水印和 logo。${correction}`;
 }
 
-const VIDEO_APPEARANCE_BINDING_SENTENCE =
+export const VIDEO_APPEARANCE_BINDING_SENTENCE =
     "all characters' faces, hairstyles, costumes and gear strictly match the character reference images, the storyboard reference defines only shot order and composition and never overrides appearance";
+export const VIDEO_SOUND_SUPPRESSION_SENTENCE =
+    "Generate environmental sound effects only. Do not generate any human voice, dialogue, narration, or vocal audio. Dialogue text is for lip-sync control only.";
+export const VIDEO_CLOSED_MOUTH_SENTENCE = "All characters must keep their mouths closed throughout this segment.";
+export const VIDEO_SEAM_AUDIO_BOUNDARY_SENTENCE =
+    "Do not start any new sustained sound within the final 0.5 seconds; let environmental sound naturally taper off at the segment boundary.";
 
-// 视频工作台：blockout 只定构图，资产卡定外观与颜色；文字显式标明参考图分工，避免 cano 平均权重稀释构图基准。
-export function buildVideoWorkbenchPrompt(input: {
+type Module4AssetReference = Pick<AssetCard, "cardType" | "name" | "anchor">;
+
+export type Module4ComposeInput = {
     rows: StoryboardRow[];
     shotContracts: ShotContract[];
     actionContracts: ActionContract[];
-    anchors: string[];
+    assets: Module4AssetReference[];
+    directingLock: DirectingLock;
+    incomingSeam?: SeamContract;
+    outgoingSeam?: SeamContract;
     spaceRules?: string;
-    lighting?: string;
+    scriptText?: string;
     note?: string;
-}): { prompt: string; shotPrompts: Record<string, string> } {
-    const shotContractById = new Map(input.shotContracts.map((contract) => [contract.shotId, contract]));
-    const actionContractById = new Map(input.actionContracts.map((contract) => [contract.shotId, contract]));
-    const rows = [...input.rows].sort((left, right) => left.shotNo - right.shotNo);
-    const shotPrompts: Record<string, string> = {};
-    const panels = rows.map((row, index) => {
-        const shotContract = shotContractById.get(row.shotId);
-        const actionContract = actionContractById.get(row.shotId);
-        const parts = [`景别：${row.scale}`, `机位角度：${row.angle}`, `动作：${row.action}`];
-        if (actionContract) parts.push(`关键瞬间：${actionContract.process}`, `以物理后果结束：${actionContract.consequence}`);
-        if (shotContract) {
-            if (shotContract.movement) parts.push(`运镜：${shotContract.movement}${shotContract.speed ? `（${shotContract.speed}）` : ""}`);
-            parts.push(`落点构图：${shotContract.endpoint}`);
-            if (shotContract.inOut.include.length) parts.push(`必须入画：${shotContract.inOut.include.join("、")}`);
-            if (shotContract.inOut.exclude.length) parts.push(`必须排除：${shotContract.inOut.exclude.join("、")}`);
-        }
-        // 逐镜只取本镜自己的方位信息。空间合同是全段共用的长文档(场景布局+动线+轴线+俯视调度表),
-        // 且它硬性要求写"主角恒左、反派恒右"必然命中方位正则——放进逐镜取值源会被复制 N 份,
-        // 既稀释逐镜指令又把冗余持久化进 shotPrompts。它只在下方【空间与轴线规则】出现一次。
-        const sideSources = [shotContract?.subjectRelation, shotContract?.endpoint]
-            .map((value) => value?.trim() || "")
-            .filter((value) => value && /画面左|画面右|屏幕左|屏幕右|左侧|右侧|左边|右边|恒左|恒右/.test(value));
-        parts.push(
-            `左右站位：${sideSources.length ? sideSources.join("；") : "按空间合同补足本镜谁在画面左、谁在画面右；没有可靠方位时不得凭空编造角色或左右关系"}`,
-        );
-        const shotPrompt = parts.join("；");
-        shotPrompts[row.shotId] = shotPrompt;
-        return `第${index + 1}镜（shotNo ${row.shotNo}）：${shotPrompt}`;
-    });
-    const anchors = input.anchors.length ? input.anchors.map((anchor) => `- ${anchor}`).join("\n") : "（无资产锚点）";
-    const correction = input.note
-        ? `\n\n【本次调整】\n只调整以下这一处：${input.note}\n其余镜头与参考保持一致。`
-        : "";
+    feedback?: string[];
+};
 
-    return {
-        prompt: `原生多镜头直出该段视频（约 12-15 秒）。共 ${rows.length} 个镜头，与故事板格子逐一 1:1，按 shotNo 顺序衔接；不合并镜头、不新增机位，禁止首尾帧续接或硬拼。
+function parseStoryboardLine(line: string): { type: "dialogue" | "os"; role?: string; text: string } | null {
+    const value = line.trim();
+    if (!value) return null;
+    const dialogue = value.match(/^出口对白-([^：:]+)[：:]\s*(.+)$/);
+    if (dialogue) return { type: "dialogue", role: dialogue[1].trim(), text: dialogue[2].trim() };
+    const os = value.match(/^OS-([^：:]+)[：:]\s*(.+)$/i);
+    if (os) return { type: "os", role: os[1].trim(), text: os[2].trim() };
+    return { type: "os", text: value };
+}
 
-【参考图分工（必须按文字显式执行）】
-参考图列表中第 1 张是该段 Module3 blockout 故事板页，只作为构图基准，只定义镜序、机位、景别、人物左右站位与体块关系、姿态动作、前中后景纵深遮挡，永不覆盖外观。第 2 张起的角色、服装、场景、道具与色板资产卡是外观、装备、场景形态和颜色基准；人物长相、发型、服装和装备一律以角色参考图为准。本渠道会平均分配全部参考图权重，因此必须严格按这里点名的分工执行，不能依赖参考图顺序自行猜测用途。质感样板只提供织物/皮革/金属/地面的表面纹理、磨损程度、颗粒感与色调基准，不提供光位、光比与光线方向。
+function module4ReferenceIndex(assets: Module4AssetReference[]) {
+    return [...assets.map((asset) => asset.name), "故事板构图"].map((name, index) => `@图片${index + 1}=${name}`).join("\n");
+}
 
-【布光基准（全段共用，逐镜不重复）】
-${input.lighting?.trim() ? `分镜决策锁定表的结构化布光主策略：${input.lighting.trim()}。` : "布光一律以本段逐镜脚本与分镜决策锁定表的文字描述为准。"}任何参考图都不得决定光位、光比与光线方向。
-${VIDEO_APPEARANCE_BINDING_SENTENCE}
+function module4FixedRequirements(input: Module4ComposeInput) {
+    const hasOs = input.rows.some((row) => parseStoryboardLine(row.line)?.type === "os");
+    return [
+        VIDEO_APPEARANCE_BINDING_SENTENCE,
+        "The storyboard reference defines shot order, camera setup, left-right blocking, poses, and depth only. Character and asset references own appearance, costumes, gear, scene form, and color. Texture references own surface texture, wear, grain, and tonal feel only, never light position, contrast ratio, or light direction.",
+        `Use only the directing-lock lighting baseline for lighting position, contrast, and direction: ${input.directingLock.global.lighting.trim()}. No reference image may override it.`,
+        VIDEO_SOUND_SUPPRESSION_SENTENCE,
+        hasOs ? VIDEO_CLOSED_MOUTH_SENTENCE : "",
+        input.outgoingSeam ? VIDEO_SEAM_AUDIO_BOUNDARY_SENTENCE : "",
+        "No subtitles, captions, on-screen text, watermarks, or logos.",
+    ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+// Module4 的六段骨架由模板锁死；文本模型只填故事线、Tone 与 BGM，不得改写固定段落。
+export function buildVideoWorkbenchPrompt(input: Module4ComposeInput): string {
+    const style = input.directingLock.global.unifiedStyleString.trim() || input.directingLock.global.visualStyle.trim();
+    return `1. 参考图索引
+${module4ReferenceIndex(input.assets)}
+
+2. 故事线
+按故事板镜头顺序自然推进，{把全部画格主视觉任务合成为连续自然语言，只写七类目并逐句写死左右站位}
+
+3. Tone
+{根据本段情绪与锁定表写一句情绪基调}
+
+4. BGM衔接
+{根据剧本F4的BGM行与本段情绪写不超过200字的风格、情绪、节奏和重点段落}
+
+5. 风格
+${style}
 ${PALETTE_ANCHOR_SENTENCE}
 
-【逐镜脚本（与格子 1:1）】
-${panels.join("\n")}
+6. 画面要求
+${module4FixedRequirements(input)}`;
+}
 
-【外观与资产锚点（逐字遵守）】
-${anchors}
+function composedSection(text: string, index: number, title: string, nextIndex?: number, nextTitle?: string) {
+    const start = new RegExp(`^\\s*${index}\\.\\s*${title}\\s*$`, "m").exec(text);
+    if (!start) return "";
+    const bodyStart = (start.index ?? 0) + start[0].length;
+    if (!nextIndex || !nextTitle) return text.slice(bodyStart).trim();
+    const next = new RegExp(`^\\s*${nextIndex}\\.\\s*${nextTitle}\\s*$`, "m").exec(text.slice(bodyStart));
+    return text.slice(bodyStart, next ? bodyStart + (next.index ?? 0) : undefined).trim();
+}
 
-【空间与轴线规则（全段共用，逐镜不重复）】
-${input.spaceRules?.trim() || "同一角色在所有镜中保持同一屏幕侧，摄影机不得跨越 180°轴线。"}
+// 第1/5/6段属于渲染模板所有权，模型只能创作第2/3/4段；结构校验通过后再调用本函数收口固定资产。
+export function finalizeModule4Text(input: Module4ComposeInput, composedText: string): string {
+    const style = input.directingLock.global.unifiedStyleString.trim() || input.directingLock.global.visualStyle.trim();
+    return `1. 参考图索引
+${module4ReferenceIndex(input.assets)}
 
-衔接规则：逐镜按脚本写死谁在画面左、谁在画面右，同一角色保持同一屏幕侧，摄影机不跨越 180°轴线；每镜一个动作并以物理后果改变结束状态。画面禁止字幕、水印和 logo。${correction}`,
-        shotPrompts,
-    };
+2. 故事线
+${composedSection(composedText, 2, "故事线", 3, "Tone")}
+
+3. Tone
+${composedSection(composedText, 3, "Tone", 4, "BGM衔接")}
+
+4. BGM衔接
+${composedSection(composedText, 4, "BGM衔接", 5, "风格")}
+
+5. 风格
+${style}
+${PALETTE_ANCHOR_SENTENCE}
+
+6. 画面要求
+${module4FixedRequirements(input)}`;
+}
+
+function module4RowSources(input: Module4ComposeInput) {
+    const shotContractById = new Map(input.shotContracts.map((contract) => [contract.shotId, contract]));
+    const actionContractById = new Map(input.actionContracts.map((contract) => [contract.shotId, contract]));
+    return [...input.rows]
+        .sort((left, right) => left.shotNo - right.shotNo)
+        .map((row, index) => {
+            const shotContract = shotContractById.get(row.shotId);
+            const actionContract = actionContractById.get(row.shotId);
+            const line = parseStoryboardLine(row.line);
+            const sideSources = [shotContract?.subjectRelation, shotContract?.endpoint]
+                .map((value) => value?.trim() || "")
+                .filter((value) => value && /画面左|画面右|屏幕左|屏幕右|左侧|右侧|左边|右边|恒左|恒右/.test(value));
+            return [
+                `画格源${index + 1}`,
+                `主视觉动作=${row.action}`,
+                actionContract ? `动作因果=${actionContract.cause}→${actionContract.process}→${actionContract.consequence}，结束状态=${actionContract.endState}` : "",
+                shotContract?.movement ? `运镜方向=${shotContract.movement}${shotContract.speed ? `（${shotContract.speed}）` : ""}` : "",
+                `左右站位=${sideSources.length ? sideSources.join("；") : "必须从空间规则提取，缺失时不得猜测"}`,
+                `音效=${row.sfx || "无"}`,
+                line?.type === "dialogue" ? `dialogue=${line.role}说：'${line.text}'，仅${line.role}做口型` : "",
+                line?.type === "os" ? `OS（禁止写进故事线口播）=${line.role ? `${line.role}：` : ""}${line.text}` : "",
+                `表演情绪=${row.mood}`,
+                shotContract?.inOut.include.length ? `必须覆盖=${shotContract.inOut.include.join("、")}` : "",
+                shotContract?.inOut.exclude.length ? `不得新增=${shotContract.inOut.exclude.join("、")}` : "",
+            ]
+                .filter(Boolean)
+                .join("；");
+        });
+}
+
+function scriptBgmSources(scriptText = "") {
+    const lines = scriptText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => /BGM\s*[:：]/i.test(line));
+    return lines.length ? lines.join("\n") : "未找到F4 BGM行；只按本段情绪写克制的衔接，不得虚构曲名。";
+}
+
+export function buildModule4ComposePrompt(input: Module4ComposeInput): string {
+    const incoming = input.incomingSeam
+        ? `【入缝合同】\n上段末拍：${input.incomingSeam.prevEndBeat}\n本段首格：${input.incomingSeam.nextFirstPanel}\n故事线首句必须接同一动作后半，禁止重新建立空间。`
+        : "";
+    const outgoing = input.outgoingSeam
+        ? `【出缝合同】\n本段末句必须收在动作中间态：${input.outgoingSeam.prevEndBeat}\n后续首格约定：${input.outgoingSeam.nextFirstPanel}\n画面要求段必须保留段尾0.5秒音频边界英文句。`
+        : "";
+    const feedback = input.feedback?.length ? `【上次校验违规，必须逐项修正】\n${input.feedback.map((item) => `- ${item}`).join("\n")}` : "";
+    const context = buildNodeContext("video-workbench", {
+        "storyboard-table": module4RowSources(input).join("\n"),
+        "shot-contract": JSON.stringify(input.shotContracts),
+        "action-contract": JSON.stringify(input.actionContracts),
+        "directing-lock": JSON.stringify(input.directingLock),
+        seams: [incoming, outgoing].filter(Boolean).join("\n\n"),
+        "space-contract": input.spaceRules || "",
+        script: scriptBgmSources(input.scriptText),
+        assets: input.assets.map((asset) => `【${asset.cardType}】${asset.name}：${asset.anchor}`).join("\n"),
+    });
+    const adjustment = input.note ? `【本次修改要求】\n${input.note}\n只改这一处的叙事表达，其余资产、空间、布光与缝合同不变。` : "";
+
+    return `你是Module4视频提示词合成器。把输入画格与合同合成为一段连续故事线，最终只输出六段成品，不要解释，不要Markdown代码块。
+
+【输出铁律】
+1. 六段标题和顺序必须逐字使用模板；参考图索引、风格、画面要求按模板原样输出，不得改写固定英文句。
+2. 故事线必须以“按故事板镜头顺序自然推进”开头，首句正面覆盖画格源1的钩子；连续因果画格可合成一句，但每格主视觉任务覆盖率必须100%。
+3. 故事线只写七类目：动作、运镜方向、布光方向（色温+光源方向）、音效、台词、表演、衔接词。逐句写死谁在画面左、谁在画面右。
+4. dialogue 才能写成“{角色}说：'{台词}'”并让该角色做口型；OS不得写入故事线口播。只要输入含OS，画面要求段必须保留全员闭口英文句。sfx正常写进故事线。
+5. 严禁复写镜头数量、镜头顺序、构图关系、摄影机位置、切换指令、景别标签；严禁[N-N秒]、Shot/Tn编号、固定机位/锁机/静态机位/定格/一动不动、比喻句式（仿佛/犹如/好似/宛如/如同/就像/好像/像…一样）、逐镜列表。封闭词库词条（如“固定位微动”）按库内原文引用不算违规。
+6. Tone来自本段mood与锁定表；BGM衔接来自剧本F4 BGM行与段情绪，写自然语言且不超过200字。
+7. 有入缝时首句接上段同一动作后半且不重新建立空间；有出缝时末句收在动作中间态。
+
+【六段输出模板】
+${buildVideoWorkbenchPrompt(input)}
+
+${feedback}
+${adjustment}
+
+【输入上下文】
+${context}`;
 }
 
 /*
@@ -699,7 +816,7 @@ export const AGENT_METHODOLOGY_BRIEF = "三铁律：分镜决策先锁后执行�
 // 按环节的压缩方法论红线,供 Agent 工具结果再入用(非长 prompt;长纪律仍在各 build*Prompt)。
 // 单一事实源;canvas-agent/src/config.ts 逐字镜像,agent-brief-sync 测试锁一致。勿改写字符串。
 const STAGE_REDLINE_OVERRIDES: Partial<Record<ToonflowNodeKind, string>> = {
-    "video-workbench": "视频工作台：参考图列表第1张blockout故事板页只定镜序、机位、景别、左右站位、姿态与纵深遮挡，永不覆盖外观；其余资产卡定人物长相、服装、装备与色彩；质感样板只提供织物/皮革/金属/地面的表面纹理、磨损程度、颗粒感与色调基准，不提供光位、光比与光线方向，布光只认分镜决策锁定表；画风参考禁用照片级真人质感的成片抽帧（实测拦截4/4）；逐镜写死谁在画面左、谁在画面右，追加逐字英文外观绑定句与ST色板锚定句；每镜与格子1:1，原生多镜头直出，禁止首尾帧续接或硬拼，不合并镜头、不新增机位。",
+    "video-workbench": "视频工作台：先用文本模型合成可审的Module4六段文本（参考图索引/故事线/Tone/BGM衔接/风格/画面要求），确定性校验器只审故事线/Tone/BGM三段（模板固定段不受禁词审查），拦时间码、Shot/Tn编号、固定机位/锁机/静态机位/定格、比喻句式、逐镜列表、缺段与错误开头，违规带反馈自动重试1次；通过后用户确认才用该文本调用cano。故事线只写动作/运镜方向/布光方向/音效/台词/表演/衔接词，以“按故事板镜头顺序自然推进”开头，首句覆盖钩子，逐句写死左右站位，严禁复写镜头数量、构图、景别；dialogue只控口型，OS不进故事线且全员闭口。参考图按角色→物品→场景→色板→故事板构图编号，保留外观绑定、参考图分工、布光基准与ST色板锚定句；有入缝首句接同一动作后半且不重新建立空间，有出缝末句收在中间态并限制段尾0.5s持续音；视频只生成环境音效，禁人声/对白/旁白与字幕水印；cano无首帧机制，禁止首尾帧续接或硬拼。",
     "storyboard-page":
         "故事板页：出Module3 blockout粗模、三维预演稿、未贴图灰模，全部物体同一种哑光中性灰；只定镜头机位、景别、人物站位与体块关系、姿态动作、前中后景纵深遮挡，除此之外一律不画；16:9横版，画格排列3-5镜3+2、6镜3+3、7-8镜4+4，一格=一镜=一时点=一景别；每格按前景/中景/背景三层空间语法锚定（浅灰亮面/中灰暗面/深灰阴影），写明主体体块大小与遮挡，POV点明前景锚点物；人物用光滑卵形头部与概括体块区分，禁五官毛发，装备仅保留最大一级体积轮廓，禁型号/零件/数量/镜筒数/扣具/线缆/纹样/颜色，人物外观与装备由视频层角色卡承担；缝合同画进首末格——末格动作停在中间态、首格接同一动作后半且禁止重新建立空间；禁速度线/残影/同角色同格两次/漫画分镜布局/跨格共享元素/拟声词，禁成片摄影、漫画、卡通、动画、插画风、手绘风、水墨、Q版；故事板文生图，不传资产卡或色板，不追加ST色板锚定句。",
     keyframes: "首帧：plus线已退役，当前流程不生成、不引用首帧组，本环节默认跳过，仅为兼容旧画布保留。",
