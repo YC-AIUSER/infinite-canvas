@@ -13,9 +13,9 @@
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/canvas-session.test.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:session",
+    "test:session": "tsx --test src/canvas-session.test.ts",
     "start": "node dist/index.js",
     "prepack": "npm run build"
   },
