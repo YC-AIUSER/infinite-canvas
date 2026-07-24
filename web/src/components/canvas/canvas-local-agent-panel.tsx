@@ -11,9 +11,12 @@ import { useShallow } from "zustand/react/shallow";
 import { useAgentStore, type AgentAttachment, type AgentCanvasContext, type AgentChatItem, type AgentEventLog, type AgentPanelTab, type AgentPendingToolCall, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-site-tools";
+import { buildSlimSummaryInput, buildSlimSummaryPrompt, composeSlimPrefixedPrompt, shouldSuggestSlim } from "@/lib/agent/thread-slim";
 import { STUCK_TURN_TIMEOUT_MS, shouldAutoRecoverTurn } from "@/lib/agent/turn-watchdog";
 import { collectExportSegments } from "@/lib/toonflow/node-runtime";
 import { stitchFinalCut } from "@/lib/toonflow/final-cut";
+import { requestImageQuestion } from "@/services/api/image";
+import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { AgentChatComposer, AgentChatMessage, AgentPanelTabs, AgentPendingToolCard, AgentWorkingMessage, type CanvasAgentChatAttachment } from "./canvas-agent-chat-ui";
 
 const MAX_ATTACHMENTS = 6;
@@ -89,6 +92,9 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     const pushMessage = useAgentStore((state) => state.addMessage);
     const pushEventLog = useAgentStore((state) => state.addEventLog);
     const clearEventLogs = useAgentStore((state) => state.clearEventLogs);
+    const effectiveConfig = useEffectiveConfig();
+    const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
+    const [slimming, setSlimming] = useState(false);
     const listRef = useRef<HTMLDivElement>(null);
     const canvasContextRef = useRef<AgentCanvasContext | null>(useAgentStore.getState().canvasContext);
     const confirmToolsRef = useRef(confirmTools);
@@ -102,6 +108,10 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     const clientIdRef = useRef(typeof crypto === "undefined" ? `${Date.now()}` : crypto.randomUUID());
     const loadThreadsSequenceRef = useRef(0);
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
+    const slimSuggested = useMemo(
+        () => shouldSuggestSlim({ messageCount: messages.length, totalChars: messages.reduce((total, item) => total + item.text.length, 0) }),
+        [messages],
+    );
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
     const loadThreads = useCallback(async (skipHistory = false) => {
         if (!connectedRef.current && !useAgentStore.getState().connected) return;
@@ -303,7 +313,8 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     const sendPrompt = async () => {
         const text = prompt.trim();
         const files = attachments;
-        const requestPrompt = promptWithAttachments(text, files);
+        const slimSummary = useAgentStore.getState().pendingSlimSummary.trim();
+        const requestPrompt = promptWithAttachments(slimSummary ? composeSlimPrefixedPrompt(slimSummary, text) : text, files);
         if (!connected || !requestPrompt || sending || waiting) return;
         if (attachmentPayloadBytes(files) > MAX_ATTACHMENT_PAYLOAD_BYTES) {
             addMessage({ role: "error", title: "图片过大", text: "图片附件超过 30MB，请删减后再发送。" });
@@ -333,7 +344,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                 URL.revokeObjectURL(item.url);
                 attachmentUrlsRef.current.delete(item.url);
             });
-            setAgentState({ prompt: "", attachments: [] });
+            setAgentState({ prompt: "", attachments: [], ...(slimSummary ? { pendingSlimSummary: "" } : {}) });
         } catch (error) {
             const text = error instanceof Error ? error.message : "发送失败";
             const busy = text.includes("Codex 正在运行");
@@ -540,22 +551,55 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             waiting: false,
             sending: false,
             pendingTool: null,
+            pendingSlimSummary: "",
             ...patch,
         });
         pendingToolRef.current = null;
     }
 
-    const startNewThread = async () => {
+    const createNewThread = async (pendingSlimSummary = "", activity = "新对话") => {
         if (!connected || sending || waiting) return;
         setAgentState({ loadingThreads: true });
         try {
             const data = await fetchAgentJson<AgentThreadResponse>(endpoint, token, "/agent/codex/threads/new", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
-            setAgentState({ activeThreadId: data.thread?.id || data.workspace?.activeThreadId || "", messages: [], activeTab: "chat", activity: "新对话" });
+            setAgentState({ activeThreadId: data.thread?.id || data.workspace?.activeThreadId || "", messages: [], activeTab: "chat", activity, pendingSlimSummary });
+        } finally {
+            setAgentState({ loadingThreads: false });
+        }
+    };
+
+    const startNewThread = async () => {
+        try {
+            await createNewThread();
         } catch (error) {
             addEventLog("新建对话失败", error);
             message.error(error instanceof Error ? error.message : "新建对话失败");
+        }
+    };
+
+    const slimThread = async () => {
+        if (!connected || sending || waiting || slimming) return;
+        const sourceThreadId = activeThreadId;
+        const sourceMessages = messages;
+        const model = effectiveConfig.textModel || effectiveConfig.model;
+        if (!isAiConfigReady(effectiveConfig, model)) {
+            message.error("请先配置站点文本模型");
+            return;
+        }
+
+        setSlimming(true);
+        try {
+            const input = buildSlimSummaryInput(sourceMessages);
+            const summary = (await requestImageQuestion({ ...effectiveConfig, model }, [{ role: "user", content: buildSlimSummaryPrompt(input) }], () => {})).trim();
+            if (!summary || summary === "没有返回内容") throw new Error("摘要模型没有返回有效内容");
+            const current = useAgentStore.getState();
+            if (current.sending || current.waiting || current.activeThreadId !== sourceThreadId || current.messages !== sourceMessages) throw new Error("会话内容已变化，请结束当前任务后重新瘦身");
+            await createNewThread(summary, "已瘦身续聊");
+        } catch (error) {
+            addEventLog("会话瘦身失败", error);
+            message.error(error instanceof Error ? error.message : "会话瘦身失败");
         } finally {
-            setAgentState({ loadingThreads: false });
+            setSlimming(false);
         }
     };
 
@@ -564,7 +608,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
         setAgentState({ loadingThreads: true });
         try {
             const data = await fetchAgentJson<AgentThreadResponse>(endpoint, token, `/agent/codex/threads/${encodeURIComponent(threadId)}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
-            setAgentState({ activeThreadId: data.thread?.id || threadId, messages: normalizeHistoryMessages(data.messages || []), activeTab: "chat", activity: "已恢复会话" });
+            setAgentState({ activeThreadId: data.thread?.id || threadId, messages: normalizeHistoryMessages(data.messages || []), activeTab: "chat", activity: "已恢复会话", pendingSlimSummary: "" });
         } catch (error) {
             addEventLog("恢复对话失败", error);
             message.error(error instanceof Error ? error.message : "恢复对话失败");
@@ -583,6 +627,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                 threads: current.threads.filter((thread) => thread.id !== threadId),
                 activeThreadId: current.activeThreadId === threadId ? "" : current.activeThreadId,
                 messages: current.activeThreadId === threadId ? [] : current.messages,
+                pendingSlimSummary: current.activeThreadId === threadId ? "" : current.pendingSlimSummary,
             });
             message.success("记录已删除");
         } catch (error) {
@@ -659,7 +704,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                         <Button size="small" type="text" disabled={!canUndo} icon={<RotateCcw className="size-3.5" />} onClick={undoLastTool}>
                             撤销
                         </Button>
-                        <Button size="small" type="text" disabled={!connected || loadingThreads || sending || waiting} icon={<Plus className="size-3.5" />} onClick={startNewThread}>
+                        <Button size="small" type="text" disabled={!connected || loadingThreads || sending || waiting || slimming} icon={<Plus className="size-3.5" />} onClick={startNewThread}>
                             新对话
                         </Button>
                     </>
@@ -686,7 +731,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                     activeThreadId={activeThreadId}
                     workspacePath={workspacePath}
                     loading={loadingThreads}
-                    busy={sending || waiting}
+                    busy={sending || waiting || slimming}
                     connected={connected}
                     onRefresh={() => void loadThreads()}
                     onNewThread={() => void startNewThread()}
@@ -719,6 +764,17 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                         ) : null}
                         {waiting && !pendingTool ? <AgentWorkingMessage theme={theme} /> : null}
                     </div>
+                    {slimSuggested ? (
+                        <div className="mx-3 flex shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.muted }}>
+                            <span className="min-w-0 flex-1 text-xs">会话较长，响应会变慢</span>
+                            <Button size="small" type="text" loading={slimming} disabled={sending || waiting} onClick={() => void slimThread()}>
+                                瘦身续聊
+                            </Button>
+                            <Button size="small" type="text" disabled={sending || waiting || slimming} onClick={() => void startNewThread()}>
+                                直接新建
+                            </Button>
+                        </div>
+                    ) : null}
                     <AgentChatComposer
                         prompt={prompt}
                         attachments={attachments.map(agentAttachmentToChatAttachment)}

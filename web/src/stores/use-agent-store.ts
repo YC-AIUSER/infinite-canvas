@@ -40,6 +40,7 @@ type AgentStore = {
     activity: string;
     connectError: string;
     pendingTool: AgentPendingToolCall | null;
+    pendingSlimSummary: string;
     setAgentState: (patch: Partial<Omit<AgentStore, "setAgentState" | "connectAgent" | "disconnectAgent" | "addMessage" | "addEventLog" | "clearEventLogs" | "openPanel" | "closePanel" | "togglePanel" | "setCanvasContext">>) => void;
     openPanel: () => void;
     closePanel: () => void;
@@ -79,6 +80,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     activity: "就绪",
     connectError: "",
     pendingTool: null,
+    pendingSlimSummary: "",
     setAgentState: (patch) => set(patch),
     openPanel: () => set({ panelOpen: true, panelMounted: true, panelClosing: false }),
     closePanel: () => {
