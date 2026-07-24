@@ -36,6 +36,11 @@ export function interruptCodexTurn(threadId?: string) {
     return codexApp.interruptCurrentTurn(codexThreadId);
 }
 
+// 前端自愈用:上报当前进行中的 turn 数。前端 SSE 漏收结束事件卡死时,靠这个确认后端确已空闲才清状态。
+export function activeTurnCount() {
+    return codexApp ? codexApp.activeTurnCount() : 0;
+}
+
 async function runCodexTurnNow(prompt: string, emit: AgentEmit, attachments: AgentAttachment[], options: CodexRunOptions) {
     let files: string[] = [];
     try {
@@ -209,6 +214,10 @@ class CodexAppClient {
             return;
         }
         await new Promise((resolve, reject) => this.activeTurns.set(turnId, { resolve, reject }));
+    }
+
+    activeTurnCount() {
+        return this.activeTurns.size;
     }
 
     interruptCurrentTurn(threadId: string) {

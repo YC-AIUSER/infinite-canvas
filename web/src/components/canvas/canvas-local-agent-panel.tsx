@@ -11,6 +11,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useAgentStore, type AgentAttachment, type AgentCanvasContext, type AgentChatItem, type AgentEventLog, type AgentPanelTab, type AgentPendingToolCall, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-site-tools";
+import { STUCK_TURN_TIMEOUT_MS, shouldAutoRecoverTurn } from "@/lib/agent/turn-watchdog";
 import { collectExportSegments } from "@/lib/toonflow/node-runtime";
 import { stitchFinalCut } from "@/lib/toonflow/final-cut";
 import { AgentChatComposer, AgentChatMessage, AgentPanelTabs, AgentPendingToolCard, AgentWorkingMessage, type CanvasAgentChatAttachment } from "./canvas-agent-chat-ui";
@@ -95,6 +96,8 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
     const autoConnectRef = useRef(false);
     const connectedRef = useRef(false);
     const errorLoggedRef = useRef(false);
+    const lastEventAtRef = useRef(Date.now());
+    const watchdogProbingRef = useRef(false);
     const attachmentUrlsRef = useRef(new Set<string>());
     const clientIdRef = useRef(typeof crypto === "undefined" ? `${Date.now()}` : crypto.randomUUID());
     const loadThreadsSequenceRef = useRef(0);
@@ -158,6 +161,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
         };
         const source = new EventSource(`${endpoint}/events?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`);
         source.addEventListener("hello", (event) => {
+            lastEventAtRef.current = Date.now();
             const busy = Boolean(parseEventData<AgentHelloEvent>(event)?.codex?.busy);
             errorLoggedRef.current = false;
             connectedRef.current = true;
@@ -167,6 +171,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             if (document.visibilityState === "visible" && document.hasFocus()) void activateAgentClient(endpoint, token, clientId);
         });
         source.addEventListener("codex_state", (event) => {
+            lastEventAtRef.current = Date.now();
             const data = parseEventData<AgentCodexState>(event);
             if (!data) return;
             enqueueEvent(async () => {
@@ -176,10 +181,12 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             });
         });
         source.addEventListener("tool_call", (event) => {
+            lastEventAtRef.current = Date.now();
             const data = parseEventData<AgentPendingToolCall>(event);
             if (data) void handleToolCall(endpoint, token, data);
         });
         source.addEventListener("agent_event", (event) => {
+            lastEventAtRef.current = Date.now();
             const data = parseEventData<AgentEventPayload>(event);
             if (data) enqueueEvent(() => {
                 if (isCurrentThreadEvent(data)) handleAgentEvent(data);
@@ -204,10 +211,12 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             });
         });
         source.addEventListener("agent_log", (event) => {
+            lastEventAtRef.current = Date.now();
             const text = parseEventData<{ text?: unknown }>(event)?.text;
             addEventLog("日志", text, text);
         });
         source.addEventListener("agent_error", (event) => {
+            lastEventAtRef.current = Date.now();
             const data = parseEventData<AgentEventPayload>(event);
             if (!data) return;
             enqueueEvent(() => {
@@ -255,6 +264,42 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             document.removeEventListener("visibilitychange", activateVisible);
         };
     }, [connected, endpoint, token]);
+
+    // 自愈:结束信号(codex_state busy=false / agent_done)走 SSE 丢失时(如后台标签页节流),前端会
+    // 永久卡在 waiting=true——既转圈又发不出新消息。静默超过阈值后探后端 /health,仅当后端确认无
+    // 活跃 turn(activeTurns===0)才把界面清回就绪;后端仍在跑(长 turn)则继续等,绝不误伤。判据见 turn-watchdog.ts。
+    useEffect(() => {
+        if (!connected) return;
+        const timer = setInterval(() => {
+            const state = useAgentStore.getState();
+            if (!state.waiting || state.pendingTool) return;
+            if (Date.now() - lastEventAtRef.current < STUCK_TURN_TIMEOUT_MS) return;
+            if (watchdogProbingRef.current) return;
+            watchdogProbingRef.current = true;
+            void (async () => {
+                try {
+                    const res = await fetch(`${endpoint}/health`);
+                    const data = (await res.json().catch(() => ({}))) as { activeTurns?: unknown };
+                    const backendActiveTurns = typeof data.activeTurns === "number" ? data.activeTurns : null;
+                    const current = useAgentStore.getState();
+                    const silentMs = Date.now() - lastEventAtRef.current;
+                    if (shouldAutoRecoverTurn({ waiting: current.waiting, hasPendingTool: Boolean(current.pendingTool), silentMs, backendActiveTurns })) {
+                        setAgentState({ waiting: false, sending: false, activity: "上一轮已结束" });
+                        addEventLog("自动恢复", { silentMs, backendActiveTurns });
+                        // 先按后端权威历史对齐(卡死期间可能连末尾消息也漏收了),再追加提示——否则 loadThreads 会把提示冲掉。
+                        await loadThreads();
+                        addMessage({ role: "system", text: "上一轮已结束，但完成信号在传输中丢失，界面已自动恢复到就绪，可以继续发送。" });
+                    }
+                } catch {
+                    // 探活失败(后端不可达)不清状态——SSE onerror 负责断线处理
+                } finally {
+                    watchdogProbingRef.current = false;
+                }
+            })();
+        }, 10000);
+        return () => clearInterval(timer);
+    }, [connected, endpoint, loadThreads, setAgentState]);
+
     const sendPrompt = async () => {
         const text = prompt.trim();
         const files = attachments;
@@ -264,6 +309,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             addMessage({ role: "error", title: "图片过大", text: "图片附件超过 30MB，请删减后再发送。" });
             return;
         }
+        lastEventAtRef.current = Date.now();
         setAgentState({ activity: "发送中", sending: true });
         const messageId = createId();
         addMessage({ id: messageId, role: "user", text: text || "发送了图片", attachments: files });
