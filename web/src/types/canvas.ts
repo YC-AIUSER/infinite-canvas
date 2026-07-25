@@ -58,6 +58,13 @@ export type ToonflowNodeMetadata = {
     voiceMap?: Record<string, string>;
     output?: NodeOutput;
     history?: NodeOutput[];
+    /**
+     * 生成中的模型原始流,仅供节点内容区实时回显。
+     * 不进产物、不参与版本比对;生成落定时被权威快照写入整体覆盖掉,无需单独清理。
+     */
+    streamingText?: string;
+    /** 流式撑高前的原始节点高度,收尾时原样还回去。与 streamingText 同生共死。 */
+    streamRestoreHeight?: number;
     pendingVideoTask?: {
         taskId: string;
         provider: "openai" | "seedance" | "cano";

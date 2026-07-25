@@ -19,6 +19,7 @@ import {
     washPrompt,
 } from "./prompts";
 import { validateModule4 } from "./module4-check";
+import { collapseNodeAfterStream } from "./streaming";
 import {
     ActionContractSchema,
     ContinuityTableSchema,
@@ -863,9 +864,11 @@ function migrateOutputStatus(output: NodeOutput): NodeOutput {
 }
 
 export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
-    return nodes.map((node) => {
-        const toonflow = node.metadata?.toonflow;
-        if (!toonflow) return node;
+    return nodes.map((original) => {
+        if (!original.metadata?.toonflow) return original;
+        // 流式回显是纯展示态:刷新后一律剥掉残留文本并还原被撑高的高度,否则节点会永远卡在撑高状态。
+        const node = collapseNodeAfterStream(original);
+        const toonflow = node.metadata!.toonflow!;
         // 页面刷新/崩溃时，仅保留"活跃(未归档)视频节点 + 已有 provider taskId"继续恢复;其余生成降级为 failed 可重试。
         const migrated = hydratedStatus(toonflow.status);
         const recoverableVideoTask = migrated === "generating" && toonflow.kind === "video-workbench" && !toonflow.archived && Boolean(toonflow.pendingVideoTask);
@@ -877,6 +880,7 @@ export function hydrateToonflowProject(nodes: CanvasNodeData[]) {
         const migratedHistory = toonflow.history?.map(migrateOutputStatus);
         const historyChanged = Boolean(migratedHistory?.some((item, index) => item !== toonflow.history?.[index]));
         if (status === toonflow.status && output === toonflow.output && !historyChanged && !pendingChanged) return node;
+        // 注意:这里回落到 node(已剥离流式)而不是 original,流式残留才不会被短路带回来。
         return {
             ...node,
             metadata: {

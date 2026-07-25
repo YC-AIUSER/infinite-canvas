@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Popconfirm } from "antd";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, Clock3 } from "lucide-react";
 import { z } from "zod";
@@ -7,6 +7,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { runQualityCheck, type QualityCheckItem } from "@/lib/toonflow/quality-check";
 import { canApproveSegment, segmentApprovalBlockReason } from "@/lib/toonflow/node-runtime";
 import { parseModelJson, ShotContractSchema, type DubbingTrack, type QualityReview, type StoryboardRow } from "@/lib/toonflow/schema";
+import { resolveStreamPreview, type ToonflowStreamPreview } from "@/lib/toonflow/streaming";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
@@ -38,6 +39,32 @@ const statusLabel: Record<ToonflowNodeStageStatus, string> = {
 
 // creative 是选修环节,默认状态就是 skipped,也必须能手动生成——不列进来的话整个操作区都不渲染,用户点不到任何入口。
 const actionableKinds = new Set(["creative", "script", "space-contract", "storyboard-table", "shot-contract", "action-contract"]);
+
+/** 生成中的实时回显。text 模式当正文读,raw 模式是结构化产物的半截 JSON,只给进度感。 */
+function ToonflowStreamingView({ preview, background, accent }: { preview: ToonflowStreamPreview; background: string; accent: string }) {
+    const scrollRef = useRef<HTMLDivElement>(null);
+    // 新内容永远从底部长出来,跟着滚才看得见正在写的那一句。
+    useEffect(() => {
+        const element = scrollRef.current;
+        if (element) element.scrollTop = element.scrollHeight;
+    }, [preview.text]);
+
+    return (
+        <div className="mt-2 flex min-h-0 flex-1 flex-col">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: accent }}>
+                <span className="inline-block size-1.5 animate-pulse rounded-full" style={{ background: accent }} />
+                <span>{preview.mode === "raw" ? "生成中 · 实时输出（完成后转为表格）" : "生成中 · 实时输出"}</span>
+            </div>
+            <div
+                ref={scrollRef}
+                className={`mt-1.5 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 whitespace-pre-wrap ${preview.mode === "raw" ? "text-[11px] leading-4 opacity-55 break-all" : "text-xs leading-5"}`}
+                style={{ background }}
+            >
+                {preview.text}
+            </div>
+        </div>
+    );
+}
 
 type ToonflowNodeContentProps = {
     node: CanvasNodeData;
@@ -209,6 +236,8 @@ export function ToonflowNodeContent({
     const continuityTable = toonflow.kind === "continuity-table" ? toonflow.output?.payload.continuityTable : undefined;
     const storyboardRows = toonflow.kind === "storyboard-table" ? toonflow.output?.payload.table : undefined;
     const washHits = toonflow.washReport?.hits || [];
+    // 生成中的实时回显接管内容区,落定后 streamingText 被清掉,自动回到下面的正式渲染分支。
+    const streamPreview = resolveStreamPreview(toonflow);
     const assetCards = toonflow.output?.payload.cards;
     const module4Text = toonflow.kind === "video-workbench" ? toonflow.output?.payload.text : undefined;
     const module4Issues = toonflow.kind === "video-workbench" ? toonflow.output?.payload.module4Issues ?? [] : [];
@@ -301,7 +330,9 @@ export function ToonflowNodeContent({
                 </div>
             ) : null}
 
-            {toonflow.kind === "compliance" ? (
+            {streamPreview ? (
+                <ToonflowStreamingView preview={streamPreview} background={theme.node.fill} accent={accent} />
+            ) : toonflow.kind === "compliance" ? (
                 <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2 py-1.5 text-xs" style={{ background: theme.node.fill }}>
                     {washHits.length ? (
                         washHits.map((hit) => (

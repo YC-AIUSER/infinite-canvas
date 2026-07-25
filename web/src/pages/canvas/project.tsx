@@ -63,6 +63,7 @@ import type { QualityCheckItem } from "@/lib/toonflow/quality-check";
 import { DiversityPatchSchema, ShotContractSchema, parseModelJson, type AssetCard, type DiversityPatch, type DiversityPatchItem, type DubbingTrack, type QualityReview, type ShotContract } from "@/lib/toonflow/schema";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
+import { collapseNodeAfterStream, expandNodeForStream } from "@/lib/toonflow/streaming";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
 import { skillCards } from "@/pages/skills/skills-data";
 import { buildSkillFlowOps } from "@/lib/canvas/skill-flow";
@@ -469,6 +470,8 @@ function InfiniteCanvasPage() {
     const lastManualViewportAtRef = useRef(Number.NEGATIVE_INFINITY);
     const streamUpdateTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
     const pendingStreamTextRef = useRef(new Map<string, string>());
+    const toonflowStreamTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+    const toonflowPendingStreamRef = useRef(new Map<string, string>());
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -540,6 +543,54 @@ function InfiniteCanvasPage() {
         },
         [writeStreamNodeContent],
     );
+
+    /**
+     * Toonflow 节点的流式回显:只写 metadata.toonflow.streamingText,不动 type/status/output。
+     * 刻意不同步 nodesRef.current——流式是纯展示态,让级联与"权威 ref+快照写入"保持唯一事实源;
+     * 生成落定时基于准备快照的整体覆盖会顺带把本字段冲掉。
+     */
+    const writeToonflowStreamText = useCallback((nodeId: string, streamingText: string) => {
+        setNodes((prev) => prev.map((node) => (node.id === nodeId ? expandNodeForStream(node, streamingText) : node)));
+    }, []);
+
+    const scheduleToonflowStreamUpdate = useCallback(
+        (nodeId: string, streamingText: string) => {
+            toonflowPendingStreamRef.current.set(nodeId, streamingText);
+            if (toonflowStreamTimersRef.current.has(nodeId)) return;
+
+            toonflowStreamTimersRef.current.set(
+                nodeId,
+                setTimeout(() => {
+                    toonflowStreamTimersRef.current.delete(nodeId);
+                    const pending = toonflowPendingStreamRef.current.get(nodeId);
+                    toonflowPendingStreamRef.current.delete(nodeId);
+                    if (pending !== undefined) writeToonflowStreamText(nodeId, pending);
+                }, TEXT_STREAM_THROTTLE_MS),
+            );
+        },
+        [writeToonflowStreamText],
+    );
+
+    /**
+     * 生成结束(成功/失败/取消)必须调用。挂起的节流定时器会在落定后把过期原始流写回去;
+     * 取消路径还不写产物,残留的原始流会冻在节点上冒充"仍在生成",所以这里连 state 一起清。
+     */
+    const clearToonflowStreamText = useCallback((nodeId: string) => {
+        const timer = toonflowStreamTimersRef.current.get(nodeId);
+        if (timer) clearTimeout(timer);
+        toonflowStreamTimersRef.current.delete(nodeId);
+        toonflowPendingStreamRef.current.delete(nodeId);
+        setNodes((prev) => {
+            let changed = false;
+            const next = prev.map((node) => {
+                if (node.id !== nodeId) return node;
+                const collapsed = collapseNodeAfterStream(node);
+                if (collapsed !== node) changed = true;
+                return collapsed;
+            });
+            return changed ? next : prev;
+        });
+    }, []);
 
     const stopGenerationByRunningId = useCallback((runningId: string) => {
         const affectedNodeIds = new Set<string>();
@@ -2808,7 +2859,7 @@ function InfiniteCanvasPage() {
                 const upstreamVersions = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
                 let resultNode = preparedNode;
                 for (let attempt = 0; attempt < 2; attempt += 1) {
-                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: finalPrompt }], () => {}, { signal: controller.signal });
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: finalPrompt }], (text) => scheduleToonflowStreamUpdate(nodeId, text), { signal: controller.signal });
                     resultNode = applyGenerationSuccess(preparedNode, rawText, washHits, upstreamVersions);
                     const shouldRetryStoryboard = resultNode.metadata?.toonflow?.kind === "storyboard-table" && resultNode.metadata.toonflow.status === "failed" && attempt === 0;
                     if (!shouldRetryStoryboard) break;
@@ -2833,11 +2884,12 @@ function InfiniteCanvasPage() {
                 setNodes(next);
                 return { ok: false, error: errorDetails };
             } finally {
+                clearToonflowStreamText(nodeId);
                 finishGenerationRequest(nodeId, controller);
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
     );
 
     const runToonflowModule4Composition = useCallback(
@@ -2876,7 +2928,7 @@ function InfiniteCanvasPage() {
                 for (let attempt = 0; attempt < 2; attempt += 1) {
                     if (feedback) generation = buildToonflowModule4Composition(nodesRef.current, connectionsRef.current, nodeId, note, feedback);
                     const attemptNode = { ...preparedNode, metadata: { ...preparedNode.metadata, prompt: generation.finalPrompt, model: generationConfig.model } };
-                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: generation.finalPrompt }], () => {}, { signal: controller.signal });
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: generation.finalPrompt }], (text) => scheduleToonflowStreamUpdate(nodeId, text), { signal: controller.signal });
                     const validation = validateModule4(rawText);
                     if (validation.ok) {
                         const module4Text = generation.finalize(rawText);
@@ -2917,11 +2969,12 @@ function InfiniteCanvasPage() {
                 nodesRef.current = next;
                 setNodes(next);
             } finally {
+                clearToonflowStreamText(nodeId);
                 finishGenerationRequest(nodeId, controller);
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
     );
 
     const runToonflowInstanceGeneration = useCallback(
