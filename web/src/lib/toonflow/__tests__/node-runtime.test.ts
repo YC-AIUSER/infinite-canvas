@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind } from "../../../types/canvas";
-import type { NodeOutput, NodeStatus, StoryboardRow } from "../schema";
+import { REPAIR_METHODS, type NodeOutput, type NodeStatus, type QualityReview, type StoryboardRow } from "../schema";
 import {
     applyAdoptStale,
     applyApprove,
@@ -12,9 +12,12 @@ import {
     applyRollback,
     buildTextCascadeGraph,
     buildToonflowGeneration,
+    buildRepairPlan,
     computeUpstreamVersions,
+    evaluateRepairCostGate,
     hydrateToonflowProject,
     propagateAfterNewVersion,
+    setRepairMethod,
 } from "../node-runtime";
 import { cascadeOrder } from "../state-machine";
 
@@ -75,6 +78,54 @@ function storyboardRow(overrides: Partial<StoryboardRow> = {}): StoryboardRow {
         ...overrides,
     };
 }
+
+describe("P7 最小返修闭环", () => {
+    it("默认返修计划只纳入 P0/P1，P2 不纳入", () => {
+        const review: QualityReview = {
+            items: [
+                { key: "identity", checked: true, severity: "P0", note: "角色脸漂移" },
+                { key: "narrative", checked: true, severity: "P1", note: "高潮停留不足" },
+                { key: "audio", checked: true, severity: "P2", note: "音乐可再轻一点" },
+            ],
+        };
+        const plan = buildRepairPlan(review);
+        expect(plan.map((item) => item.reviewKey)).toEqual(["identity", "narrative"]);
+        expect(plan.map((item) => item.reason)).toEqual(["角色脸漂移", "高潮停留不足"]);
+    });
+
+    it("返修手段遵循五级顺序且不同质检项从不同级别起步", () => {
+        const plan = buildRepairPlan({
+            items: [
+                { key: "narrative", checked: true, severity: "P1" },
+                { key: "technical", checked: true, severity: "P1" },
+                { key: "identity", checked: true, severity: "P1" },
+            ],
+        });
+        expect(REPAIR_METHODS).toEqual(["recut-timing", "local-visual-fix", "color-audio-unify", "regenerate-shot", "redo-segment"]);
+        expect(plan.map((item) => item.method)).toEqual(["recut-timing", "local-visual-fix", "regenerate-shot"]);
+        expect(REPAIR_METHODS.indexOf(plan[0].method)).toBeLessThan(REPAIR_METHODS.indexOf(plan[2].method));
+        expect(setRepairMethod(plan[0], "regenerate-shot")).toMatchObject({
+            method: "regenerate-shot",
+            inputAnchor: expect.stringContaining("前一镜尾帧"),
+            preservedContent: expect.stringContaining("锁定原角色、场景、服装、道具和光线"),
+            regeneratedShotCount: 1,
+        });
+    });
+
+    it("重生成镜头占比严格超过 20% 才触发成本闸门", () => {
+        const plan = buildRepairPlan({ items: [{ key: "identity", checked: true, severity: "P1" }] });
+        expect(evaluateRepairCostGate(plan, 4)).toMatchObject({ regeneratedShotCount: 1, ratio: 0.25, exceeds20Percent: true });
+        expect(evaluateRepairCostGate(plan, 5)).toMatchObject({ regeneratedShotCount: 1, ratio: 0.2, exceeds20Percent: false });
+    });
+
+    it("没有 qualityReview 或旧数据没有返修字段时不抛错", () => {
+        const oldReview: QualityReview = { items: [{ key: "audio", checked: false }] };
+        expect(() => buildRepairPlan(undefined)).not.toThrow();
+        expect(() => buildRepairPlan(oldReview)).not.toThrow();
+        expect(buildRepairPlan(undefined)).toEqual([]);
+        expect(evaluateRepairCostGate(undefined, 3)).toMatchObject({ regeneratedShotCount: 0, exceeds20Percent: false });
+    });
+});
 
 describe("buildToonflowGeneration", () => {
     it("把 project 祖先映射为 script 的 project 输入并执行洗词", () => {

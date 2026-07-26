@@ -43,6 +43,8 @@ import {
     type NodeStatus,
     type QualityReview,
     type QualityReviewKey,
+    type RepairMethod,
+    type RepairPlanItem,
     type SeamContract,
     type ShotContract,
     type StoryboardRow,
@@ -77,6 +79,87 @@ export const QUALITY_REVIEW_LABELS: Record<QualityReviewKey, string> = {
     audio: "声音与字幕",
     technical: "技术质量",
 };
+
+export const REPAIR_METHOD_LABELS: Record<RepairMethod, string> = {
+    "recut-timing": "重新剪辑或调时长",
+    "local-visual-fix": "局部画面修复",
+    "color-audio-unify": "颜色与声音统一",
+    "regenerate-shot": "重生成单镜头",
+    "redo-segment": "重做整段",
+};
+
+// 依据 09-qc-repair 的最小返修顺序：叙事先剪辑，技术问题先局修，摄影/声音先统一，
+// 身份、资产与动作连续性通常需要替换失败镜头；这里只选各类问题的起点，不跳过五级优先顺序。
+const REPAIR_METHOD_BY_QUALITY: Record<QualityReviewKey, RepairMethod> = {
+    identity: "regenerate-shot",
+    assets: "regenerate-shot",
+    cinematography: "color-audio-unify",
+    action: "regenerate-shot",
+    narrative: "recut-timing",
+    audio: "color-audio-unify",
+    technical: "local-visual-fix",
+};
+
+const REGENERATION_ANCHOR = "前一镜尾帧、后一镜首帧或已确认的角色/场景/服装/道具/光线资产";
+
+function defaultRepairPlanItem(reviewKey: QualityReviewKey, severity: "P0" | "P1", note?: string): RepairPlanItem {
+    const method = REPAIR_METHOD_BY_QUALITY[reviewKey];
+    const label = QUALITY_REVIEW_LABELS[reviewKey];
+    const regeneratesVisual = method === "regenerate-shot" || method === "redo-segment";
+    return {
+        reviewKey,
+        severity,
+        method,
+        reason: note?.trim() || `${label}存在 ${severity} 问题`,
+        inputAnchor: regeneratesVisual ? REGENERATION_ANCHOR : "当前成片、原分镜表与相邻镜头",
+        preservedContent: regeneratesVisual ? "锁定原角色、场景、服装、道具和光线，保留已通过内容与相邻镜头接点" : "保留已通过的镜头、剧情、角色资产与声音结构",
+        replacementScope: method === "recut-timing" ? "仅调整问题镜头的入点、出点、顺序或停留时长" : method === "local-visual-fix" ? "仅修复问题画面区域，不改变构图与剧情" : method === "color-audio-unify" ? "仅统一问题范围的色彩、曝光、响度或声音接点" : method === "regenerate-shot" ? "仅替换失败单镜头，并保留足够的前后剪辑手柄" : "最后手段：重做本段全部镜头",
+        acceptanceCriteria: `复检“${label}”通过，且前后剪辑点未引入新的身份、空间、节奏或声音问题`,
+        regeneratedShotCount: method === "regenerate-shot" ? 1 : undefined,
+    };
+}
+
+export function buildRepairPlan(review?: QualityReview, currentPlan: RepairPlanItem[] = review?.repairPlan ?? []): RepairPlanItem[] {
+    if (!review) return [];
+    const currentByKey = new Map(currentPlan.map((item) => [item.reviewKey, item]));
+    return review.items.flatMap((item) => {
+        if (item.severity !== "P0" && item.severity !== "P1") return [];
+        const defaults = defaultRepairPlanItem(item.key, item.severity, item.note);
+        const current = currentByKey.get(item.key);
+        return [{ ...defaults, ...current, reviewKey: item.key, severity: item.severity }];
+    });
+}
+
+export function setRepairMethod(item: RepairPlanItem, method: RepairMethod): RepairPlanItem {
+    const regeneratesVisual = method === "regenerate-shot" || method === "redo-segment";
+    return {
+        ...item,
+        method,
+        inputAnchor: regeneratesVisual ? REGENERATION_ANCHOR : item.inputAnchor,
+        preservedContent: regeneratesVisual ? "锁定原角色、场景、服装、道具和光线，保留已通过内容与相邻镜头接点" : item.preservedContent,
+        replacementScope: method === "recut-timing" ? "仅调整问题镜头的入点、出点、顺序或停留时长" : method === "local-visual-fix" ? "仅修复问题画面区域，不改变构图与剧情" : method === "color-audio-unify" ? "仅统一问题范围的色彩、曝光、响度或声音接点" : method === "regenerate-shot" ? "仅替换失败单镜头，并保留足够的前后剪辑手柄" : "最后手段：重做本段全部镜头",
+        regeneratedShotCount: method === "regenerate-shot" ? item.regeneratedShotCount ?? 1 : undefined,
+    };
+}
+
+export type RepairCostGate = {
+    regeneratedShotCount: number;
+    totalShotCount: number;
+    ratio: number;
+    exceeds20Percent: boolean;
+};
+
+export function evaluateRepairCostGate(plan?: RepairPlanItem[], totalShotCount = 0): RepairCostGate {
+    const safeTotal = Math.max(0, Math.floor(totalShotCount));
+    const requestedShotCount = (plan ?? []).reduce((total, item) => {
+        if (item.method === "redo-segment") return total + safeTotal;
+        if (item.method !== "regenerate-shot") return total;
+        return total + Math.max(1, Math.floor(item.regeneratedShotCount ?? 1));
+    }, 0);
+    const regeneratedShotCount = safeTotal > 0 ? Math.min(safeTotal, requestedShotCount) : requestedShotCount;
+    const ratio = safeTotal > 0 ? regeneratedShotCount / safeTotal : 0;
+    return { regeneratedShotCount, totalShotCount: safeTotal, ratio, exceeds20Percent: ratio > 0.2 };
+}
 
 export function emptyQualityReview(): QualityReview {
     return { items: QUALITY_REVIEW_KEYS.map((key) => ({ key, checked: false })) };

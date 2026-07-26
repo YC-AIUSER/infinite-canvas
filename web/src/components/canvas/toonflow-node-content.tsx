@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Popconfirm } from "antd";
+import { Button, Checkbox, Input, InputNumber, Popconfirm, Select } from "antd";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, Clock3 } from "lucide-react";
 import { z } from "zod";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { runQualityCheck, type QualityCheckItem } from "@/lib/toonflow/quality-check";
-import { canApproveSegment, segmentApprovalBlockReason } from "@/lib/toonflow/node-runtime";
-import { parseModelJson, ShotContractSchema, type DubbingTrack, type QualityReview, type StoryboardRow } from "@/lib/toonflow/schema";
+import { buildRepairPlan, canApproveSegment, emptyQualityReview, evaluateRepairCostGate, QUALITY_REVIEW_LABELS, REPAIR_METHOD_LABELS, segmentApprovalBlockReason, setRepairMethod } from "@/lib/toonflow/node-runtime";
+import { parseModelJson, REPAIR_METHODS, ShotContractSchema, type DubbingTrack, type QualityReview, type RepairPlanItem, type StoryboardRow } from "@/lib/toonflow/schema";
 import { resolveStreamPreview, type ToonflowStreamPreview } from "@/lib/toonflow/streaming";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
@@ -170,6 +170,126 @@ function StoryboardQualityCheck({ nodeId, rows, background, onDiversityRepair }:
     }, [rows, shotContractText, directingLock]);
 
     return <ToonflowQualityCheckPanel report={report} background={background} onRepair={onDiversityRepair ? (failedItems) => onDiversityRepair(nodeId, failedItems) : undefined} />;
+}
+
+const repairMethodOptions = REPAIR_METHODS.map((method) => ({ value: method, label: REPAIR_METHOD_LABELS[method] }));
+
+function VideoQualityRepairSection({
+    nodeId,
+    segmentId,
+    review,
+    background,
+    blockReason,
+    onChange,
+}: {
+    nodeId: string;
+    segmentId: string;
+    review?: QualityReview;
+    background: string;
+    blockReason?: string;
+    onChange: (review: QualityReview) => void;
+}) {
+    const table = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "storyboard-table")?.output?.payload.table);
+    const totalShotCount = useMemo(() => (table ?? []).filter((row) => row.segmentId === segmentId).length, [table, segmentId]);
+    const currentReview = review ?? emptyQualityReview();
+    const repairPlan = buildRepairPlan(currentReview);
+    const gate = evaluateRepairCostGate(repairPlan, totalShotCount);
+    const p2Items = currentReview.items.filter((item) => item.severity === "P2");
+
+    function saveReview(nextReview: QualityReview) {
+        const nextPlan = buildRepairPlan(nextReview, repairPlan);
+        const nextGate = evaluateRepairCostGate(nextPlan, totalShotCount);
+        onChange({
+            ...nextReview,
+            repairPlan: nextPlan.length ? nextPlan : undefined,
+            // 勾质检项、改备注不改变返修规模,已做的成本确认不该被清掉(改返修计划本身才清,见 updateRepair)。
+            // 取值必须走 currentReview:七项质检面板的 onChange 只回传 items,nextReview 上永远没有这个字段。
+            repairCostConfirmed: nextGate.exceeds20Percent ? currentReview.repairCostConfirmed : undefined,
+        });
+    }
+
+    function updateRepair(index: number, patch: Partial<RepairPlanItem>) {
+        const nextPlan = repairPlan.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item));
+        const nextGate = evaluateRepairCostGate(nextPlan, totalShotCount);
+        onChange({
+            ...currentReview,
+            repairPlan: nextPlan,
+            repairCostConfirmed: nextGate.exceeds20Percent ? undefined : currentReview.repairCostConfirmed,
+        });
+    }
+
+    return (
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+            <ToonflowSegmentQualityReview review={review} background={background} blockReason={blockReason} onChange={saveReview} />
+            <details className="mt-2 rounded-md px-2.5 py-2 text-xs" style={{ background }} open={repairPlan.length > 0 || p2Items.length > 0}>
+                <summary className="cursor-pointer select-none font-medium">最小返修计划 · {repairPlan.length} 项</summary>
+                {!repairPlan.length ? <p className="mt-2 opacity-55">P0/P1 问题会自动进入返修计划；P2 只列为建议优化。</p> : null}
+                {p2Items.length ? (
+                    <div className="mt-2 rounded-md border border-current/10 px-2 py-1.5 opacity-70">
+                        建议优化（不默认返修）：{p2Items.map((item) => `${QUALITY_REVIEW_LABELS[item.key]}${item.note ? `：${item.note}` : ""}`).join("；")}
+                    </div>
+                ) : null}
+                <div className="mt-2 space-y-2">
+                    {repairPlan.map((item, index) => (
+                        <div key={item.reviewKey} className="rounded-md border border-current/10 p-2">
+                            <div className="flex items-center gap-2">
+                                <span className="shrink-0 font-medium">{item.severity} · {QUALITY_REVIEW_LABELS[item.reviewKey]}</span>
+                                <Select
+                                    size="small"
+                                    className="min-w-0 flex-1"
+                                    value={item.method}
+                                    options={repairMethodOptions}
+                                    onChange={(method) => updateRepair(index, setRepairMethod(item, method))}
+                                />
+                            </div>
+                            <label className="mt-2 block">
+                                <span className="opacity-55">原因</span>
+                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.reason} onChange={(event) => updateRepair(index, { reason: event.target.value })} />
+                            </label>
+                            <label className="mt-1.5 block">
+                                <span className="opacity-55">输入锚点</span>
+                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.inputAnchor} onChange={(event) => updateRepair(index, { inputAnchor: event.target.value })} />
+                            </label>
+                            <label className="mt-1.5 block">
+                                <span className="opacity-55">保留内容</span>
+                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.preservedContent} onChange={(event) => updateRepair(index, { preservedContent: event.target.value })} />
+                            </label>
+                            <label className="mt-1.5 block">
+                                <span className="opacity-55">替换范围</span>
+                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.replacementScope} onChange={(event) => updateRepair(index, { replacementScope: event.target.value })} />
+                            </label>
+                            <label className="mt-1.5 block">
+                                <span className="opacity-55">验收标准</span>
+                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.acceptanceCriteria} onChange={(event) => updateRepair(index, { acceptanceCriteria: event.target.value })} />
+                            </label>
+                            {item.method === "regenerate-shot" ? (
+                                <label className="mt-1.5 flex items-center gap-2">
+                                    <span className="opacity-55">预计重生成镜头数</span>
+                                    <InputNumber size="small" min={1} max={Math.max(1, totalShotCount)} value={item.regeneratedShotCount ?? 1} onChange={(value) => updateRepair(index, { regeneratedShotCount: value ?? 1 })} />
+                                </label>
+                            ) : null}
+                        </div>
+                    ))}
+                </div>
+                {gate.exceeds20Percent ? (
+                    <div className="mt-2 rounded-md border border-red-500/50 bg-red-500/10 p-2 text-red-700 dark:text-red-300">
+                        <div className="flex items-start gap-1.5 font-medium">
+                            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                            <span>成本闸门：预计重生成 {gate.regeneratedShotCount}/{gate.totalShotCount} 个镜头（{Math.round(gate.ratio * 100)}%），超过 20%。继续前请先确认返修范围与成本影响。</span>
+                        </div>
+                        <Checkbox className="mt-2" checked={currentReview.repairCostConfirmed === true} onChange={(event) => onChange({ ...currentReview, repairPlan, repairCostConfirmed: event.target.checked || undefined })}>
+                            我已确认返修范围与成本影响
+                        </Checkbox>
+                    </div>
+                ) : null}
+                {repairPlan.length ? (
+                    <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-300">
+                        同一问题连续两次生成仍失败时，停止盲目重试，改镜头设计或采用剪辑规避。保留原始素材和版本，不覆盖唯一文件。
+                    </div>
+                ) : null}
+            </details>
+        </div>
+    );
 }
 
 /**
@@ -411,8 +531,8 @@ export function ToonflowNodeContent({
                 <ToonflowContinuityTableView table={continuityTable} background={theme.node.fill} />
             ) : storyboardRows?.length ? (
                 <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} onDiversityRepair={onDiversityRepair} />
-            ) : toonflow.kind === "video-workbench" && instanceVideoKey ? (
-                <ToonflowSegmentQualityReview review={qualityReview} background={theme.node.fill} blockReason={approvalBlockReason} onChange={(review) => onQualityReviewChange?.(node.id, review)} />
+            ) : toonflow.kind === "video-workbench" && toonflow.segmentId && instanceVideoKey ? (
+                <VideoQualityRepairSection nodeId={node.id} segmentId={toonflow.segmentId} review={qualityReview} background={theme.node.fill} blockReason={approvalBlockReason} onChange={(review) => onQualityReviewChange?.(node.id, review)} />
             ) : toonflow.kind === "audio-mix" && toonflow.segmentId ? (
                 <AudioMixSection nodeId={node.id} segmentId={toonflow.segmentId} voiceMap={toonflow.voiceMap ?? {}} dubbing={dubbing} background={theme.node.fill} onVoiceMapChange={(voiceMap) => onVoiceMapChange?.(node.id, voiceMap)} />
             ) : module4Text ? (

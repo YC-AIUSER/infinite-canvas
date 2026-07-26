@@ -260,6 +260,23 @@ export const QUALITY_REVIEW_KEYS = ["identity", "assets", "cinematography", "act
 
 export type QualityReviewKey = (typeof QUALITY_REVIEW_KEYS)[number];
 
+export const REPAIR_METHODS = ["recut-timing", "local-visual-fix", "color-audio-unify", "regenerate-shot", "redo-segment"] as const;
+
+export const RepairPlanItemSchema = z.object({
+    reviewKey: z.enum(QUALITY_REVIEW_KEYS),
+    severity: z.enum(["P0", "P1"]),
+    method: z.enum(REPAIR_METHODS),
+    reason: z.string(),
+    inputAnchor: z.string(),
+    preservedContent: z.string(),
+    replacementScope: z.string(),
+    acceptanceCriteria: z.string(),
+    regeneratedShotCount: z.number().int().nonnegative().optional(),
+});
+
+export type RepairMethod = (typeof REPAIR_METHODS)[number];
+export type RepairPlanItem = z.infer<typeof RepairPlanItemSchema>;
+
 export const QualityReviewItemSchema = z.object({
     key: z.enum(QUALITY_REVIEW_KEYS),
     checked: z.boolean(),
@@ -269,6 +286,9 @@ export const QualityReviewItemSchema = z.object({
 
 export const QualityReviewSchema = z.object({
     items: z.array(QualityReviewItemSchema),
+    // 旧画布只有七项质检,返修计划与成本确认均保持 optional。
+    repairPlan: z.array(RepairPlanItemSchema).optional(),
+    repairCostConfirmed: z.boolean().optional(),
 });
 
 export type QualityReviewItem = z.infer<typeof QualityReviewItemSchema>;
