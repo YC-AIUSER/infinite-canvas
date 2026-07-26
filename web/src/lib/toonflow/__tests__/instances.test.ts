@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind } from "../../../types/canvas";
 import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync } from "../instances";
 import type { NodeOutput, StoryboardRow } from "../schema";
+import { cascadeOrder } from "../state-machine";
 
 function row(segmentId: string, shotNo: number): StoryboardRow {
     return {
@@ -137,6 +138,28 @@ describe("Toonflow segment instances", () => {
         expect(storyboardInstance?.metadata?.toonflow?.status).toBe("stale");
         expect(storyboardInstance?.metadata?.toonflow?.output?.status).toBe("stale");
         expect(keyframesInstance?.metadata?.toonflow?.status).toBe("empty");
+    });
+
+    // keyframes 首帧线已随 plus 重构退役,模板里根节点 defaultStatus=skipped。段实例若仍建成 empty,
+    // cascadeOrder 只滤 skipped,一键跑全链就会把已退役环节当待生成节点执行、白花图像生成的钱。
+    it("根环节被跳过时段实例继承 skipped，一键跑全链不执行它", () => {
+        const nodes = template([row("seg-a", 1)]).map<CanvasNodeData>((node) =>
+            node.id === "keyframes-root" ? { ...node, metadata: { toonflow: { ...node.metadata!.toonflow!, status: "skipped" as const } } } : node,
+        );
+        const result = sync(nodes);
+        const keyframesInstance = result.nodes.find((node) => node.metadata?.toonflow?.kind === "keyframes" && node.metadata.toonflow.segmentId);
+        const storyboardInstance = result.nodes.find((node) => node.metadata?.toonflow?.kind === "storyboard-page" && node.metadata.toonflow.segmentId);
+
+        expect(keyframesInstance?.metadata?.toonflow?.status).toBe("skipped");
+        expect(storyboardInstance?.metadata?.toonflow?.status).toBe("empty");
+
+        const graph = result.nodes.flatMap((node) =>
+            node.metadata?.toonflow ? [{ nodeId: node.id, status: node.metadata.toonflow.status, version: 0, upstreamVersions: {}, skipped: node.metadata.toonflow.status === "skipped" }] : [],
+        );
+        const edges = result.connections.map((connection) => ({ from: connection.fromNodeId, to: connection.toNodeId }));
+        const order = cascadeOrder(graph, edges, storyboardInstance!.id);
+
+        expect(order).not.toContain(keyframesInstance!.id);
     });
 
     it("新增段时只创建新增段的三类实例", () => {

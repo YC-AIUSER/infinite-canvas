@@ -144,7 +144,10 @@ function createInstance(root: CanvasNodeData, segmentId: string, segmentIndex: n
                 summary: toonflow.summary,
                 checks: toonflow.checks,
                 accent: toonflow.accent,
-                status: "empty",
+                // 根环节被标成跳过(如已退役的 keyframes 首帧线,模板里 defaultStatus=skipped)时段实例跟着跳过。
+                // 否则实例是 empty,cascadeOrder 只滤 skipped,一键跑全链会把已退役环节当待生成节点执行、白花图像钱。
+                // 旧画布的根节点不是 skipped,实例照旧 empty,回看与重跑历史版本不受影响。
+                status: toonflow.status === "skipped" ? "skipped" : "empty",
                 segmentId,
                 segmentIndex,
             },
