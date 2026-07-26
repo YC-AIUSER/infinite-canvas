@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { SPEED_FREEZE_LIBRARY } from "../closed-libraries";
 import {
     VIDEO_CLOSED_MOUTH_SENTENCE,
     VIDEO_SEAM_AUDIO_BOUNDARY_SENTENCE,
     VIDEO_SOUND_SUPPRESSION_SENTENCE,
     buildModule4ComposePrompt,
+    buildStoryboardPagePrompt,
     buildVideoWorkbenchPrompt,
     finalizeModule4Text,
     type Module4ComposeInput,
@@ -71,6 +73,22 @@ describe("buildVideoWorkbenchPrompt", () => {
 });
 
 describe("buildModule4ComposePrompt", () => {
+    it("顿帧两式只注入 Module4，Module3 故事板仍不含顿帧模板", () => {
+        const module4Prompt = buildModule4ComposePrompt(input());
+        const storyboardPrompt = buildStoryboardPagePrompt({
+            rows: input().rows,
+            shotContracts: input().shotContracts,
+            actionContracts: input().actionContracts,
+        });
+
+        for (const entry of SPEED_FREEZE_LIBRARY) {
+            expect(module4Prompt).toContain(entry.english);
+            expect(storyboardPrompt).not.toContain(entry.english);
+        }
+        expect(module4Prompt).toContain("只嵌入“顶点”位");
+        expect(storyboardPrompt).toContain("速度线、残影与运动模糊");
+    });
+
     it("有入缝时要求首句接同一动作后半且禁止重新建立空间", () => {
         const prompt = buildModule4ComposePrompt(
             input({

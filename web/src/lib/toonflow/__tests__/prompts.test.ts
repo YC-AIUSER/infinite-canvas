@@ -138,6 +138,15 @@ describe("plus 方法论保真", () => {
         }
     });
 
+    it("分镜表 P7 逐字注入九类导演技法映射并要求转写", () => {
+        const prompt = buildStoryboardTablePrompt("上下文");
+        expect(prompt).toContain(renderLibraries(["directorTechnique"]));
+        expect(prompt).toContain("窄门框限制");
+        expect(prompt).toContain("Crash Zoom");
+        expect(prompt).toContain("起点 → 方向 → 速度 → 停点");
+        expect(prompt).toContain("禁止改名、简写、拼接或自创");
+    });
+
     it("分镜表模板含铁律 11 ⓪ 分段三原则并标注台词类型", () => {
         const prompt = buildStoryboardTablePrompt("上下文");
         expect(prompt).toContain("打包贴满");
@@ -160,6 +169,24 @@ describe("plus 方法论保真", () => {
         expect(prompt).toContain("A 动作 → 反应 / B 建立 → 推进 / C 原因 → 结果 / D 收紧聚焦");
         expect(prompt).toContain("因果覆盖率必须是 100%");
         expect(prompt).toContain("禁止用“自然过渡”作答");
+    });
+
+    it("分镜表、镜头合同与动作合同都写明高潮镜三件套及机械核对字段", () => {
+        const storyboardPrompt = buildStoryboardTablePrompt("上下文");
+        const shotContractPrompt = buildShotContractPrompt("上下文");
+        const actionContractPrompt = buildActionContractPrompt("上下文");
+
+        for (const prompt of [storyboardPrompt, shotContractPrompt, actionContractPrompt]) {
+            expect(prompt).toContain("【高潮/爆点镜三件套（阻断级）】");
+            expect(prompt).toContain("L4 或 L5");
+            expect(prompt).toContain("Speed Ramp");
+            expect(prompt).toContain("加速触发");
+            expect(prompt).toContain("收束停点");
+        }
+        expect(storyboardPrompt).toContain("action 字段先写自然中文主动作句");
+        expect(shotContractPrompt).toContain("speed 字段仍只写缓/常/急");
+        expect(actionContractPrompt).toContain("process 字段必须一次写满");
+        expect(actionContractPrompt).toContain("头部=...；肩背=...；手部=...；身形=...；身段=...");
     });
 
     it("创意模板双模式齐全并覆盖体检四张表", () => {
@@ -213,7 +240,7 @@ describe("封闭词库注入", () => {
             buildDirectingLockPrompt,
             ["directorStyle", "colorGrade", "lighting", "cameraMovement", "performanceIntensity", "composition", "shotScale"] as const,
         ],
-        ["分镜表", buildStoryboardTablePrompt, ["hook", "shotScale"] as const],
+        ["分镜表", buildStoryboardTablePrompt, ["hook", "shotScale", "directorTechnique"] as const],
         ["镜头合同", buildShotContractPrompt, ["shotScale", "composition", "lighting", "cameraMovement"] as const],
     ])("%s 模板逐字注入 renderLibraries 的产物", (_name, builder, categories) => {
         const prompt = builder("上下文");

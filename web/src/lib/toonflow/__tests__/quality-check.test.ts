@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runQualityCheck, type QualityCheckItem, type QualityCheckKind } from "../quality-check";
-import type { DirectingLock, DirectingLockGlobal, DirectingLockSegment, ShotContract, StoryboardRow } from "../schema";
+import type { ActionContract, DirectingLock, DirectingLockGlobal, DirectingLockSegment, ShotContract, StoryboardRow } from "../schema";
 
 function row(overrides: Partial<StoryboardRow> = {}): StoryboardRow {
     return {
@@ -30,6 +30,17 @@ function contract(overrides: Partial<ShotContract> = {}): ShotContract {
         subjectRelation: "单人",
         endpoint: "停在正脸",
         inOut: { include: [], exclude: [] },
+        ...overrides,
+    };
+}
+
+function actionContract(overrides: Partial<ActionContract> = {}): ActionContract {
+    return {
+        shotId: "shot-1",
+        cause: "对手逼近",
+        process: "Speed Ramp：加速触发→顶点→慢放区间→收束停点",
+        consequence: "地面震动",
+        endState: "角色停在冲锋落点",
         ...overrides,
     };
 }
@@ -288,6 +299,109 @@ describe("runQualityCheck：封闭词库合规", () => {
         expect(item.status).toBe("fail");
         expect(item.shotIds).toContain("shotC1");
         expect(item.reason).toContain("综合运用推拉摇移");
+    });
+});
+
+describe("runQualityCheck：高潮/爆点镜三件套 warning", () => {
+    const climaxRow = row({
+        segmentId: "seg-climax",
+        shotId: "shot-climax",
+        scale: "L4 特写",
+        action: "她猛地推开门冲进雨里",
+        mood: "高潮/爆点镜，决绝",
+    });
+    const climaxContract = contract({
+        shotId: "shot-climax",
+        scale: "L4 特写",
+        movement: "手持跟拍",
+        speed: "急",
+        endpoint: "停在雨幕中",
+    });
+    const completeClimaxActionContract = actionContract({
+        shotId: "shot-climax",
+        cause: "门外的呼救声逼近",
+        process:
+            "L5 五部位：头部向左猛转35度；肩背全力上提8厘米；手部以最大力度攥紧门把；身形向前大幅倾斜40度并跨出两步；身段以极限力度形成全身攻击姿态；Speed Ramp：加速触发=推门前0.2秒急起；顶点=门板撞墙瞬间；慢放区间=雨水飞散后的0.4秒；收束停点=右脚落地后停住",
+        consequence: "门板撞墙，雨水被带进屋内",
+        endState: "她站在门外雨幕中锁定前方",
+    });
+
+    it("普通非高潮镜不产生 climaxTrio 的 fail", () => {
+        const report = runQualityCheck({ storyboardRows: [row({ action: "她推开门走进屋", mood: "平静" })] });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).toBe("pass");
+        expect(item.warning).not.toBe(true);
+    });
+
+    it("高潮镜没有表演与节奏信息时标记为 unknown，而不是 fail", () => {
+        const report = runQualityCheck({ storyboardRows: [climaxRow], shotContracts: [climaxContract] });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).toBe("unknown");
+        expect(item.warning).toBe(false);
+        expect(item.actualValue).toContain("需人工确认");
+        expect(item.actualValue).toContain("L5 五部位");
+        expect(item.actualValue).toContain("Speed Ramp 四要素");
+    });
+
+    it("高潮镜写了弱词时判 fail、warning 为 true 且不阻断", () => {
+        const report = runQualityCheck({
+            storyboardRows: [climaxRow],
+            shotContracts: [climaxContract],
+            actionContracts: [actionContract({ shotId: "shot-climax", process: "她微微低头后猛地撞开门" })],
+        });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).toBe("fail");
+        expect(item.warning).toBe(true);
+        expect(item.actualValue).toContain("弱词");
+        expect(item.reason).toContain("不阻断生成、不返回 error");
+        expect(item).not.toHaveProperty("blocking");
+        expect(item).not.toHaveProperty("error");
+        expect(item.shotIds).toEqual(["shot-climax"]);
+    });
+
+    it("高潮镜写了 Speed Ramp 但四要素不全时判 fail、warning 为 true", () => {
+        const report = runQualityCheck({
+            storyboardRows: [climaxRow],
+            shotContracts: [climaxContract],
+            actionContracts: [actionContract({ shotId: "shot-climax", process: "Speed Ramp：加速触发=她突然冲刺；顶点=门板撞墙" })],
+        });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).toBe("fail");
+        expect(item.warning).toBe(true);
+        expect(item.actualValue).toContain("慢放区间");
+        expect(item.actualValue).toContain("收束停点");
+    });
+
+    it("高潮镜景别为 L2 时第三项判 fail", () => {
+        const lowScaleContract = { ...climaxContract, scale: "L2 中景/中全景" };
+        const report = runQualityCheck({
+            storyboardRows: [{ ...climaxRow, scale: lowScaleContract.scale }],
+            shotContracts: [lowScaleContract],
+            actionContracts: [completeClimaxActionContract],
+        });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).toBe("fail");
+        expect(item.warning).toBe(true);
+        expect(item.actualValue).toContain("③ L4/L5 关键特写");
+        expect(item.actualValue).toContain("L2");
+    });
+
+    it.each(["L4 特写", "L5 极特写"])("高潮镜景别为 %s 时三件套通过，且不受全局 L3 表演基调影响", (scale) => {
+        const report = runQualityCheck({
+            storyboardRows: [{ ...climaxRow, scale }],
+            shotContracts: [{ ...climaxContract, scale }],
+            actionContracts: [completeClimaxActionContract],
+            directingLock: { global: globalLock({ performanceLevel: "L3 自然" }) },
+        });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).toBe("pass");
+        expect(item.warning).toBe(false);
     });
 });
 

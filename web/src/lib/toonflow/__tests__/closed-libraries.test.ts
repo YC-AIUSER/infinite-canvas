@@ -10,6 +10,7 @@ import {
     DIRECTOR_STYLE_FILMING_TECHNIQUES,
     DIRECTOR_STYLE_FILM_GRAIN_HEAVY_PRESET,
     DIRECTOR_STYLE_LIBRARY,
+    DIRECTOR_TECHNIQUE_MAPPING_LIBRARY,
     EMPTY_SHOT_LIBRARY,
     HOOK_LIBRARY,
     isInLibrary,
@@ -21,6 +22,7 @@ import {
     PERFORMANCE_MICRO_LAYERS,
     renderLibraries,
     SHOT_SCALE_LIBRARY,
+    SPEED_FREEZE_LIBRARY,
 } from "../closed-libraries";
 
 describe("closed-libraries：逐库计数与源文件一致", () => {
@@ -75,6 +77,31 @@ describe("closed-libraries：逐库计数与源文件一致", () => {
     it("开场钩子：4 类", () => {
         expect(HOOK_LIBRARY).toHaveLength(4);
     });
+
+    it("P7 导演技法映射：9 类叙事目的；顿帧两式：2 条", () => {
+        expect(DIRECTOR_TECHNIQUE_MAPPING_LIBRARY).toHaveLength(9);
+        expect(SPEED_FREEZE_LIBRARY).toHaveLength(2);
+    });
+});
+
+describe("closed-libraries：P7 导演技法逐字对齐", () => {
+    it("具体技法名存在于对应叙事目的条目", () => {
+        const pressure = DIRECTOR_TECHNIQUE_MAPPING_LIBRARY.find((entry) => entry.name === "压迫/威胁/权力差");
+        const impact = DIRECTOR_TECHNIQUE_MAPPING_LIBRARY.find((entry) => entry.name === "速度/冲击/爽感");
+        expect(pressure?.keywords).toContain("窄门框限制");
+        expect(impact?.keywords).toContain("Crash Zoom");
+    });
+
+    it("Speed Ramp 四要素与顿帧两式英文模板逐字保留", () => {
+        const timeControl = DIRECTOR_TECHNIQUE_MAPPING_LIBRARY.find((entry) => entry.name === "时间操控/速度骤变");
+        expect(timeControl?.keywords).toContain("Speed Ramp（加速触发→顶点→慢放区间→收束停点四要素）");
+        expect(SPEED_FREEZE_LIBRARY[0].english).toBe(
+            "speed-freeze frame at the moment of [action], air compression ripples expand outward from the impact point, motion blur residual trails visible",
+        );
+        expect(SPEED_FREEZE_LIBRARY[1].english).toBe(
+            "impact freeze frame as [object] hits [target], shockwave rings radiate outward, material deformation visible (dent/crack/scatter), surrounding particles/droplets suspended mid-air for 1-2 frames",
+        );
+    });
 });
 
 describe("closed-libraries：源文件未收录独立定义的词条必须如实标注，不得杜撰", () => {
@@ -106,6 +133,8 @@ describe("closed-libraries：isInLibrary 校验封闭词库", () => {
         expect(isInLibrary("emptyShot", "A. 环境空镜")).toBe(true);
         expect(isInLibrary("directorStyle", "电影感写实")).toBe(true);
         expect(isInLibrary("hook", "强冲突")).toBe(true);
+        expect(isInLibrary("directorTechnique", "速度/冲击/爽感")).toBe(true);
+        expect(isInLibrary("speedFreeze", "Impact freeze（冲击定格）")).toBe(true);
     });
 
     it("自创词/架空措辞不在库内，返回 false", () => {

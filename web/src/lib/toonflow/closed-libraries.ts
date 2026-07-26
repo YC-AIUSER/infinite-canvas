@@ -1,7 +1,7 @@
 /**
  * 方法论源：D:\workspaces\ai-manga-workflow\.claude\skills\ai-short-drama-plus\references\05-closed-libraries.md
- * 同步日期：2026-07-21
- * 本文件是「分镜决策九大封闭命名词库」的逐字蒸馏版本；如与源文件冲突，以源文件为准。
+ * 同步日期：2026-07-26
+ * 本文件是「分镜决策封闭命名词库」的逐字蒸馏版本；如与源文件冲突，以源文件为准。
  *
  * 保真规则（阻断级，违反视为本文件失效）：
  * 1. 词条名称与原文定义关键词均逐字抄自源文件，禁止改写、精简、意译、补充。
@@ -10,7 +10,7 @@
  *    绝不允许杜撰关键词填充空白（源：05-closed-libraries.md「选取协议」阻断条件第 5 条）。
  */
 
-/** 九大封闭命名词库的类别标识——用于 isInLibrary / renderLibraries 按类取子集 */
+/** 封闭命名词库的类别标识——用于 isInLibrary / renderLibraries 按类取子集 */
 export type ClosedLibraryCategory =
     | "composition"
     | "lighting"
@@ -20,7 +20,9 @@ export type ClosedLibraryCategory =
     | "colorGrade"
     | "emptyShot"
     | "directorStyle"
-    | "hook";
+    | "hook"
+    | "directorTechnique"
+    | "speedFreeze";
 
 /**
  * 词库词条的统一形状。各库列结构不同，字段含义按库注释说明：
@@ -509,10 +511,79 @@ export const HOOK_LIBRARY: LibraryEntry[] = [
 // 信息钩已被源库移除：与"信息在冲突进程中自然释放"原则矛盾，改为在冲突对白/动作推进中自然嵌出，不作为独立钩子类型选取。
 
 // ============================================================
+// 10. P7 导演技法映射（源：05-closed-libraries.md §10，`分镜_02_导演逻辑.md` §1.2）
+// ============================================================
+
+/**
+ * 九类叙事目的 → 可逐字选取的导演技法。name 为叙事目的，keywords 为该目的下允许逐字抄取的技法名清单。
+ * 选取后必须执行 §1.3 转写：运镜写起点→方向→速度→停点；构图写主体区域/前景遮挡/留白/压迫线条；
+ * 灯光写主光方向/光质/阴影落点/色温；剪辑写切因/切向/新增信息；声音写来源/提前或延后/同点或反差。
+ */
+export const DIRECTOR_TECHNIQUE_MAPPING_LIBRARY: LibraryEntry[] = [
+    {
+        name: "压迫/威胁/权力差",
+        keywords: "低机位压迫 · 超近前景遮挡 · 高机位俯压 · 长焦压缩 · 窄门框限制 · 巨大负空间 · 逆光剪影 · 顶光硬阴影 · 低频声音先行 · 慢推近到停顿",
+    },
+    {
+        name: "揭示/悬念/信息延迟",
+        keywords: "遮挡揭示 · Rack Focus · 反射先行 · 影子先行 · 门缝视角 · 画外声先行 · 慢速 Pull-out · 局部先出现再完整",
+    },
+    {
+        name: "速度/冲击/爽感",
+        keywords: "Whip Pan · Crash Zoom · 方向接力 · 动作匹配 · 图形匹配 · 静止后突然加速 · 前景高速掠过 · 手持微抖 · 声画同点 · 节拍切片",
+    },
+    {
+        name: "心理/犹豫/不安",
+        keywords: "轻微 Handheld · 不稳定边缘 · 主体局部出画 · 焦点迟疑 · 反射错位 · 静音停顿 · 视线落空 · 负空间 · 缓推到急停",
+    },
+    {
+        name: "亲密/观察/纪实",
+        keywords: "Steadicam 贴身 · 浅景深呼吸感 · 肩后视角 · 手部微动作特写 · 自然侧逆光 · 低对比柔光 · 长镜头 · 声音保持真实距离",
+    },
+    {
+        name: "空间/调度/迁移",
+        keywords: "Crane 升降 · Tracking 平行跟移 · Orbit · 俯视调度图式 · 前中后景接力 · 门/走廊/楼梯阻力 · 主体与场景线条反向",
+    },
+    {
+        name: "产品/道具/证据",
+        keywords: "Macro · ECU · 材质反差 · 手部接触路径 · 可见承托 · 光线扫过边缘 · 标识短暂停留 · 动作前态→接触→反馈→后态",
+    },
+    {
+        name: "转场/段落连接",
+        keywords: "图形匹配 · 动作匹配 · 视线匹配 · 声音桥 · 明暗反差 · 颜色接力 · 方向接力 · 静动反差 · 空镜呼吸 · 结果镜头收束",
+    },
+    {
+        name: "时间操控/速度骤变",
+        keywords: "Speed Ramp（加速触发→顶点→慢放区间→收束停点四要素）· 慢动作突入 · 定格后加速 · 骤停",
+    },
+];
+
+/**
+ * 顿帧两式——嵌入 Speed Ramp「顶点」位使用；只用于 Module4 视频提示词，Module3 故事板仍禁残影/速度线。
+ * 源：05-closed-libraries.md §10「顿帧两式」（外部增补 2026-07-18，来源「我的电影Skill」）。
+ */
+export const SPEED_FREEZE_LIBRARY: LibraryEntry[] = [
+    {
+        name: "Speed-freeze（速度定格）",
+        keywords: "",
+        english: "speed-freeze frame at the moment of [action], air compression ripples expand outward from the impact point, motion blur residual trails visible",
+        usage: "嵌入 Speed Ramp「顶点」位使用；只用于 Module4 视频提示词，Module3 故事板仍禁残影/速度线",
+        note: "来源：外部参考「我的电影Skill」",
+    },
+    {
+        name: "Impact freeze（冲击定格）",
+        keywords: "",
+        english: "impact freeze frame as [object] hits [target], shockwave rings radiate outward, material deformation visible (dent/crack/scatter), surrounding particles/droplets suspended mid-air for 1-2 frames",
+        usage: "嵌入 Speed Ramp「顶点」位使用；只用于 Module4 视频提示词，Module3 故事板仍禁残影/速度线",
+        note: "来源：外部参考「我的电影Skill」",
+    },
+];
+
+// ============================================================
 // 校验与渲染工具
 // ============================================================
 
-/** 九大封闭命名词库——isInLibrary / renderLibraries 按 category 取用的唯一事实源 */
+/** 封闭命名词库——isInLibrary / renderLibraries 按 category 取用的唯一事实源 */
 const CANONICAL_LIBRARIES: Record<ClosedLibraryCategory, { label: string; entries: LibraryEntry[] }> = {
     composition: { label: "构图 8 策略", entries: COMPOSITION_LIBRARY },
     lighting: { label: "布光 10 方案", entries: LIGHTING_LIBRARY },
@@ -523,6 +594,8 @@ const CANONICAL_LIBRARIES: Record<ClosedLibraryCategory, { label: string; entrie
     emptyShot: { label: "空镜 A-E", entries: EMPTY_SHOT_LIBRARY },
     directorStyle: { label: "导演风格 9 种", entries: DIRECTOR_STYLE_LIBRARY },
     hook: { label: "开场钩子 4 类", entries: HOOK_LIBRARY },
+    directorTechnique: { label: "P7 导演技法映射（九类叙事目的）", entries: DIRECTOR_TECHNIQUE_MAPPING_LIBRARY },
+    speedFreeze: { label: "顿帧两式（仅 Module4）", entries: SPEED_FREEZE_LIBRARY },
 };
 
 /** 校验某个词是否在指定封闭词库内——供检查器判断模型选词是否越出封闭集使用 */
@@ -541,7 +614,10 @@ export function renderLibraries(categories: ClosedLibraryCategory[]): string {
         .map((category) => {
             const { label, entries } = CANONICAL_LIBRARIES[category];
             const lines = entries.map((entry) => {
-                const definition = entry.keywords || entry.note || "（源无独立定义）";
+                const definition =
+                    category === "speedFreeze"
+                        ? [entry.english, entry.usage].filter(Boolean).join("；")
+                        : entry.keywords || entry.note || "（源无独立定义）";
                 return `- ${entry.name}：${definition}`;
             });
             return `【${label}】\n${lines.join("\n")}`;

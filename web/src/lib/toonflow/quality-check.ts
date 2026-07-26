@@ -34,7 +34,7 @@
  */
 import type { ClosedLibraryCategory } from "./closed-libraries";
 import { COMPOSITION_FORMULA_LIBRARY, isInLibrary } from "./closed-libraries";
-import type { DirectingLock, DirectingLockSegment, ShotContract, StoryboardRow } from "./schema";
+import type { ActionContract, DirectingLock, DirectingLockSegment, ShotContract, StoryboardRow } from "./schema";
 import { groupRowsBySegment } from "./segments";
 
 export type QualityCheckKind =
@@ -48,6 +48,7 @@ export type QualityCheckKind =
     | "compositionConsecutiveRepeat"
     | "centeredSymmetricRatio"
     | "closedLibraryCompliance"
+    | "climaxTrio"
     | "cellCountMatch";
 
 export type QualityCheckStatus = "pass" | "fail" | "unknown";
@@ -70,6 +71,8 @@ export interface QualityCheckItem {
     expectedValue: string;
     /** 中文说明；status 为 unknown 时说明无法判定的原因，不表达"不通过" */
     reason: string;
+    /** warning 级提示只做报告与定点修入口，不阻断生成、不返回 error；目前高潮镜三件套使用此标记 */
+    warning?: boolean;
 }
 
 export interface QualityCheckReport {
@@ -84,6 +87,8 @@ export interface QualityCheckInput {
     shotContracts?: ShotContract[];
     /** 分镜决策锁定表，来自 directing-lock 节点产物；构图相关三项与部分封闭词库合规检查依赖此项 */
     directingLock?: DirectingLock;
+    /** 动作合同，来自 action-contract 节点产物；高潮镜三件套会与分镜行、镜头合同合并判定 */
+    actionContracts?: ActionContract[];
     /**
      * 各段故事板格子数，key 为 segmentId，value 为该段故事板页实际画格数量。
      * 本模块不解析图片、不读文件，由调用方从 storyboard-page 节点产物统计后传入。
@@ -102,6 +107,7 @@ const CHECK_LABELS: Record<QualityCheckKind, string> = {
     compositionConsecutiveRepeat: "同构图连续",
     centeredSymmetricRatio: "居中对称占比",
     closedLibraryCompliance: "封闭词库合规",
+    climaxTrio: "高潮镜三件套",
     cellCountMatch: "格子数一致",
 };
 
@@ -861,6 +867,161 @@ function checkClosedLibraryCompliance(shotContracts?: ShotContract[], directingL
     ];
 }
 
+// 高潮/爆点镜按既有字段保守推断，不新增用户手填字段：动作/情绪/动作合同出现爆点语义，
+// 或情绪值达到 8/10（80/100），或镜头合同明确使用 Speed Ramp，均视为候选高潮镜。
+const CLIMAX_PATTERN = /冲突爆点|爆点|高潮|变身|冲锋|冲刺|突进|冲撞|反杀|绝杀|决战|爆发点|情绪爆发/;
+const WEAK_PERFORMANCE_PATTERN = /微微|略微|轻微|稍微|轻轻|微幅|小幅/;
+const PERFORMANCE_BODY_PARTS: Array<{ label: string; pattern: RegExp }> = [
+    { label: "头部", pattern: /头部|抬头|低头|偏头|转头|下颌|脸|眼|眉|瞳孔/ },
+    { label: "肩背", pattern: /肩背|肩膀|双肩|脊背|后背/ },
+    { label: "手部", pattern: /手部|手掌|手指|双手|拳|掌|指节/ },
+    { label: "身形", pattern: /身形|上半身|躯干|身体|腰腹|重心/ },
+    { label: "身段", pattern: /身段|全身|步态|姿态|气质/ },
+];
+const PERFORMANCE_PARAMETER_PATTERN = /\d+(?:\.\d+)?\s*(?:度|cm|厘米|步|秒|帧|%|倍)|全力|极限|最大|猛烈|猛然|骤然|死死|强力|大幅|快速|急速|用力/;
+const SPEED_RAMP_ELEMENTS = ["加速触发", "顶点", "慢放区间", "收束停点"] as const;
+
+function hasHighEmotionValue(mood: string): boolean {
+    const tenPoint = mood.match(/(?:情绪(?:强度|值)?\s*[:：=]?\s*)?(10|[0-9])\s*\/\s*10/);
+    if (tenPoint && Number(tenPoint[1]) >= 8) return true;
+    const hundredPoint = mood.match(/(?:情绪(?:强度|值)?\s*[:：=]?\s*)?(100|[0-9]{1,2})\s*\/\s*100/);
+    return Boolean(hundredPoint && Number(hundredPoint[1]) >= 80);
+}
+
+function actionContractText(contract?: ActionContract): string {
+    return contract ? [contract.cause, contract.process, contract.consequence, contract.endState].join("；") : "";
+}
+
+function shotContractText(contract?: ShotContract): string {
+    return contract ? [contract.scale, contract.angle, contract.movement, contract.speed, contract.subjectRelation, contract.endpoint].join("；") : "";
+}
+
+type ClimaxTrioEvidence = { status: QualityCheckStatus; label: string; detail: string };
+
+function checkClimaxPerformance(text: string): ClimaxTrioEvidence {
+    if (WEAK_PERFORMANCE_PATTERN.test(text)) {
+        return { status: "fail", label: "① L5 五部位满力度编码", detail: "该镜字段含微微/略微/轻微等弱词" };
+    }
+
+    const explicitLevel = text.match(/(?:表演(?:档位|强度)?\s*[:：=]?\s*)?(L[1-5])\b/i)?.[1]?.toUpperCase();
+    if (explicitLevel && explicitLevel !== "L5") {
+        return { status: "fail", label: "① L5 五部位满力度编码", detail: `该镜字段明确写为 ${explicitLevel}` };
+    }
+
+    const parameterizedParts = PERFORMANCE_BODY_PARTS.filter((part) =>
+        text
+            .split(/[；;\n]/)
+            .some((segment) => part.pattern.test(segment) && PERFORMANCE_PARAMETER_PATTERN.test(segment)),
+    );
+    if (explicitLevel === "L5" && parameterizedParts.length === PERFORMANCE_BODY_PARTS.length) {
+        return { status: "pass", label: "① L5 五部位满力度编码", detail: "该镜明确写出 L5，且头部/肩背/手部/身形/身段均带参数" };
+    }
+
+    return {
+        status: "unknown",
+        label: "① L5 五部位满力度编码",
+        detail: "该镜字段未同时明确写出 L5 与五部位参数，且没有发现低档位或弱词等反证",
+    };
+}
+
+function checkClimaxSpeedRamp(text: string): ClimaxTrioEvidence {
+    if (!/Speed\s*Ramp/i.test(text)) {
+        return { status: "unknown", label: "② Speed Ramp 四要素", detail: "该镜字段未明确写出 Speed Ramp，需人工确认节奏设计" };
+    }
+
+    const missingElements = SPEED_RAMP_ELEMENTS.filter((element) => !text.includes(element));
+    return missingElements.length === 0
+        ? { status: "pass", label: "② Speed Ramp 四要素", detail: "加速触发、顶点、慢放区间、收束停点齐全" }
+        : { status: "fail", label: "② Speed Ramp 四要素", detail: `已写 Speed Ramp，但缺 ${missingElements.join("、")}` };
+}
+
+function checkClimaxScale(rowScale: string, contractScale?: string): ClimaxTrioEvidence {
+    const levels = [extractShotScaleLevel(rowScale), contractScale ? extractShotScaleLevel(contractScale) : null].filter(
+        (level): level is number => level !== null,
+    );
+    if (levels.length === 0) {
+        return { status: "unknown", label: "③ L4/L5 关键特写", detail: "分镜表与镜头合同均没有可解析的 L0-L5 景别" };
+    }
+
+    const invalidLevels = [...new Set(levels.filter((level) => level !== 4 && level !== 5))];
+    return invalidLevels.length === 0
+        ? { status: "pass", label: "③ L4/L5 关键特写", detail: `结构化景别为 ${[...new Set(levels)].map((level) => `L${level}`).join("/")}` }
+        : { status: "fail", label: "③ L4/L5 关键特写", detail: `结构化景别出现 ${invalidLevels.map((level) => `L${level}`).join("/")}` };
+}
+
+/**
+ * 高潮/爆点镜三件套（SKILL.md 铁律 10）：① L5 五部位满力度编码 ② Speed Ramp 四要素
+ * ③ L4/L5 关键特写。按 D4 决策只产出 warning，不阻断生成、不返回 error。
+ */
+function checkClimaxTrio(
+    rowsBySegment: Map<string, StoryboardRow[]>,
+    shotContracts?: ShotContract[],
+    actionContracts?: ActionContract[],
+): QualityCheckItem[] {
+    const kind: QualityCheckKind = "climaxTrio";
+    const expectedValue = "L5 五部位满力度编码 + Speed Ramp（加速触发→顶点→慢放区间→收束停点）+ L4/L5 关键特写";
+    if (rowsBySegment.size === 0) {
+        return [makeItem({ kind, status: "unknown", shotIds: [], actualValue: "无分镜表数据", expectedValue, reason: "分镜表为空，无法推断高潮/爆点镜。" })];
+    }
+
+    const shotContractById = new Map((shotContracts ?? []).map((contract) => [contract.shotId, contract]));
+    const actionContractById = new Map((actionContracts ?? []).map((contract) => [contract.shotId, contract]));
+    const climaxRows = [...rowsBySegment.values()].flat().filter((row) => {
+        const actionText = actionContractText(actionContractById.get(row.shotId));
+        const shotText = shotContractText(shotContractById.get(row.shotId));
+        return CLIMAX_PATTERN.test(`${row.action}；${row.mood}；${actionText}`) || hasHighEmotionValue(row.mood) || /Speed\s*Ramp/i.test(shotText);
+    });
+
+    if (climaxRows.length === 0) {
+        return [
+            makeItem({
+                kind,
+                status: "pass",
+                shotIds: [],
+                actualValue: "未识别到高潮/爆点镜",
+                expectedValue,
+                reason: "现有动作、情绪值与镜头/动作合同未触发高潮镜判定，无需检查三件套。",
+            }),
+        ];
+    }
+
+    return climaxRows.map((row) => {
+        const shotContract = shotContractById.get(row.shotId);
+        const actionContract = actionContractById.get(row.shotId);
+        const performanceText = [row.action, row.mood, actionContractText(actionContract)].join("；");
+        const fullText = [performanceText, shotContractText(shotContract)].join("；");
+        const evidence = [checkClimaxPerformance(performanceText), checkClimaxSpeedRamp(fullText), checkClimaxScale(row.scale, shotContract?.scale)];
+        const failed = evidence.filter((item) => item.status === "fail");
+        const unknown = evidence.filter((item) => item.status === "unknown");
+        const status: QualityCheckStatus = failed.length > 0 ? "fail" : unknown.length > 0 ? "unknown" : "pass";
+        const actualValue =
+            status === "pass"
+                ? "三件套齐全"
+                : [
+                      failed.length > 0 ? `不符合：${failed.map((item) => `${item.label}（${item.detail}）`).join("；")}` : "",
+                      unknown.length > 0 ? `需人工确认：${unknown.map((item) => `${item.label}（${item.detail}）`).join("；")}` : "",
+                  ]
+                      .filter(Boolean)
+                      .join("；");
+
+        return makeItem({
+            kind,
+            status,
+            warning: status === "fail",
+            segmentId: row.segmentId,
+            shotIds: [row.shotId],
+            actualValue,
+            expectedValue,
+            reason:
+                status === "fail"
+                    ? `镜头 ${row.shotId} 被镜级字段推断为高潮或爆点镜，且存在三件套的明确反证。这是 warning 级提示，不阻断生成、不返回 error；请按 shotId 定点补齐。`
+                    : status === "unknown"
+                      ? `镜头 ${row.shotId} 被镜级字段推断为高潮或爆点镜，但现有字段不足以机械确认三件套，也没有明确反证，需人工确认。`
+                      : `镜头 ${row.shotId} 的高潮镜三件套齐全。`,
+        });
+    });
+}
+
 /**
  * 格子数一致（段内，分镜表行数 = 故事板格子数）。设计文档 §4.5，解 TODOS 遗留的格子数校验需求。
  */
@@ -936,6 +1097,7 @@ export function runQualityCheck(input: QualityCheckInput): QualityCheckReport {
         ...checkCompositionConsecutiveRepeat(rowsBySegment, input.directingLock),
         ...checkCenteredSymmetricRatio(rowsBySegment, input.directingLock),
         ...checkClosedLibraryCompliance(input.shotContracts, input.directingLock),
+        ...checkClimaxTrio(rowsBySegment, input.shotContracts, input.actionContracts),
         ...checkCellCountMatch(rowsBySegment, input.storyboardPageCellCounts),
     ];
 

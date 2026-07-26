@@ -6,7 +6,7 @@ import { z } from "zod";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { runQualityCheck, type QualityCheckItem } from "@/lib/toonflow/quality-check";
 import { buildRepairPlan, canApproveSegment, emptyQualityReview, evaluateRepairCostGate, QUALITY_REVIEW_LABELS, REPAIR_METHOD_LABELS, segmentApprovalBlockReason, setRepairMethod } from "@/lib/toonflow/node-runtime";
-import { parseModelJson, REPAIR_METHODS, ShotContractSchema, type DubbingTrack, type QualityReview, type RepairPlanItem, type StoryboardRow } from "@/lib/toonflow/schema";
+import { ActionContractSchema, parseModelJson, REPAIR_METHODS, ShotContractSchema, type DubbingTrack, type QualityReview, type RepairPlanItem, type StoryboardRow } from "@/lib/toonflow/schema";
 import { resolveStreamPreview, type ToonflowStreamPreview } from "@/lib/toonflow/streaming";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl } from "@/services/image-storage";
@@ -146,6 +146,7 @@ function InstanceVideo({ storageKey, name, background, borderColor }: { storageK
 }
 
 const ShotContractListSchema = z.array(ShotContractSchema);
+const ActionContractListSchema = z.array(ActionContractSchema);
 
 /** 在画布工程里找到该节点所在的那份节点列表（节点状态由 project 页同步进 store，这里只读不写）。 */
 function findSiblingNodes(projects: Array<{ nodes: CanvasNodeData[] }>, nodeId: string): CanvasNodeData[] | undefined {
@@ -158,16 +159,23 @@ function findToonflowNode(projects: Array<{ nodes: CanvasNodeData[] }>, nodeId: 
 
 /**
  * 分镜表节点上的质量检查：检查器是纯函数、输入全在画布节点里，所以渲染时实时算，
- * 不落库、不进 schema。selector 只取镜头合同文本与锁定表两个引用，画布其它改动不会触发重算。
+ * 不落库、不进 schema。selector 只取镜头/动作合同文本与锁定表三个引用，画布其它改动不会触发重算。
  */
 function StoryboardQualityCheck({ nodeId, rows, background, onDiversityRepair }: { nodeId: string; rows: StoryboardRow[]; background: string; onDiversityRepair?: (nodeId: string, failedItems: QualityCheckItem[]) => void }) {
     const shotContractText = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "shot-contract")?.output?.payload.text);
+    const actionContractText = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "action-contract")?.output?.payload.text);
     const directingLock = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "directing-lock")?.output?.payload.directingLock);
     const report = useMemo(() => {
-        const parsed = shotContractText?.trim() ? parseModelJson(ShotContractListSchema, shotContractText) : null;
+        const parsedShotContracts = shotContractText?.trim() ? parseModelJson(ShotContractListSchema, shotContractText) : null;
+        const parsedActionContracts = actionContractText?.trim() ? parseModelJson(ActionContractListSchema, actionContractText) : null;
         // 故事板格子数无法从节点数据里读出（要数图上的画格），不传：检查器会把「格子数一致」标成待定，而不是误报不达标。
-        return runQualityCheck({ storyboardRows: rows, shotContracts: parsed?.ok ? parsed.data : undefined, directingLock });
-    }, [rows, shotContractText, directingLock]);
+        return runQualityCheck({
+            storyboardRows: rows,
+            shotContracts: parsedShotContracts?.ok ? parsedShotContracts.data : undefined,
+            actionContracts: parsedActionContracts?.ok ? parsedActionContracts.data : undefined,
+            directingLock,
+        });
+    }, [rows, shotContractText, actionContractText, directingLock]);
 
     return <ToonflowQualityCheckPanel report={report} background={background} onRepair={onDiversityRepair ? (failedItems) => onDiversityRepair(nodeId, failedItems) : undefined} />;
 }
