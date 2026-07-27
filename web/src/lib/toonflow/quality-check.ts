@@ -33,7 +33,7 @@
  * 纯函数：不读文件、不调网络、不依赖 React；输入输出均为普通数据结构。
  */
 import type { ClosedLibraryCategory } from "./closed-libraries";
-import { COMPOSITION_FORMULA_LIBRARY, isInLibrary } from "./closed-libraries";
+import { COMPOSITION_FORMULA_LIBRARY, isInLibrary, isTechniqueInPurpose } from "./closed-libraries";
 import type { ActionContract, DirectingLock, DirectingLockSegment, ShotContract, StoryboardRow } from "./schema";
 import { groupRowsBySegment } from "./segments";
 
@@ -48,6 +48,7 @@ export type QualityCheckKind =
     | "compositionConsecutiveRepeat"
     | "centeredSymmetricRatio"
     | "closedLibraryCompliance"
+    | "p7Decision"
     | "climaxTrio"
     | "cellCountMatch";
 
@@ -71,7 +72,7 @@ export interface QualityCheckItem {
     expectedValue: string;
     /** 中文说明；status 为 unknown 时说明无法判定的原因，不表达"不通过" */
     reason: string;
-    /** warning 级提示只做报告与定点修入口，不阻断生成、不返回 error；目前高潮镜三件套使用此标记 */
+    /** warning 级提示只做报告与定点修入口，不阻断生成、不返回 error */
     warning?: boolean;
 }
 
@@ -107,6 +108,7 @@ const CHECK_LABELS: Record<QualityCheckKind, string> = {
     compositionConsecutiveRepeat: "同构图连续",
     centeredSymmetricRatio: "居中对称占比",
     closedLibraryCompliance: "封闭词库合规",
+    p7Decision: "P7 导演技法决策",
     climaxTrio: "高潮镜三件套",
     cellCountMatch: "格子数一致",
 };
@@ -867,6 +869,82 @@ function checkClosedLibraryCompliance(shotContracts?: ShotContract[], directingL
     ];
 }
 
+const P7_VAGUE_TRANSCRIPTION_PATTERN = /综合考虑|灵活运用|配合[^，。；;\n]{0,20}技法|强化[^，。；;\n]{0,20}效果/;
+
+/** P7 导演技法映射（段级）：旧产物缺失时只标 unknown，明确违反阻断条件时只做 warning 提示。 */
+function checkP7Decision(rowsBySegment: Map<string, StoryboardRow[]>): QualityCheckItem[] {
+    const kind: QualityCheckKind = "p7Decision";
+    const expectedValue = "主目的命中九类；技法 ≥2（有辅目的时 ≥3）且属于主辅目的行；依据与可执行转写完整";
+
+    if (rowsBySegment.size === 0) {
+        return [makeItem({ kind, status: "unknown", shotIds: [], actualValue: "无分镜表数据", expectedValue, reason: "分镜表为空，无法核对 P7 决策。" })];
+    }
+
+    return [...rowsBySegment.entries()].map(([segmentId, rows]) => {
+        const carryingRow = rows.find((row) => row.p7);
+        if (!carryingRow?.p7) {
+            return makeItem({
+                kind,
+                status: "unknown",
+                segmentId,
+                shotIds: rows.map((row) => row.shotId),
+                actualValue: "该段未提供 p7",
+                expectedValue,
+                reason: `段 ${segmentId} 没有任何分镜行携带 p7；旧产物或模型未提供时只提示，不能据此判定不通过。`,
+            });
+        }
+
+        const decision = carryingRow.p7;
+        const primaryPurpose = decision.primaryPurpose.trim();
+        const secondaryPurpose = decision.secondaryPurpose?.trim() || undefined;
+        const techniques = decision.techniques.map((technique) => technique.trim()).filter(Boolean);
+        const minimumTechniqueCount = secondaryPurpose ? 3 : 2;
+        const violations: string[] = [];
+
+        if (!primaryPurpose) {
+            violations.push("主目的为空");
+        } else if (!isInLibrary("directorTechnique", primaryPurpose)) {
+            violations.push(`主目的「${primaryPurpose}」不在九类叙事目的内`);
+        }
+
+        if (techniques.length < minimumTechniqueCount) {
+            violations.push(`技法数为 ${techniques.length}，${secondaryPurpose ? "有辅目的时" : "无辅目的时"}至少需要 ${minimumTechniqueCount} 个`);
+        }
+
+        const invalidTechniques = [...new Set(techniques.filter((technique) => {
+            return !isTechniqueInPurpose(primaryPurpose, technique) && !(secondaryPurpose && isTechniqueInPurpose(secondaryPurpose, technique));
+        }))];
+        if (invalidTechniques.length > 0) {
+            violations.push(`技法名不属于主目的${secondaryPurpose ? "或辅目的" : ""}原文行：${invalidTechniques.map((technique) => `「${technique}」`).join("、")}`);
+        }
+
+        if (!decision.basis.trim()) violations.push("剧本依据 basis 为空");
+        const transcription = decision.transcription.trim();
+        if (!transcription) {
+            violations.push("可执行转写 transcription 为空");
+        } else {
+            const vaguePhrase = transcription.match(P7_VAGUE_TRANSCRIPTION_PATTERN)?.[0];
+            if (vaguePhrase) violations.push(`可执行转写含架空措辞「${vaguePhrase}」`);
+        }
+
+        const pass = violations.length === 0;
+        return makeItem({
+            kind,
+            status: pass ? "pass" : "fail",
+            warning: !pass,
+            segmentId,
+            shotIds: [carryingRow.shotId],
+            actualValue: pass
+                ? `${primaryPurpose}${secondaryPurpose ? ` + ${secondaryPurpose}` : ""}；${techniques.length} 个技法`
+                : `${violations.length} 项问题`,
+            expectedValue,
+            reason: pass
+                ? `段 ${segmentId} 的 P7 主目的、技法归属、剧本依据与可执行转写均符合要求。`
+                : `${violations.join("；")}。这是 warning 级提示，不阻断生成、不返回 error。`,
+        });
+    });
+}
+
 // mood 的固定前缀是高潮镜主判据；动作关键词只是辅助证据，必须再有高情绪值或镜头合同 Speed Ramp 才能升级为候选。
 const CLIMAX_MOOD_PREFIX_PATTERN = /^\s*高潮\s*[\/／]\s*爆点镜/;
 const CLIMAX_PATTERN = /冲突爆点|爆点|高潮|变身|冲锋|冲刺|突进|冲撞|反杀|绝杀|决战|爆发点|情绪爆发/;
@@ -1113,6 +1191,7 @@ export function runQualityCheck(input: QualityCheckInput): QualityCheckReport {
         ...checkCompositionConsecutiveRepeat(rowsBySegment, input.directingLock),
         ...checkCenteredSymmetricRatio(rowsBySegment, input.directingLock),
         ...checkClosedLibraryCompliance(input.shotContracts, input.directingLock),
+        ...checkP7Decision(rowsBySegment),
         ...checkClimaxTrio(rowsBySegment, input.shotContracts, input.actionContracts),
         ...checkCellCountMatch(rowsBySegment, input.storyboardPageCellCounts),
     ];

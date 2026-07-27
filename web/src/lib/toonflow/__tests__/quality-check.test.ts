@@ -45,6 +45,16 @@ function actionContract(overrides: Partial<ActionContract> = {}): ActionContract
     };
 }
 
+function p7(overrides: Partial<NonNullable<StoryboardRow["p7"]>> = {}): NonNullable<StoryboardRow["p7"]> {
+    return {
+        primaryPurpose: "速度/冲击/爽感",
+        basis: "她冲出门口，险些撞上迎面驶来的车。",
+        techniques: ["Crash Zoom", "Whip Pan"],
+        transcription: "从门内中景起，向右急甩，在车头切入画面时停住；撞击声与车头入画同点。",
+        ...overrides,
+    };
+}
+
 function segmentLock(overrides: Partial<DirectingLockSegment> = {}): DirectingLockSegment {
     return {
         segmentId: "seg-1",
@@ -80,10 +90,10 @@ function itemsOf(items: QualityCheckItem[], kind: QualityCheckKind): QualityChec
 describe("runQualityCheck：全部达标", () => {
     it("两段各三镜、运镜/景别/角度/构图/格子数全部满足要求时，全部检查项通过", () => {
         const rows: StoryboardRow[] = [
-            row({ segmentId: "seg1", shotId: "shot1", shotNo: 1, scale: "L0 大远景/建立", angle: "平视" }),
+            row({ segmentId: "seg1", shotId: "shot1", shotNo: 1, scale: "L0 大远景/建立", angle: "平视", p7: p7() }),
             row({ segmentId: "seg1", shotId: "shot2", shotNo: 2, scale: "L2 中景/中全景", angle: "仰视" }),
             row({ segmentId: "seg1", shotId: "shot3", shotNo: 3, scale: "L5 极特写/微距", angle: "俯视" }),
-            row({ segmentId: "seg2", shotId: "shot4", shotNo: 1, scale: "L1 远景/全景", angle: "平视" }),
+            row({ segmentId: "seg2", shotId: "shot4", shotNo: 1, scale: "L1 远景/全景", angle: "平视", p7: p7() }),
             row({ segmentId: "seg2", shotId: "shot5", shotNo: 2, scale: "L3 近景/中近景", angle: "俯视" }),
             row({ segmentId: "seg2", shotId: "shot6", shotNo: 3, scale: "L5 极特写/微距", angle: "仰视" }),
         ];
@@ -299,6 +309,57 @@ describe("runQualityCheck：封闭词库合规", () => {
         expect(item.status).toBe("fail");
         expect(item.shotIds).toContain("shotC1");
         expect(item.reason).toContain("综合运用推拉摇移");
+    });
+});
+
+describe("runQualityCheck：P7 导演技法决策", () => {
+    it("旧产物不带 p7 时判 unknown，不判 fail", () => {
+        const report = runQualityCheck({ storyboardRows: [row()] });
+        const [item] = itemsOf(report.items, "p7Decision");
+
+        expect(item.status).toBe("unknown");
+        expect(report.summary.failed).toBe(0);
+    });
+
+    it("自创技法名判 fail，并在提示中点出原名", () => {
+        const report = runQualityCheck({ storyboardRows: [row({ p7: p7({ techniques: ["Crash Zoom", "超级推镜"] }) })] });
+        const [item] = itemsOf(report.items, "p7Decision");
+
+        expect(item.status).toBe("fail");
+        expect(item.warning).toBe(true);
+        expect(item.reason).toContain("超级推镜");
+        expect(item).not.toHaveProperty("blocking");
+        expect(item).not.toHaveProperty("error");
+    });
+
+    it("有辅目的时 2 个技法判 fail，3 个且归属主辅目的行时通过", () => {
+        const twoTechniques = runQualityCheck({
+            storyboardRows: [row({ p7: p7({ secondaryPurpose: "转场/段落连接" }) })],
+        });
+        const threeTechniques = runQualityCheck({
+            storyboardRows: [row({ p7: p7({ secondaryPurpose: "转场/段落连接", techniques: ["Crash Zoom", "Whip Pan", "声音桥"] }) })],
+        });
+
+        expect(itemsOf(twoTechniques.items, "p7Decision")[0].status).toBe("fail");
+        expect(itemsOf(twoTechniques.items, "p7Decision")[0].reason).toContain("至少需要 3 个");
+        expect(itemsOf(threeTechniques.items, "p7Decision")[0].status).toBe("pass");
+    });
+
+    it("转写含“综合考虑”时判 fail", () => {
+        const report = runQualityCheck({ storyboardRows: [row({ p7: p7({ transcription: "综合考虑画面节奏，强化冲击感。" }) })] });
+        const [item] = itemsOf(report.items, "p7Decision");
+
+        expect(item.status).toBe("fail");
+        expect(item.reason).toContain("综合考虑");
+    });
+
+    it("主目的越出九类或依据为空时判 fail", () => {
+        const report = runQualityCheck({ storyboardRows: [row({ p7: p7({ primaryPurpose: "制造大片感", basis: "" }) })] });
+        const [item] = itemsOf(report.items, "p7Decision");
+
+        expect(item.status).toBe("fail");
+        expect(item.reason).toContain("制造大片感");
+        expect(item.reason).toContain("basis 为空");
     });
 });
 

@@ -14,6 +14,7 @@ import {
     EMPTY_SHOT_LIBRARY,
     HOOK_LIBRARY,
     isInLibrary,
+    isTechniqueInPurpose,
     LIGHTING_FORMULA_LIBRARY,
     LIGHTING_LIBRARY,
     PERFORMANCE_BODY_PART_CODING,
@@ -23,6 +24,7 @@ import {
     renderLibraries,
     SHOT_SCALE_LIBRARY,
     SPEED_FREEZE_LIBRARY,
+    techniquesForPurpose,
 } from "../closed-libraries";
 
 describe("closed-libraries：逐库计数与源文件一致", () => {
@@ -90,6 +92,31 @@ describe("closed-libraries：P7 导演技法逐字对齐", () => {
         const impact = DIRECTOR_TECHNIQUE_MAPPING_LIBRARY.find((entry) => entry.name === "速度/冲击/爽感");
         expect(pressure?.keywords).toContain("窄门框限制");
         expect(impact?.keywords).toContain("Crash Zoom");
+    });
+
+    it("按叙事目的拆出具体技法，并拒绝跨目的混用", () => {
+        expect(techniquesForPurpose("速度/冲击/爽感")).toContain("Crash Zoom");
+        expect(isTechniqueInPurpose("速度/冲击/爽感", "Crash Zoom")).toBe(true);
+        expect(isTechniqueInPurpose("速度/冲击/爽感", "窄门框限制")).toBe(false);
+    });
+
+    // 时间操控行的「…收束停点四要素）· 慢动作突入」中点前没有空格,按固定 " · " 切会把两项粘成一项,
+    // 模型逐字选「慢动作突入」反被判成自创技法。九行数量逐行锁死,防止分隔符再退化。
+    it("九类技法逐行切分数量与源表一致，含分隔符异常的时间操控行", () => {
+        const counts = DIRECTOR_TECHNIQUE_MAPPING_LIBRARY.map((entry) => [entry.name, techniquesForPurpose(entry.name).length]);
+        expect(counts).toEqual([
+            ["压迫/威胁/权力差", 10],
+            ["揭示/悬念/信息延迟", 8],
+            ["速度/冲击/爽感", 10],
+            ["心理/犹豫/不安", 9],
+            ["亲密/观察/纪实", 8],
+            ["空间/调度/迁移", 7],
+            ["产品/道具/证据", 8],
+            ["转场/段落连接", 10],
+            ["时间操控/速度骤变", 4],
+        ]);
+        expect(isTechniqueInPurpose("时间操控/速度骤变", "慢动作突入")).toBe(true);
+        expect(isTechniqueInPurpose("时间操控/速度骤变", "Speed Ramp（加速触发→顶点→慢放区间→收束停点四要素）")).toBe(true);
     });
 
     it("Speed Ramp 四要素与顿帧两式英文模板逐字保留", () => {

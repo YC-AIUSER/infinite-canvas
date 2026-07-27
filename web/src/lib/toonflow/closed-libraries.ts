@@ -558,6 +558,24 @@ export const DIRECTOR_TECHNIQUE_MAPPING_LIBRARY: LibraryEntry[] = [
     },
 ];
 
+/** 从逐字保真的 keywords 派生目的 → 具体技法名数组，不修改原字符串事实源。 */
+// 分隔符按「中点两侧空格可有可无」切：源表大多写作 " · ",但「…收束停点四要素）· 慢动作突入」
+// 这处中点前没有空格,按固定 " · " 切会把两个技法粘成一个,模型逐字选「慢动作突入」反被判成自创。
+const DIRECTOR_TECHNIQUES_BY_PURPOSE = new Map(
+    DIRECTOR_TECHNIQUE_MAPPING_LIBRARY.map((entry) => [entry.name, entry.keywords.split(/\s*·\s*/).map((technique) => technique.trim()).filter(Boolean)]),
+);
+
+/** 取某个叙事目的原文行内允许逐字选取的具体技法名。 */
+export function techniquesForPurpose(purpose: string): string[] {
+    return [...(DIRECTOR_TECHNIQUES_BY_PURPOSE.get(purpose.trim()) ?? [])];
+}
+
+/** 校验具体技法名是否逐字属于指定叙事目的行。 */
+export function isTechniqueInPurpose(purpose: string, technique: string): boolean {
+    const target = technique.trim();
+    return Boolean(target && techniquesForPurpose(purpose).includes(target));
+}
+
 /**
  * 顿帧两式——嵌入 Speed Ramp「顶点」位使用；只用于 Module4 视频提示词，Module3 故事板仍禁残影/速度线。
  * 源：05-closed-libraries.md §10「顿帧两式」（外部增补 2026-07-18，来源「我的电影Skill」）。

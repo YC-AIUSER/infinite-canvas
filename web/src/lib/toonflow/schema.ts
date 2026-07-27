@@ -78,6 +78,16 @@ export const StoryboardRowSchema = z.object({
     mood: z.string(), // 情绪
     durationSec: z.number(),
     assetSlots: z.array(z.string()).optional(),
+    // P7 是段级决策：只由每段 shotNo 最小的首行携带；旧画布与同段其余行均可缺省。
+    p7: z
+        .object({
+            primaryPurpose: z.string(),
+            secondaryPurpose: z.string().optional(),
+            basis: z.string(),
+            techniques: z.array(z.string()),
+            transcription: z.string(),
+        })
+        .optional(),
 });
 
 export type StoryboardRow = z.infer<typeof StoryboardRowSchema>;

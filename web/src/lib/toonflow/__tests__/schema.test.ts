@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { MediaKeySchema, NodeOutputSchema, migrateToonflowStatus, parseModelJson } from "../schema";
+import { MediaKeySchema, NodeOutputSchema, StoryboardRowSchema, migrateToonflowStatus, parseModelJson } from "../schema";
 
 describe("migrateToonflowStatus", () => {
     it.each([
@@ -79,6 +79,43 @@ describe("MediaKeySchema", () => {
 
     it("拒绝 data: 开头的内容", () => {
         expect(MediaKeySchema.safeParse("data:image/png;base64,AAAA").success).toBe(false);
+    });
+});
+
+describe("StoryboardRowSchema", () => {
+    const oldRow = {
+        segmentId: "seg-1",
+        shotId: "shot-1",
+        shotNo: 1,
+        scale: "L2 中景/中全景",
+        angle: "平视",
+        action: "角色抬手",
+        line: "",
+        sfx: "环境声",
+        mood: "平静",
+        durationSec: 3,
+        assetSlots: [],
+    };
+
+    it("旧产物不带 p7 仍能正常解析", () => {
+        const result = StoryboardRowSchema.safeParse(oldRow);
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.data.p7).toBeUndefined();
+    });
+
+    it("段首行可以携带五键 p7 决策", () => {
+        expect(
+            StoryboardRowSchema.safeParse({
+                ...oldRow,
+                p7: {
+                    primaryPurpose: "速度/冲击/爽感",
+                    secondaryPurpose: "转场/段落连接",
+                    basis: "她冲出门口，险些撞上迎面驶来的车。",
+                    techniques: ["Crash Zoom", "Whip Pan", "方向接力"],
+                    transcription: "从门内中景起，向右急甩，在车头切入画面时停住。",
+                },
+            }).success,
+        ).toBe(true);
     });
 });
 

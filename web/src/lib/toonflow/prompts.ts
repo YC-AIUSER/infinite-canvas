@@ -245,7 +245,16 @@ P5 相邻段接缝（非首段必做）：写清上段尾镜的景别、内容�
 【台词类型标注（台词已从视频剥离、独立成配音轨）】
 line 字段写成 “出口对白-{角色名}：台词原文”（该角色在本镜做口型）或 “OS-{角色名}：台词原文”（旁白或内心，该段画面全员闭口，任何人不得对该内容做口型）。无前缀的旁白性描写一律按 OS 处理。纯环境音与拟音写进 sfx 字段，不写进 line。同一句台词或 OS 在整段内只出现一次，被其时长覆盖到的后续镜头 line 留空。
 
-仅输出合法 JSON 数组，不要 Markdown 代码块、前言或解释。数组每行必须且只能包含这些字段（键名必须逐字使用英文，含义：scale=景别、angle=机位角度、action=动作、line=台词、sfx=音效、mood=情绪、durationSec=时长秒、assetSlots=素材槽位）：
+仅输出合法 JSON 数组，不要 Markdown 代码块、前言或解释。P7 是段级决策：每段第一行（shotNo 最小的那行）必须携带 p7 字段，同段其余行必须省略 p7 字段；不得把 p7 复制到每一镜，也不得把 P7 结果塞进 action、mood 等其他字段。p7 必须且只能包含 primaryPurpose、secondaryPurpose（无辅目的时省略）、basis、techniques、transcription 五个键：
+"p7": {
+    "primaryPurpose": "",
+    "secondaryPurpose": "",
+    "basis": "",
+    "techniques": [],
+    "transcription": ""
+}
+
+除每段第一行额外携带上述 p7 外，数组每行必须且只能包含以下基础字段（键名必须逐字使用英文，含义：scale=景别、angle=机位角度、action=动作、line=台词、sfx=音效、mood=情绪、durationSec=时长秒、assetSlots=素材槽位）：
 {
     "segmentId": "",
     "shotId": "",

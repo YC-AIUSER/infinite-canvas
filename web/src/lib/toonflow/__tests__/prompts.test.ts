@@ -167,6 +167,14 @@ describe("plus 方法论保真", () => {
         expect(prompt).toContain("禁止改名、简写、拼接或自创");
     });
 
+    it("分镜表要求每段首行承载 p7，且写明五个键名", () => {
+        const prompt = buildStoryboardTablePrompt("上下文");
+        expect(prompt).toContain("每段第一行（shotNo 最小的那行）必须携带 p7 字段，同段其余行必须省略 p7 字段");
+        for (const key of ["primaryPurpose", "secondaryPurpose", "basis", "techniques", "transcription"]) {
+            expect(prompt).toContain(`"${key}"`);
+        }
+    });
+
     it("分镜表模板含铁律 11 ⓪ 分段三原则并标注台词类型", () => {
         const prompt = buildStoryboardTablePrompt("上下文");
         expect(prompt).toContain("打包贴满");
