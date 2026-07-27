@@ -39,6 +39,32 @@ function render(node: CanvasNodeData, cascadeLocked = false): string {
     return normalize(renderToStaticMarkup(createElement(ToonflowNodeContent, { node, cascadeLocked })));
 }
 
+function videoWorkbench(segmentId?: string, withProblem = false): CanvasNodeData {
+    return {
+        ...toonflowNode("video-workbench", "approved", "视频工作台"),
+        type: CanvasNodeType.Video,
+        metadata: {
+            toonflow: {
+                ...toonflowNode("video-workbench", "approved").metadata!.toonflow!,
+                stage: "视频生成",
+                segmentId,
+                output: {
+                    nodeId: "node-1",
+                    kind: "video-workbench",
+                    version: 1,
+                    status: "approved",
+                    payload: {
+                        videoKeys: ["video:legacy"],
+                        qualityReview: withProblem ? { items: [{ key: "identity", checked: true, severity: "P1", note: "角色脸漂移" }] } : undefined,
+                    },
+                    upstreamVersions: {},
+                    generatedAt: "2026-07-27T00:00:00.000Z",
+                },
+            },
+        },
+    };
+}
+
 describe("ToonflowNodeContent 操作区", () => {
     it("选修环节节点处于 skipped 时仍渲染出生成入口", () => {
         // 回归防线：creative 模板默认状态是 skipped（一键跑全链不为选修环节花钱），
@@ -67,5 +93,20 @@ describe("ToonflowNodeContent 操作区", () => {
 
         expect(html).toContain("生成");
         expect(html).not.toContain("启用并生成");
+    });
+
+    it("无 segmentId 但有 videoKeys 的旧视频工作台仍渲染七项质检", () => {
+        const html = render(videoWorkbench());
+
+        expect(html).toContain("身份连续性");
+        expect(html).toContain("技术质量");
+    });
+
+    it("缺少分镜表镜头数时显示成本不可计算，并提供可选镜头号输入与回退说明", () => {
+        const html = render(videoWorkbench("seg-a", true));
+
+        expect(html).toContain("无法计算返修成本（缺少分镜表镜头数）");
+        expect(html).toContain("镜头号（可选，逗号分隔）");
+        expect(html).toContain("未指定镜头号时按项累加，可能高估");
     });
 });

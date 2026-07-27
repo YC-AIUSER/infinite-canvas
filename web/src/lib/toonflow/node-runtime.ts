@@ -143,22 +143,37 @@ export function setRepairMethod(item: RepairPlanItem, method: RepairMethod): Rep
 }
 
 export type RepairCostGate = {
+    available: boolean;
     regeneratedShotCount: number;
     totalShotCount: number;
     ratio: number;
     exceeds20Percent: boolean;
 };
 
-export function evaluateRepairCostGate(plan?: RepairPlanItem[], totalShotCount = 0): RepairCostGate {
+/**
+ * 成本闸门：09-qc-repair §七「预计重做超过全片 20% 镜头时，先给用户返修范围与成本影响再继续」。
+ * 分母是**全片**镜头数（对抗审查 2026-07-27 纠正，此前误按本段计算——本段 1/4 会显示 25%，
+ * 而全片实际可能只有 1/40）。「重做整段」这一项的成本是本段镜头数，故两个总数都要传。
+ */
+export function evaluateRepairCostGate(plan?: RepairPlanItem[], totalShotCount = 0, segmentShotCount = 0): RepairCostGate {
     const safeTotal = Math.max(0, Math.floor(totalShotCount));
-    const requestedShotCount = (plan ?? []).reduce((total, item) => {
-        if (item.method === "redo-segment") return total + safeTotal;
-        if (item.method !== "regenerate-shot") return total;
-        return total + Math.max(1, Math.floor(item.regeneratedShotCount ?? 1));
-    }, 0);
+    const safeSegment = Math.max(0, Math.floor(segmentShotCount));
+    const redoSegment = (plan ?? []).some((item) => item.method === "redo-segment");
+    const shotIds = new Set<string>();
+    let fallbackShotCount = 0;
+    if (!redoSegment) {
+        for (const item of plan ?? []) {
+            if (item.method !== "regenerate-shot") continue;
+            const itemShotIds = (item.shotIds ?? []).map((shotId) => shotId.trim()).filter(Boolean);
+            if (itemShotIds.length) itemShotIds.forEach((shotId) => shotIds.add(shotId));
+            else fallbackShotCount += Math.max(1, Math.floor(item.regeneratedShotCount ?? 1));
+        }
+    }
+    const requestedShotCount = redoSegment ? safeSegment : shotIds.size + fallbackShotCount;
     const regeneratedShotCount = safeTotal > 0 ? Math.min(safeTotal, requestedShotCount) : requestedShotCount;
-    const ratio = safeTotal > 0 ? regeneratedShotCount / safeTotal : 0;
-    return { regeneratedShotCount, totalShotCount: safeTotal, ratio, exceeds20Percent: ratio > 0.2 };
+    const available = safeTotal > 0 && (!redoSegment || safeSegment > 0);
+    const ratio = available ? regeneratedShotCount / safeTotal : 0;
+    return { available, regeneratedShotCount, totalShotCount: safeTotal, ratio, exceeds20Percent: available && ratio > 0.2 };
 }
 
 export function emptyQualityReview(): QualityReview {

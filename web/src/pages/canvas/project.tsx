@@ -61,7 +61,7 @@ import { buildAssetCardPrompt, buildDiversityRepairPrompt, washPrompt } from "@/
 import { validateModule4 } from "@/lib/toonflow/module4-check";
 import type { QualityCheckItem } from "@/lib/toonflow/quality-check";
 import { DiversityPatchSchema, ShotContractSchema, parseModelJson, type AssetCard, type DiversityPatch, type DiversityPatchItem, type DubbingTrack, type QualityReview, type ShotContract } from "@/lib/toonflow/schema";
-import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
+import { applyInstanceSync, deleteArchivedInstance, isInstanceSyncActionable, planInstanceSync, resolveConfirmedSync, type InstanceSyncPlan } from "@/lib/toonflow/instances";
 import { runCascade } from "@/lib/toonflow/cascade";
 import { collapseNodeAfterStream, expandNodeForStream } from "@/lib/toonflow/streaming";
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
@@ -3380,7 +3380,7 @@ function InfiniteCanvasPage() {
     const syncStoryboardInstances = useCallback(
         (nodeId: string) => {
             const plan = planInstanceSync(nodesRef.current, nodeId);
-            if (!plan || (!plan.toCreate.length && !plan.toArchive.length && !plan.toStale.length && !plan.reindex.length)) return;
+            if (!isInstanceSyncActionable(plan)) return;
             if (plan.isFirstSync || (!plan.toCreate.length && !plan.toArchive.length)) {
                 applyStoryboardInstancePlan(plan);
                 return;

@@ -198,27 +198,29 @@ function VideoQualityRepairSection({
     onChange: (review: QualityReview) => void;
 }) {
     const table = useCanvasStore((state) => findToonflowNode(state.projects, nodeId, "storyboard-table")?.output?.payload.table);
-    const totalShotCount = useMemo(() => (table ?? []).filter((row) => row.segmentId === segmentId).length, [table, segmentId]);
+    // 闸门分母按全片镜头数(09-qc-repair §七 原文是「全片 20%」);段内镜头数只用于「重做整段」的成本。
+    const filmShotCount = useMemo(() => (table ?? []).length, [table]);
+    const segmentShotCount = useMemo(() => (table ?? []).filter((row) => row.segmentId === segmentId).length, [table, segmentId]);
     const currentReview = review ?? emptyQualityReview();
     const repairPlan = buildRepairPlan(currentReview);
-    const gate = evaluateRepairCostGate(repairPlan, totalShotCount);
+    const gate = evaluateRepairCostGate(repairPlan, filmShotCount, segmentShotCount);
     const p2Items = currentReview.items.filter((item) => item.severity === "P2");
 
     function saveReview(nextReview: QualityReview) {
         const nextPlan = buildRepairPlan(nextReview, repairPlan);
-        const nextGate = evaluateRepairCostGate(nextPlan, totalShotCount);
+        const nextGate = evaluateRepairCostGate(nextPlan, filmShotCount, segmentShotCount);
         onChange({
             ...nextReview,
             repairPlan: nextPlan.length ? nextPlan : undefined,
             // 勾质检项、改备注不改变返修规模,已做的成本确认不该被清掉(改返修计划本身才清,见 updateRepair)。
             // 取值必须走 currentReview:七项质检面板的 onChange 只回传 items,nextReview 上永远没有这个字段。
-            repairCostConfirmed: nextGate.exceeds20Percent ? currentReview.repairCostConfirmed : undefined,
+            repairCostConfirmed: nextGate.available && nextGate.exceeds20Percent ? currentReview.repairCostConfirmed : undefined,
         });
     }
 
     function updateRepair(index: number, patch: Partial<RepairPlanItem>) {
         const nextPlan = repairPlan.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item));
-        const nextGate = evaluateRepairCostGate(nextPlan, totalShotCount);
+        const nextGate = evaluateRepairCostGate(nextPlan, filmShotCount, segmentShotCount);
         onChange({
             ...currentReview,
             repairPlan: nextPlan,
@@ -271,15 +273,36 @@ function VideoQualityRepairSection({
                                 <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.acceptanceCriteria} onChange={(event) => updateRepair(index, { acceptanceCriteria: event.target.value })} />
                             </label>
                             {item.method === "regenerate-shot" ? (
-                                <label className="mt-1.5 flex items-center gap-2">
-                                    <span className="opacity-55">预计重生成镜头数</span>
-                                    <InputNumber size="small" min={1} max={Math.max(1, totalShotCount)} value={item.regeneratedShotCount ?? 1} onChange={(value) => updateRepair(index, { regeneratedShotCount: value ?? 1 })} />
-                                </label>
+                                <div className="mt-1.5">
+                                    <label className="block">
+                                        <span className="opacity-55">镜头号（可选，逗号分隔）</span>
+                                        <Input
+                                            key={`${item.reviewKey}:${(item.shotIds ?? []).join(",")}`}
+                                            size="small"
+                                            placeholder="例如 shot-01, shot-02"
+                                            defaultValue={(item.shotIds ?? []).join(", ")}
+                                            onBlur={(event) => {
+                                                const shotIds = event.target.value.split(/[,，]/).map((shotId) => shotId.trim()).filter(Boolean);
+                                                updateRepair(index, { shotIds: shotIds.length ? shotIds : undefined });
+                                            }}
+                                        />
+                                    </label>
+                                    <label className="mt-1 flex items-center gap-2">
+                                        <span className="opacity-55">预计重生成镜头数</span>
+                                        <InputNumber size="small" min={1} max={Math.max(1, filmShotCount)} value={item.regeneratedShotCount ?? 1} onChange={(value) => updateRepair(index, { regeneratedShotCount: value ?? 1 })} />
+                                    </label>
+                                    <p className="mt-1 opacity-55">未指定镜头号时按项累加，可能高估。</p>
+                                </div>
                             ) : null}
                         </div>
                     ))}
                 </div>
-                {gate.exceeds20Percent ? (
+                {repairPlan.length && !gate.available ? (
+                    <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 p-2 font-medium text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                        <span>无法计算返修成本（缺少分镜表镜头数）</span>
+                    </div>
+                ) : gate.exceeds20Percent ? (
                     <div className="mt-2 rounded-md border border-red-500/50 bg-red-500/10 p-2 text-red-700 dark:text-red-300">
                         <div className="flex items-start gap-1.5 font-medium">
                             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
@@ -539,8 +562,12 @@ export function ToonflowNodeContent({
                 <ToonflowContinuityTableView table={continuityTable} background={theme.node.fill} />
             ) : storyboardRows?.length ? (
                 <StoryboardQualityCheck nodeId={node.id} rows={storyboardRows} background={theme.node.fill} onDiversityRepair={onDiversityRepair} />
-            ) : toonflow.kind === "video-workbench" && toonflow.segmentId && instanceVideoKey ? (
-                <VideoQualityRepairSection nodeId={node.id} segmentId={toonflow.segmentId} review={qualityReview} background={theme.node.fill} blockReason={approvalBlockReason} onChange={(review) => onQualityReviewChange?.(node.id, review)} />
+            ) : toonflow.kind === "video-workbench" && instanceVideoKey ? (
+                toonflow.segmentId ? (
+                    <VideoQualityRepairSection nodeId={node.id} segmentId={toonflow.segmentId} review={qualityReview} background={theme.node.fill} blockReason={approvalBlockReason} onChange={(review) => onQualityReviewChange?.(node.id, review)} />
+                ) : (
+                    <ToonflowSegmentQualityReview review={qualityReview} background={theme.node.fill} blockReason={approvalBlockReason} onChange={(review) => onQualityReviewChange?.(node.id, review)} />
+                )
             ) : toonflow.kind === "audio-mix" && toonflow.segmentId ? (
                 <AudioMixSection nodeId={node.id} segmentId={toonflow.segmentId} voiceMap={toonflow.voiceMap ?? {}} dubbing={dubbing} background={theme.node.fill} onVoiceMapChange={(voiceMap) => onVoiceMapChange?.(node.id, voiceMap)} />
             ) : module4Text ? (

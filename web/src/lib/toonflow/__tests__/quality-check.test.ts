@@ -321,7 +321,7 @@ describe("runQualityCheck：高潮/爆点镜三件套 warning", () => {
         shotId: "shot-climax",
         cause: "门外的呼救声逼近",
         process:
-            "L5 五部位：头部向左猛转35度；肩背全力上提8厘米；手部以最大力度攥紧门把；身形向前大幅倾斜40度并跨出两步；身段以极限力度形成全身攻击姿态；Speed Ramp：加速触发=推门前0.2秒急起；顶点=门板撞墙瞬间；慢放区间=雨水飞散后的0.4秒；收束停点=右脚落地后停住",
+            "L5 五部位：头部=向左猛转35度、幅度拉满、0.2秒完成；肩背=紧绷至极限并上提8厘米；手部=攥紧门把、最大力度、每秒2次加压；身形=向前大幅倾斜40度并跨出两步；身段=决绝凌厉的攻击气质；Speed Ramp：加速触发=推门前0.2秒急起；顶点=门板撞墙瞬间；慢放区间=雨水飞散后的0.4秒；收束停点=右脚落地后停住",
         consequence: "门板撞墙，雨水被带进屋内",
         endState: "她站在门外雨幕中锁定前方",
     });
@@ -332,6 +332,32 @@ describe("runQualityCheck：高潮/爆点镜三件套 warning", () => {
 
         expect(item.status).toBe("pass");
         expect(item.warning).not.toBe(true);
+    });
+
+    it("日常冲刺赶公交没有高潮 mood 前缀或高强度信号时不判 fail", () => {
+        const report = runQualityCheck({ storyboardRows: [row({ action: "她冲刺去赶公交", mood: "着急", scale: "L2 中景/中全景" })] });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).not.toBe("fail");
+        expect(item.warning).not.toBe(true);
+    });
+
+    it("五部位同处一句且只有手部参数时不能伪造通过", () => {
+        const report = runQualityCheck({
+            storyboardRows: [climaxRow],
+            shotContracts: [climaxContract],
+            actionContracts: [
+                actionContract({
+                    shotId: "shot-climax",
+                    process:
+                        "L5 五部位：头部、肩背、手部、身形、身段同处一个描述，仅手部抬起30度；Speed Ramp：加速触发=推门前0.2秒急起；顶点=门板撞墙瞬间；慢放区间=雨水飞散后的0.4秒；收束停点=右脚落地后停住",
+                }),
+            ],
+        });
+        const [item] = itemsOf(report.items, "climaxTrio");
+
+        expect(item.status).not.toBe("pass");
+        expect(item.actualValue).toContain("需人工确认");
     });
 
     it("高潮镜没有表演与节奏信息时标记为 unknown，而不是 fail", () => {
@@ -349,7 +375,12 @@ describe("runQualityCheck：高潮/爆点镜三件套 warning", () => {
         const report = runQualityCheck({
             storyboardRows: [climaxRow],
             shotContracts: [climaxContract],
-            actionContracts: [actionContract({ shotId: "shot-climax", process: "她微微低头后猛地撞开门" })],
+            actionContracts: [
+                actionContract({
+                    shotId: "shot-climax",
+                    process: "L5 五部位：头部=微微低头5度；肩背=全力上提8厘米；手部=攥紧门把、最大力度、每秒2次加压；身形=向前大幅倾斜40度并跨出两步；身段=决绝凌厉的攻击气质",
+                }),
+            ],
         });
         const [item] = itemsOf(report.items, "climaxTrio");
 

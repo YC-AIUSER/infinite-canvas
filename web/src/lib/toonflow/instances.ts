@@ -11,6 +11,7 @@ export type InstanceSyncPlan = {
     storyboardNodeId: string;
     segments: Array<{ segmentId: string; segmentIndex: number; shotCount: number }>;
     toCreate: Array<{ segmentId: string; segmentIndex: number; kind: InstanceKind }>;
+    toSkip: string[];
     toStale: string[];
     toArchive: string[];
     reindex: Array<{ nodeId: string; segmentIndex: number }>;
@@ -76,13 +77,19 @@ export function planInstanceSync(nodes: CanvasNodeData[], storyboardNodeId: stri
 
     const diff = diffSegments([...oldSegments.values()], rows);
     const reconciled = reconcileInstances(diff, segmentInstances(active));
+    const skippedRootKinds = new Set(enabledInstanceKinds(nodes).filter((kind) => findRoot(nodes, kind)?.metadata?.toonflow?.status === "skipped"));
     const activeBySegmentKind = new Set(active.map((node) => `${node.metadata!.toonflow!.segmentId}:${node.metadata!.toonflow!.kind}`));
     const toCreate = segments.flatMap((segment) =>
         enabledInstanceKinds(nodes).flatMap((kind) => (activeBySegmentKind.has(`${segment.segmentId}:${kind}`) ? [] : [{ segmentId: segment.segmentId, segmentIndex: segment.segmentIndex, kind }])),
     );
+    const toSkip = active.flatMap((node) => {
+        const toonflow = node.metadata!.toonflow!;
+        return skippedRootKinds.has(toonflow.kind as InstanceKind) && !toonflow.output && toonflow.status !== "skipped" ? [node.id] : [];
+    });
     const staleCandidates = new Set(reconciled.toStale);
     const toStale = active.flatMap((node) => {
         const toonflow = node.metadata!.toonflow!;
+        if (skippedRootKinds.has(toonflow.kind as InstanceKind)) return [];
         return staleCandidates.has(node.id) && toonflow.output && ["review", "approved", "stale"].includes(toonflow.status) ? [node.id] : [];
     });
     const toArchive = reconciled.toArchive.flatMap((instance) => Object.values(instance.nodeIds).filter((nodeId): nodeId is string => Boolean(nodeId)));
@@ -97,15 +104,15 @@ export function planInstanceSync(nodes: CanvasNodeData[], storyboardNodeId: stri
         return Boolean(toonflow && isInstanceKind(toonflow.kind) && toonflow.segmentId);
     });
 
-    return { storyboardNodeId, segments, toCreate, toStale, toArchive, reindex, isFirstSync: !hasAnyInstances };
+    return { storyboardNodeId, segments, toCreate, toSkip, toStale, toArchive, reindex, isFirstSync: !hasAnyInstances };
 }
 
 export function isInstanceSyncActionable(plan: InstanceSyncPlan | null): plan is InstanceSyncPlan {
-    return Boolean(plan && (plan.toCreate.length || plan.toArchive.length || plan.toStale.length || plan.reindex.length));
+    return Boolean(plan && (plan.toCreate.length || plan.toSkip.length || plan.toArchive.length || plan.toStale.length || plan.reindex.length));
 }
 
 function instanceSyncSignature(plan: InstanceSyncPlan): string {
-    return JSON.stringify([plan.storyboardNodeId, plan.toCreate, plan.toStale, plan.toArchive, plan.reindex]);
+    return JSON.stringify([plan.storyboardNodeId, plan.toCreate, plan.toSkip, plan.toStale, plan.toArchive, plan.reindex]);
 }
 
 export type ConfirmedSyncResolution =
@@ -174,6 +181,7 @@ export function applyInstanceSync(
     if (REQUIRED_INSTANCE_KINDS.some((kind) => !roots.has(kind))) return { nodes, connections };
 
     const staleIds = new Set(plan.toStale);
+    const skipIds = new Set(plan.toSkip);
     const archiveIds = new Set(plan.toArchive);
     const reindexById = new Map(plan.reindex.map((item) => [item.nodeId, item.segmentIndex]));
     let nextNodes = nodes.map<CanvasNodeData>((node) => {
@@ -185,7 +193,8 @@ export function applyInstanceSync(
         const segmentIndex = reindexById.get(node.id);
         const root = isInstanceKind(toonflow.kind) ? roots.get(toonflow.kind) : undefined;
         const stale = staleIds.has(node.id);
-        if (segmentIndex === undefined && !stale) return node;
+        const skip = skipIds.has(node.id);
+        if (segmentIndex === undefined && !stale && !skip) return node;
         return {
             ...node,
             title: segmentIndex !== undefined && root ? instanceTitle(root, segmentIndex) : node.title,
@@ -194,7 +203,7 @@ export function applyInstanceSync(
                 toonflow: {
                     ...toonflow,
                     segmentIndex: segmentIndex ?? toonflow.segmentIndex,
-                    status: stale ? "stale" : toonflow.status,
+                    status: skip ? "skipped" : stale ? "stale" : toonflow.status,
                     output: stale && toonflow.output ? { ...toonflow.output, status: "stale" } : toonflow.output,
                 },
             },

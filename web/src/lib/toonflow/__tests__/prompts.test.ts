@@ -128,6 +128,26 @@ describe("plus 方法论保真", () => {
         expect(prompt).toContain("主角恒左、反派恒右");
     });
 
+    // 对抗审查实锤(2026-07-27):这两处曾被改写成"意思差不多"的版本——§1.3 漏掉「尺度」「不写高级光影」
+    // 「感觉到」,五部位被统一成"角度/幅度/距离/速度或力度"从而丢掉肩背紧张度、手部对象频率、身段整体气质。
+    // 逐字锁死,以后再改写就红。
+    it("P7 §1.3 转写规则逐字对齐 05-closed-libraries §1.3", () => {
+        const prompt = buildStoryboardTablePrompt("上下文");
+        expect(prompt).toContain("线条/尺度如何压迫");
+        expect(prompt).toContain("不写“高级光影”");
+        expect(prompt).toContain("观众多知道/感觉到什么");
+    });
+
+    it("高潮镜五部位按 05 §5.2 各自的编码维度写，不许合并成通用参数", () => {
+        for (const prompt of [buildStoryboardTablePrompt("上下文"), buildActionContractPrompt("上下文")]) {
+            expect(prompt).toContain("头部=角度+幅度+速度");
+            expect(prompt).toContain("肩背=紧张度+位移");
+            expect(prompt).toContain("手部=对象+力度+频率");
+            expect(prompt).toContain("身形=方向+幅度+距离");
+            expect(prompt).toContain("身段=整体气质");
+        }
+    });
+
     it("分镜表模板含 Layer1 前件与黄金三秒钩子六字段", () => {
         const prompt = buildStoryboardTablePrompt("上下文");
         for (const field of ["开场类型=", "钩子类型=", "钩子画面=", "情绪强度=", "人物关系呈现=", "情绪冲突锚点="]) {

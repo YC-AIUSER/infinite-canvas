@@ -114,8 +114,33 @@ describe("P7 最小返修闭环", () => {
 
     it("重生成镜头占比严格超过 20% 才触发成本闸门", () => {
         const plan = buildRepairPlan({ items: [{ key: "identity", checked: true, severity: "P1" }] });
-        expect(evaluateRepairCostGate(plan, 4)).toMatchObject({ regeneratedShotCount: 1, ratio: 0.25, exceeds20Percent: true });
-        expect(evaluateRepairCostGate(plan, 5)).toMatchObject({ regeneratedShotCount: 1, ratio: 0.2, exceeds20Percent: false });
+        expect(evaluateRepairCostGate(plan, 4)).toMatchObject({ available: true, regeneratedShotCount: 1, ratio: 0.25, exceeds20Percent: true });
+        expect(evaluateRepairCostGate(plan, 5)).toMatchObject({ available: true, regeneratedShotCount: 1, ratio: 0.2, exceeds20Percent: false });
+    });
+
+    it("同一镜头的三类问题按 shotIds 并集只算一次，一个问题可准确覆盖四个镜头", () => {
+        const duplicateShotPlan = buildRepairPlan({
+            items: [
+                { key: "identity", checked: true, severity: "P1" },
+                { key: "assets", checked: true, severity: "P1" },
+                { key: "action", checked: true, severity: "P1" },
+            ],
+        }).map((item) => ({ ...item, shotIds: ["shot-1"] }));
+        expect(evaluateRepairCostGate(duplicateShotPlan, 10)).toMatchObject({ regeneratedShotCount: 1, ratio: 0.1, exceeds20Percent: false });
+
+        const fourShotPlan = [{ ...duplicateShotPlan[0], shotIds: ["shot-1", "shot-2", "shot-3", "shot-4"] }];
+        expect(evaluateRepairCostGate(fourShotPlan, 10)).toMatchObject({ regeneratedShotCount: 4, ratio: 0.4, exceeds20Percent: true });
+
+        const legacyPlan = duplicateShotPlan.map(({ shotIds: _shotIds, ...item }) => item);
+        expect(evaluateRepairCostGate(legacyPlan, 10)).toMatchObject({ regeneratedShotCount: 3, ratio: 0.3, exceeds20Percent: true });
+    });
+
+    it("全片镜头数为 0 时成本不可计算，不能静默视为安全", () => {
+        const plan = buildRepairPlan({ items: [{ key: "identity", checked: true, severity: "P1" }] });
+        expect(evaluateRepairCostGate(plan, 0)).toMatchObject({ available: false, regeneratedShotCount: 1, totalShotCount: 0 });
+
+        const redoSegmentPlan = [setRepairMethod(plan[0], "redo-segment")];
+        expect(evaluateRepairCostGate(redoSegmentPlan, 10, 0)).toMatchObject({ available: false, regeneratedShotCount: 0, totalShotCount: 10 });
     });
 
     it("没有 qualityReview 或旧数据没有返修字段时不抛错", () => {

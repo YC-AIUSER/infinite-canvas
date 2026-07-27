@@ -867,17 +867,11 @@ function checkClosedLibraryCompliance(shotContracts?: ShotContract[], directingL
     ];
 }
 
-// 高潮/爆点镜按既有字段保守推断，不新增用户手填字段：动作/情绪/动作合同出现爆点语义，
-// 或情绪值达到 8/10（80/100），或镜头合同明确使用 Speed Ramp，均视为候选高潮镜。
+// mood 的固定前缀是高潮镜主判据；动作关键词只是辅助证据，必须再有高情绪值或镜头合同 Speed Ramp 才能升级为候选。
+const CLIMAX_MOOD_PREFIX_PATTERN = /^\s*高潮\s*[\/／]\s*爆点镜/;
 const CLIMAX_PATTERN = /冲突爆点|爆点|高潮|变身|冲锋|冲刺|突进|冲撞|反杀|绝杀|决战|爆发点|情绪爆发/;
 const WEAK_PERFORMANCE_PATTERN = /微微|略微|轻微|稍微|轻轻|微幅|小幅/;
-const PERFORMANCE_BODY_PARTS: Array<{ label: string; pattern: RegExp }> = [
-    { label: "头部", pattern: /头部|抬头|低头|偏头|转头|下颌|脸|眼|眉|瞳孔/ },
-    { label: "肩背", pattern: /肩背|肩膀|双肩|脊背|后背/ },
-    { label: "手部", pattern: /手部|手掌|手指|双手|拳|掌|指节/ },
-    { label: "身形", pattern: /身形|上半身|躯干|身体|腰腹|重心/ },
-    { label: "身段", pattern: /身段|全身|步态|姿态|气质/ },
-];
+const PERFORMANCE_BODY_PARTS = ["头部", "肩背", "手部", "身形", "身段"] as const;
 const PERFORMANCE_PARAMETER_PATTERN = /\d+(?:\.\d+)?\s*(?:度|cm|厘米|步|秒|帧|%|倍)|全力|极限|最大|猛烈|猛然|骤然|死死|强力|大幅|快速|急速|用力/;
 const SPEED_RAMP_ELEMENTS = ["加速触发", "顶点", "慢放区间", "收束停点"] as const;
 
@@ -899,8 +893,13 @@ function shotContractText(contract?: ShotContract): string {
 type ClimaxTrioEvidence = { status: QualityCheckStatus; label: string; detail: string };
 
 function checkClimaxPerformance(text: string): ClimaxTrioEvidence {
-    if (WEAK_PERFORMANCE_PATTERN.test(text)) {
-        return { status: "fail", label: "① L5 五部位满力度编码", detail: "该镜字段含微微/略微/轻微等弱词" };
+    const values = new Map<string, string>();
+    for (const part of PERFORMANCE_BODY_PARTS) {
+        const value = text.match(new RegExp(`${part}\\s*=\\s*([^；;\\n]+)`))?.[1]?.trim();
+        if (!value) {
+            return { status: "unknown", label: "① L5 五部位满力度编码", detail: `未解析到固定“${part}=…”结构，需人工确认` };
+        }
+        values.set(part, value);
     }
 
     const explicitLevel = text.match(/(?:表演(?:档位|强度)?\s*[:：=]?\s*)?(L[1-5])\b/i)?.[1]?.toUpperCase();
@@ -908,19 +907,19 @@ function checkClimaxPerformance(text: string): ClimaxTrioEvidence {
         return { status: "fail", label: "① L5 五部位满力度编码", detail: `该镜字段明确写为 ${explicitLevel}` };
     }
 
-    const parameterizedParts = PERFORMANCE_BODY_PARTS.filter((part) =>
-        text
-            .split(/[；;\n]/)
-            .some((segment) => part.pattern.test(segment) && PERFORMANCE_PARAMETER_PATTERN.test(segment)),
-    );
-    if (explicitLevel === "L5" && parameterizedParts.length === PERFORMANCE_BODY_PARTS.length) {
-        return { status: "pass", label: "① L5 五部位满力度编码", detail: "该镜明确写出 L5，且头部/肩背/手部/身形/身段均带参数" };
+    if (WEAK_PERFORMANCE_PATTERN.test([...values.values()].join("；"))) {
+        return { status: "fail", label: "① L5 五部位满力度编码", detail: "该镜字段含微微/略微/轻微等弱词" };
+    }
+
+    const missingParameters = PERFORMANCE_BODY_PARTS.slice(0, 4).filter((part) => !PERFORMANCE_PARAMETER_PATTERN.test(values.get(part)!));
+    if (explicitLevel === "L5" && missingParameters.length === 0) {
+        return { status: "pass", label: "① L5 五部位满力度编码", detail: "该镜明确写出 L5，前四部位均带可观测参数，身段有整体气质描述" };
     }
 
     return {
         status: "unknown",
         label: "① L5 五部位满力度编码",
-        detail: "该镜字段未同时明确写出 L5 与五部位参数，且没有发现低档位或弱词等反证",
+        detail: missingParameters.length ? `${missingParameters.join("、")}的值缺少可观测参数，需人工确认` : "该镜字段未明确写出 L5，需人工确认",
     };
 }
 
@@ -966,13 +965,30 @@ function checkClimaxTrio(
 
     const shotContractById = new Map((shotContracts ?? []).map((contract) => [contract.shotId, contract]));
     const actionContractById = new Map((actionContracts ?? []).map((contract) => [contract.shotId, contract]));
-    const climaxRows = [...rowsBySegment.values()].flat().filter((row) => {
+    const rowEvidence = [...rowsBySegment.values()].flat().map((row) => {
         const actionText = actionContractText(actionContractById.get(row.shotId));
         const shotText = shotContractText(shotContractById.get(row.shotId));
-        return CLIMAX_PATTERN.test(`${row.action}；${row.mood}；${actionText}`) || hasHighEmotionValue(row.mood) || /Speed\s*Ramp/i.test(shotText);
+        const auxiliary = CLIMAX_PATTERN.test(`${row.action}；${row.mood}；${actionText}`);
+        const highIntensity = hasHighEmotionValue(row.mood) || /Speed\s*Ramp/i.test(shotText);
+        return { row, auxiliary, candidate: CLIMAX_MOOD_PREFIX_PATTERN.test(row.mood) || (auxiliary && highIntensity) };
     });
+    const climaxRows = rowEvidence.filter((item) => item.candidate).map((item) => item.row);
 
     if (climaxRows.length === 0) {
+        const ambiguousRows = rowEvidence.filter((item) => item.auxiliary).map((item) => item.row);
+        if (ambiguousRows.length) {
+            return [
+                makeItem({
+                    kind,
+                    status: "unknown",
+                    segmentIds: [...new Set(ambiguousRows.map((row) => row.segmentId))],
+                    shotIds: ambiguousRows.map((row) => row.shotId),
+                    actualValue: "命中高潮动作关键词，但 mood 无“高潮/爆点镜”前缀且缺少高强度佐证",
+                    expectedValue,
+                    reason: "辅助关键词不足以单独判定高潮镜，需人工确认。",
+                }),
+            ];
+        }
         return [
             makeItem({
                 kind,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ToonflowNodeKind } from "../../../types/canvas";
-import { applyInstanceSync, deleteArchivedInstance, planInstanceSync, resolveConfirmedSync } from "../instances";
+import { applyInstanceSync, deleteArchivedInstance, isInstanceSyncActionable, planInstanceSync, resolveConfirmedSync } from "../instances";
 import type { NodeOutput, StoryboardRow } from "../schema";
 import { cascadeOrder } from "../state-machine";
 
@@ -160,6 +160,29 @@ describe("Toonflow segment instances", () => {
         const order = cascadeOrder(graph, edges, storyboardInstance!.id);
 
         expect(order).not.toContain(keyframesInstance!.id);
+    });
+
+    it("旧画布的 empty keyframes 实例随 skipped 根归一，已有 output 的实例保持不变", () => {
+        const first = sync(template([row("seg-a", 1), row("seg-b", 1)]));
+        const legacyNodes = first.nodes.map<CanvasNodeData>((node) => {
+            const toonflow = node.metadata?.toonflow;
+            if (node.id === "keyframes-root") return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow!, status: "skipped" } } };
+            if (toonflow?.kind === "keyframes" && toonflow.segmentId === "seg-b") {
+                return { ...node, metadata: { ...node.metadata, toonflow: { ...toonflow, status: "approved", output: output(node.id, "keyframes") } } };
+            }
+            return node;
+        });
+        const plan = planInstanceSync(legacyNodes, "storyboard")!;
+        const emptyInstance = legacyNodes.find((node) => node.metadata?.toonflow?.kind === "keyframes" && node.metadata.toonflow.segmentId === "seg-a")!;
+        const producedInstance = legacyNodes.find((node) => node.metadata?.toonflow?.kind === "keyframes" && node.metadata.toonflow.segmentId === "seg-b")!;
+
+        expect(plan.toSkip).toEqual([emptyInstance.id]);
+        expect(plan.toSkip).not.toContain(producedInstance.id);
+        expect(isInstanceSyncActionable(plan)).toBe(true);
+
+        const result = applyInstanceSync(legacyNodes, first.connections, plan, idFactory());
+        expect(result.nodes.find((node) => node.id === emptyInstance.id)?.metadata?.toonflow?.status).toBe("skipped");
+        expect(result.nodes.find((node) => node.id === producedInstance.id)?.metadata?.toonflow).toEqual(producedInstance.metadata?.toonflow);
     });
 
     it("新增段时只创建新增段的三类实例", () => {

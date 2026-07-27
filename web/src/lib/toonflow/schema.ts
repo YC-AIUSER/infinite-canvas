@@ -272,6 +272,7 @@ export const RepairPlanItemSchema = z.object({
     replacementScope: z.string(),
     acceptanceCriteria: z.string(),
     regeneratedShotCount: z.number().int().nonnegative().optional(),
+    shotIds: z.array(z.string()).optional(),
 });
 
 export type RepairMethod = (typeof REPAIR_METHODS)[number];
