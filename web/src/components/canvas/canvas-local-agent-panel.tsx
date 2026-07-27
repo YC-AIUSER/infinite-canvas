@@ -10,6 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { useShallow } from "zustand/react/shallow";
 import { useAgentStore, type AgentAttachment, type AgentCanvasContext, type AgentChatItem, type AgentEventLog, type AgentPanelTab, type AgentPendingToolCall, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
+import { serializeCanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-snapshot";
 import { isSiteTool, runSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-site-tools";
 import { buildSlimSummaryInput, buildSlimSummaryPrompt, composeSlimPrefixedPrompt, shouldSuggestSlim } from "@/lib/agent/thread-slim";
 import { STUCK_TURN_TIMEOUT_MS, shouldAutoRecoverTurn } from "@/lib/agent/turn-watchdog";
@@ -434,7 +435,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             return;
         }
         try {
-            const input: { ops?: CanvasAgentOp[]; path?: string; title?: string } = payload.input || {};
+            const input: { ops?: CanvasAgentOp[]; path?: string; title?: string; nodeIds?: string[] } = payload.input || {};
             addEventLog(toolName(payload.name), payload, payload);
             let result: unknown;
             if (payload.name === "site_navigate") {
@@ -449,12 +450,13 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             } else if (payload.name === "canvas_apply_ops") {
                 const context = canvasContextRef.current;
                 if (!context) throw new Error("当前不在画布页，请先用 site_navigate 打开画布");
-                result = context.applyOps(input.ops || []);
-                void postState(endpoint, token, clientIdRef.current, result as CanvasAgentSnapshot);
+                const fullResult = context.applyOps(input.ops || []);
+                void postState(endpoint, token, clientIdRef.current, fullResult);
+                result = serializeCanvasAgentSnapshot(fullResult);
             } else {
                 const snapshot = canvasContextRef.current?.snapshot;
                 if (!snapshot) throw new Error("当前不在画布页，请先用 site_navigate 打开画布");
-                result = snapshot;
+                result = serializeCanvasAgentSnapshot(snapshot, payload.name === "canvas_get_state" ? input.nodeIds : undefined);
             }
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
             addEventLog(`${toolName(payload.name)}完成`, result, result);

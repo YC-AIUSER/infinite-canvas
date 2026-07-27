@@ -130,7 +130,7 @@ export class CanvasSession {
         }
         const readTool = ["canvas_get_state", "canvas_get_selection", "canvas_export_snapshot"].includes(tool);
         if (readTool && (!this.clients.size || !this.canvasState)) throw new Error("当前没有已连接画布");
-        if (tool === "canvas_get_state" || tool === "canvas_export_snapshot") return buildStateResult(this.canvasState);
+        if (tool === "canvas_get_state" || tool === "canvas_export_snapshot") return buildStateResult(this.canvasState, await this.requestCanvasTool(tool, input));
         if (tool === "canvas_get_selection") return buildSelectionResult(this.canvasState);
         if (tool === "canvas_create_node") {
             const data = input as { nodeType: CanvasNodeType; title?: string; x?: number; y?: number; width?: number; height?: number; metadata?: Record<string, unknown> };

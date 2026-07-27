@@ -43,8 +43,7 @@ export function buildSelectionResult(state: CanvasSnapshot | null) {
     return annotateMethodology({ nodes: selected.map(compactNode) }, selected.map(toonflowKindOf));
 }
 
-export function buildStateResult(state: CanvasSnapshot | null) {
-    const result = compactCanvasState(state);
+export function buildStateResult(state: CanvasSnapshot | null, result: unknown = compactCanvasState(state)) {
     const count = (state?.nodes || []).filter((node) => toonflowKindOf(node)).length;
     if (!count) return result;
     return attach(

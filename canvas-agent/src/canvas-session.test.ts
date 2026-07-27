@@ -17,10 +17,21 @@ test("MCP 读取当前激活网页的画布", async (t) => {
     session.updateState(snapshot("canvas-second"), "second");
 
     session.activateClient("first");
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-first");
+    assert.equal(field(await readState(session, first, snapshot("canvas-first")), "projectId"), "canvas-first");
 
     session.activateClient("second");
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+    assert.equal(field(await readState(session, second, snapshot("canvas-second")), "projectId"), "canvas-second");
+});
+
+test("canvas_get_state 把 nodeIds 转发给当前网页", async (t) => {
+    const session = new CanvasSession();
+    const client = connect(session, "first");
+    t.after(() => client.close());
+    session.updateState(snapshot("canvas-first"), "first");
+
+    const result = await readState(session, client, { ...snapshot("canvas-first"), nodes: [{ id: "node-1", metadata: { content: "完整内容" } }] }, { nodeIds: ["node-1"] });
+
+    assert.equal(field(result, "projectId"), "canvas-first");
 });
 
 test("画布写操作只发送给当前激活网页", async (t) => {
@@ -93,7 +104,7 @@ test("活动网页关闭后回退到仍连接的画布", async (t) => {
     session.activateClient("second");
     second.close();
 
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-first");
+    assert.equal(field(await readState(session, first, snapshot("canvas-first")), "projectId"), "canvas-first");
 });
 
 test("closing the active client falls back to the most recently focused client", async (t) => {
@@ -113,7 +124,7 @@ test("closing the active client falls back to the most recently focused client",
     session.activateClient("second");
     second.close();
 
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-third");
+    assert.equal(field(await readState(session, third, snapshot("canvas-third")), "projectId"), "canvas-third");
 });
 
 test("closing a client rejects its pending tool requests", async () => {
@@ -172,7 +183,7 @@ test("a bound client remains the tool target while focus changes", async (t) => 
     session.bindClient("first");
     session.activateClient("second");
 
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-first");
+    assert.equal(field(await readState(session, first, snapshot("canvas-first")), "projectId"), "canvas-first");
     const result = session.callTool("canvas_create_text_node", { text: "bound" });
     const call = first.event("tool_call");
     assert.equal(second.event("tool_call"), undefined);
@@ -180,7 +191,7 @@ test("a bound client remains the tool target while focus changes", async (t) => 
     assert.deepEqual(await result, { ok: true });
 
     session.releaseClient("first");
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+    assert.equal(field(await readState(session, second, snapshot("canvas-second")), "projectId"), "canvas-second");
 });
 
 test("closing the bound client falls back to the active client", async (t) => {
@@ -197,7 +208,7 @@ test("closing the bound client falls back to the active client", async (t) => {
     session.activateClient("second");
     first.close();
 
-    assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+    assert.equal(field(await readState(session, second, snapshot("canvas-second")), "projectId"), "canvas-second");
     const result = session.callTool("canvas_create_text_node", { text: "fallback" });
     const call = second.event("tool_call");
     session.resolveResult("second", { requestId: String(field(call, "requestId")), result: { ok: true } });
@@ -205,9 +216,18 @@ test("closing the bound client falls back to the active client", async (t) => {
 });
 
 function connect(session: CanvasSession, clientId: string) {
-    const response = new FakeSseResponse();
+    const response = new FakeSseResponse(clientId);
     session.openEvents(new URL(`http://127.0.0.1/events?clientId=${clientId}`), response as unknown as ServerResponse);
     return response;
+}
+
+async function readState(session: CanvasSession, client: FakeSseResponse, result: unknown, input: Record<string, unknown> = {}) {
+    const pending = session.callTool("canvas_get_state", input);
+    const call = client.event("tool_call");
+    assert.equal(field(call, "name"), "canvas_get_state");
+    assert.deepEqual(field(call, "input"), input);
+    session.resolveResult(client.clientId, { requestId: String(field(call, "requestId")), result });
+    return await pending;
 }
 
 function snapshot(projectId: string) {
@@ -221,6 +241,10 @@ function field(value: unknown, key: string) {
 class FakeSseResponse extends EventEmitter {
     private chunks: string[] = [];
 
+    constructor(readonly clientId: string) {
+        super();
+    }
+
     writeHead() {
         return this;
     }
@@ -231,9 +255,13 @@ class FakeSseResponse extends EventEmitter {
     }
 
     event(type: string) {
-        const chunk = this.chunks.find((item) => item.startsWith(`event: ${type}\n`));
-        const data = chunk?.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
-        return data ? (JSON.parse(data) as unknown) : undefined;
+        for (let index = this.chunks.length - 1; index >= 0; index -= 1) {
+            const chunk = this.chunks[index];
+            if (!chunk.startsWith(`event: ${type}\n`)) continue;
+            const data = chunk.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+            return data ? (JSON.parse(data) as unknown) : undefined;
+        }
+        return undefined;
     }
 
     close() {
