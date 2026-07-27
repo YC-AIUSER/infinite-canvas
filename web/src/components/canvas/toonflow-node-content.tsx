@@ -182,6 +182,31 @@ function StoryboardQualityCheck({ nodeId, rows, background, onDiversityRepair }:
 
 const repairMethodOptions = REPAIR_METHODS.map((method) => ({ value: method, label: REPAIR_METHOD_LABELS[method] }));
 
+/**
+ * 返修计划的长文本输入：本地 draft，失焦才写回画布。
+ * 逐字符 onChange 会一路走到 updateProject → projects 换新引用 → 全体 selector 重扫，
+ * 长文本连打时可感知卡顿(对抗审查 P2-4)。外部值变化时同步回本地——编辑期间外部值不会变
+ * (本地还没提交)，所以不会打断正在输入的内容。
+ */
+function RepairDraftTextArea({ value, onCommit }: { value: string; onCommit: (next: string) => void }) {
+    const [draft, setDraft] = useState(value);
+
+    useEffect(() => {
+        setDraft(value);
+    }, [value]);
+
+    return (
+        <Input.TextArea
+            autoSize={{ minRows: 1, maxRows: 3 }}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={() => {
+                if (draft !== value) onCommit(draft);
+            }}
+        />
+    );
+}
+
 function VideoQualityRepairSection({
     nodeId,
     segmentId,
@@ -254,23 +279,23 @@ function VideoQualityRepairSection({
                             </div>
                             <label className="mt-2 block">
                                 <span className="opacity-55">原因</span>
-                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.reason} onChange={(event) => updateRepair(index, { reason: event.target.value })} />
+                                <RepairDraftTextArea value={item.reason} onCommit={(next) => updateRepair(index, { reason: next })} />
                             </label>
                             <label className="mt-1.5 block">
                                 <span className="opacity-55">输入锚点</span>
-                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.inputAnchor} onChange={(event) => updateRepair(index, { inputAnchor: event.target.value })} />
+                                <RepairDraftTextArea value={item.inputAnchor} onCommit={(next) => updateRepair(index, { inputAnchor: next })} />
                             </label>
                             <label className="mt-1.5 block">
                                 <span className="opacity-55">保留内容</span>
-                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.preservedContent} onChange={(event) => updateRepair(index, { preservedContent: event.target.value })} />
+                                <RepairDraftTextArea value={item.preservedContent} onCommit={(next) => updateRepair(index, { preservedContent: next })} />
                             </label>
                             <label className="mt-1.5 block">
                                 <span className="opacity-55">替换范围</span>
-                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.replacementScope} onChange={(event) => updateRepair(index, { replacementScope: event.target.value })} />
+                                <RepairDraftTextArea value={item.replacementScope} onCommit={(next) => updateRepair(index, { replacementScope: next })} />
                             </label>
                             <label className="mt-1.5 block">
                                 <span className="opacity-55">验收标准</span>
-                                <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={item.acceptanceCriteria} onChange={(event) => updateRepair(index, { acceptanceCriteria: event.target.value })} />
+                                <RepairDraftTextArea value={item.acceptanceCriteria} onCommit={(next) => updateRepair(index, { acceptanceCriteria: next })} />
                             </label>
                             {item.method === "regenerate-shot" ? (
                                 <div className="mt-1.5">
