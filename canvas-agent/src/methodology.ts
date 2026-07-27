@@ -40,7 +40,11 @@ export function toonflowKindsForOps(ops: unknown, nodes: CanvasNode[]): Array<st
 export function buildSelectionResult(state: CanvasSnapshot | null) {
     const ids = new Set(state?.selectedNodeIds || []);
     const selected = (state?.nodes || []).filter((node) => ids.has(node.id));
-    return annotateMethodology({ nodes: selected.map(compactNode) }, selected.map(toonflowKindOf));
+    const result = annotateMethodology({ nodes: selected.map(compactNode) }, selected.map(toonflowKindOf));
+    // 选区结果是本地用缓存算的、网页不参与,所以红线里"从封闭词库逐字选取"那条命令在这条路径上
+    // 一直没有词库实体可配(Codex 对抗审查 2026-07-27)。词库随状态推送缓存在 state 上,这里取出来附上。
+    if (!selected.some((node) => toonflowKindOf(node)) || !state?._closedLibraries) return result;
+    return { ...result, _closedLibraries: state._closedLibraries };
 }
 
 export function buildStateResult(state: CanvasSnapshot | null, result: unknown = compactCanvasState(state)) {

@@ -268,3 +268,44 @@ class FakeSseResponse extends EventEmitter {
         this.emit("close");
     }
 }
+
+test("canvas_get_selection 带上随状态推送的封闭词库", async (t) => {
+    // Codex 对抗审查 2026-07-27：选区结果在本地用缓存算、网页不参与，
+    // 红线里"从封闭词库逐字选取"这条命令在这条路径上一直没有词库实体可配。
+    const session = new CanvasSession();
+    const client = connect(session, "first");
+    t.after(() => client.close());
+    session.updateState(
+        {
+            projectId: "canvas-first",
+            selectedNodeIds: ["n1"],
+            nodes: [{ id: "n1", type: "text", position: { x: 0, y: 0 }, width: 320, height: 190, metadata: { toonflow: { kind: "directing-lock" } } }],
+            _closedLibraries: "【构图 8 策略】\n- 权力压迫：…",
+        },
+        "first",
+    );
+    session.activateClient("first");
+
+    const result = (await session.callTool("canvas_get_selection", {})) as Record<string, unknown>;
+    assert.equal(result._closedLibraries, "【构图 8 策略】\n- 权力压迫：…");
+    assert.ok(String(result._methodology).includes("封闭词库"));
+});
+
+test("普通节点的选区不附带词库，不给非 Toonflow 场景平白塞体积", async (t) => {
+    const session = new CanvasSession();
+    const client = connect(session, "first");
+    t.after(() => client.close());
+    session.updateState(
+        {
+            projectId: "canvas-first",
+            selectedNodeIds: ["n1"],
+            nodes: [{ id: "n1", type: "text", position: { x: 0, y: 0 }, width: 320, height: 190, metadata: { content: "随手记" } }],
+            _closedLibraries: "【构图 8 策略】\n- 权力压迫：…",
+        },
+        "first",
+    );
+    session.activateClient("first");
+
+    const result = (await session.callTool("canvas_get_selection", {})) as Record<string, unknown>;
+    assert.equal(result._closedLibraries, undefined);
+});

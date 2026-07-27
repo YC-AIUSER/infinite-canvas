@@ -15,6 +15,7 @@ import { isSiteTool, runSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-sit
 import { buildSlimSummaryInput, buildSlimSummaryPrompt, composeSlimPrefixedPrompt, shouldSuggestSlim } from "@/lib/agent/thread-slim";
 import { STUCK_TURN_TIMEOUT_MS, shouldAutoRecoverTurn } from "@/lib/agent/turn-watchdog";
 import { collectExportSegments } from "@/lib/toonflow/node-runtime";
+import { withClosedLibraries } from "@/lib/agent/agent-closed-libraries";
 import { stitchFinalCut } from "@/lib/toonflow/final-cut";
 import { requestImageQuestion } from "@/services/api/image";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -456,7 +457,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
             } else {
                 const snapshot = canvasContextRef.current?.snapshot;
                 if (!snapshot) throw new Error("当前不在画布页，请先用 site_navigate 打开画布");
-                result = serializeCanvasAgentSnapshot(snapshot, payload.name === "canvas_get_state" ? input.nodeIds : undefined);
+                result = withClosedLibraries(serializeCanvasAgentSnapshot(snapshot, payload.name === "canvas_get_state" ? input.nodeIds : undefined), snapshot);
             }
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
             addEventLog(`${toolName(payload.name)}完成`, result, result);
@@ -559,12 +560,27 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
         pendingToolRef.current = null;
     }
 
+    // 新建会话是冷启动：服务端要拉起 Codex app-server，并等 canvas-agent 的 MCP 子进程握手
+    // （agents.ts codexConfig 的 startup_timeout_sec 就是 20 秒），慢的时候十几秒起步。
+    // 不给状态文案就只能看到"点了没反应"，不设上限就会无限等，所以两者都要有。
+    const NEW_THREAD_TIMEOUT_MS = 30_000;
+
     const createNewThread = async (pendingSlimSummary = "", activity = "新对话") => {
         if (!connected || sending || waiting) return;
-        setAgentState({ loadingThreads: true });
+        setAgentState({ loadingThreads: true, activity: "正在启动 Codex 会话…" });
         try {
-            const data = await fetchAgentJson<AgentThreadResponse>(endpoint, token, "/agent/codex/threads/new", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+            const data = await fetchAgentJson<AgentThreadResponse>(
+                endpoint,
+                token,
+                "/agent/codex/threads/new",
+                { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+                NEW_THREAD_TIMEOUT_MS,
+            );
             setAgentState({ activeThreadId: data.thread?.id || data.workspace?.activeThreadId || "", messages: [], activeTab: "chat", activity, pendingSlimSummary });
+        } catch (error) {
+            // 失败也要把 activity 复位，否则会一直停在"正在启动"，看起来像还在跑。
+            setAgentState({ activity: "新建会话失败" });
+            throw error;
         } finally {
             setAgentState({ loadingThreads: false });
         }
@@ -706,7 +722,7 @@ export function CanvasLocalAgentPanel({ embedded, headless, autoConnect }: { emb
                         <Button size="small" type="text" disabled={!canUndo} icon={<RotateCcw className="size-3.5" />} onClick={undoLastTool}>
                             撤销
                         </Button>
-                        <Button size="small" type="text" disabled={!connected || loadingThreads || sending || waiting || slimming} icon={<Plus className="size-3.5" />} onClick={startNewThread}>
+                        <Button size="small" type="text" loading={loadingThreads} disabled={!connected || loadingThreads || sending || waiting || slimming} icon={<Plus className="size-3.5" />} onClick={startNewThread}>
                             新对话
                         </Button>
                     </>
@@ -1105,7 +1121,10 @@ async function postState(endpoint: string, token: string, clientId: string, snap
         await fetch(`${endpoint}/canvas/state?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(snapshot ? { ...snapshot, hasCanvas: true } : { hasCanvas: false }),
+            // 推送的快照里带上封闭词库：canvas-agent 会把这份 body 原样缓存，
+            // canvas_get_selection 是在它本地用缓存算的、网页不参与，只有这条路能把词库送到那条路径上
+            // （Codex 对抗审查 2026-07-27：走 selection 的 Agent 仍然只有"必须从词库选取"的命令、没有词库）。
+            body: JSON.stringify(snapshot ? withClosedLibraries({ ...snapshot, hasCanvas: true }, snapshot) : { hasCanvas: false }),
         });
     } catch {}
 }
@@ -1346,12 +1365,22 @@ function formatBytes(bytes: number) {
     return bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.ceil(bytes / 1024)}KB`;
 }
 
-async function fetchAgentJson<T>(endpoint: string, token: string, path: string, init?: RequestInit) {
+async function fetchAgentJson<T>(endpoint: string, token: string, path: string, init?: RequestInit, timeoutMs?: number) {
     const url = `${endpoint}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
-    const res = await fetch(url, init);
-    const data = (await res.json().catch(() => ({}))) as T & { error?: string; msg?: string };
-    if (!res.ok) throw new Error(data.error || data.msg || "本地 Agent 请求失败");
-    return data;
+    const controller = timeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+        const res = await fetch(url, controller ? { ...init, signal: controller.signal } : init);
+        const data = (await res.json().catch(() => ({}))) as T & { error?: string; msg?: string };
+        if (!res.ok) throw new Error(data.error || data.msg || "本地 Agent 请求失败");
+        return data;
+    } catch (error) {
+        // 超时中止时 fetch 抛的是 AbortError，原文对用户没有意义；服务端此时仍在继续处理，所以提示是"稍后重试"而不是"失败了"。
+        if (controller?.signal.aborted) throw new Error(`本地 Agent 请求超时（已等待 ${Math.round((timeoutMs ?? 0) / 1000)} 秒），可能仍在后台处理，请稍后重试`);
+        throw error;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
 }
 
 async function discoverAgentConfig(endpoint: string) {

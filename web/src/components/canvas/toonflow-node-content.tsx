@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { runQualityCheck, type QualityCheckItem } from "@/lib/toonflow/quality-check";
-import { buildRepairPlan, canApproveSegment, emptyQualityReview, evaluateRepairCostGate, QUALITY_REVIEW_LABELS, REPAIR_METHOD_LABELS, segmentApprovalBlockReason, setRepairMethod } from "@/lib/toonflow/node-runtime";
+import { buildRepairPlan, canApproveSegment, emptyQualityReview, evaluateRepairCostGate, isTemplatePlaceholderContent, QUALITY_REVIEW_LABELS, REPAIR_METHOD_LABELS, segmentApprovalBlockReason, setRepairMethod } from "@/lib/toonflow/node-runtime";
 import { ActionContractSchema, parseModelJson, REPAIR_METHODS, ShotContractSchema, type DubbingTrack, type QualityReview, type RepairPlanItem, type StoryboardRow } from "@/lib/toonflow/schema";
 import { resolveStreamPreview, type ToonflowStreamPreview } from "@/lib/toonflow/streaming";
 import { resolveMediaUrl } from "@/services/file-storage";
@@ -416,6 +416,18 @@ export function ToonflowNodeContent({
     const streamPreview = resolveStreamPreview(toonflow);
     const assetCards = toonflow.output?.payload.cards;
     const module4Text = toonflow.kind === "video-workbench" ? toonflow.output?.payload.text : undefined;
+    // 纯文本产物(剧本/创意/空间合同/镜头合同/动作合同…)必须在节点上直接读到。
+    // 不给分支的话内容区会退回下面的 checks 清单,生成完等于正文原地消失,只剩两行检查项和一片空白。
+    //
+    // 没有产物时兜底显示 metadata.content:Agent 走 canvas_update 写入的就是这个字段(它构造不出完整的
+    // output 结构),不显示的话用户让 Agent 写完一看画布纹丝不动,只能判断"Agent 没写进去"
+    // (2026-07-27 用户实测:项目节点已被写入 385 字,界面却毫无变化)。
+    // 模板初始的占位文案(标题+摘要)要排掉,否则每个未开始的节点都会用占位文案顶掉 checks 清单。
+    // 判据走 isTemplatePlaceholderContent(只比对摘要那一半):标题会被 Agent 改写,拿标题参与比对
+    // 会让判据在改名后失效、把占位文案当正文显示(Codex 对抗审查 2026-07-27 实锤)。
+    const nodeContent = node.metadata?.content?.trim() || "";
+    const authoredContent = nodeContent && !isTemplatePlaceholderContent(node) ? nodeContent : undefined;
+    const outputText = toonflow.kind === "video-workbench" ? undefined : toonflow.output?.payload.text || authoredContent;
     const module4Issues = toonflow.kind === "video-workbench" ? toonflow.output?.payload.module4Issues ?? [] : [];
     const qualityReview = toonflow.kind === "video-workbench" ? toonflow.output?.payload.qualityReview : undefined;
     const approvalBlockReason = toonflow.kind === "video-workbench" && instanceVideoKey ? segmentApprovalBlockReason(qualityReview) : undefined;
@@ -598,6 +610,10 @@ export function ToonflowNodeContent({
             ) : module4Text ? (
                 <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
                     {module4Text}
+                </div>
+            ) : outputText ? (
+                <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
+                    {outputText}
                 </div>
             ) : (
                 <div className="mt-2 grid min-h-0 flex-1 grid-cols-1 gap-1.5">

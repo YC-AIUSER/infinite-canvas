@@ -19,7 +19,7 @@ import {
     washPrompt,
 } from "./prompts";
 import { validateModule4 } from "./module4-check";
-import { collapseNodeAfterStream } from "./streaming";
+import { collapseNodeAfterStream, fitHeightToText } from "./streaming";
 import {
     ActionContractSchema,
     ContinuityTableSchema,
@@ -244,6 +244,19 @@ function formatAssetCard(card: AssetCard, parentNameById: Map<string, string>) {
     return `【${ASSET_CARD_TYPE_LABELS[card.cardType]}】${card.name}${derivedFrom}：${card.anchor}`;
 }
 
+/**
+ * 模板初始节点的正文是"标题 + 换行 + 摘要"的占位文案，不是用户或 Agent 写的内容。
+ * 判据只比对摘要那一半：标题会被 Agent 改写（实测改成过「项目 / 剧集｜EP1 起源-门开了」），
+ * 让标题参与比对，判据在改名后就会失效、占位文案会被当成正文（Codex 对抗审查 2026-07-27 实锤）。
+ */
+export function isTemplatePlaceholderContent(node: CanvasNodeData): boolean {
+    const content = node.metadata?.content?.trim();
+    const summary = node.metadata?.toonflow?.summary?.trim();
+    if (!content || !summary) return false;
+    const firstBreak = content.indexOf("\n");
+    return firstBreak >= 0 && content.slice(firstBreak + 1).trim() === summary;
+}
+
 export function readNodeInput(node: CanvasNodeData) {
     const payload = node.metadata?.toonflow?.output?.payload;
     if (payload?.text) return payload.text;
@@ -290,6 +303,18 @@ function existingStoryboardIds(node: CanvasNodeData) {
     return rows.map((row) => `${row.segmentId}/${row.shotId}`).join("\n");
 }
 
+/**
+ * 找一份"真的写过东西"的剧本给创意用。
+ * 不能直接 nodes.find(kind === "script")：模板初始的 script 节点带占位文案，把它注进去会让
+ * buildCreativePrompt 判定"已有剧本"、对着一份不存在的剧本做体检；画布上还可能有用户复制的
+ * 旧剧本节点，取到第一个未必是目标（Codex 对抗审查 2026-07-27 实锤两点）。
+ * 优先级：有产物的 > 正文被写过的；都没有就不注入，让创意正常走冷启动模式。
+ */
+function findAuthoredScript(nodes: CanvasNodeData[]): CanvasNodeData | undefined {
+    const scripts = nodes.filter((node) => node.metadata?.toonflow?.kind === "script");
+    return scripts.find((node) => node.metadata?.toonflow?.output?.payload.text?.trim()) ?? scripts.find((node) => node.metadata?.content?.trim() && !isTemplatePlaceholderContent(node));
+}
+
 export function buildToonflowGeneration(nodes: CanvasNodeData[], connections: CanvasConnection[], nodeId: string) {
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const target = nodeById.get(nodeId);
@@ -308,6 +333,15 @@ export function buildToonflowGeneration(nodes: CanvasNodeData[], connections: Ca
 
     if (kind === "storyboard-table") {
         appendInput(inputs, "existing-ids", existingStoryboardIds(target));
+    }
+
+    // 创意 P0 的体检模式要对着剧本挑毛病,但模板拓扑里剧本是创意的下游(项目→创意→剧本),
+    // 只走上游遍历永远拿不到剧本,于是 buildCreativePrompt 的模式判定必然落到冷启动,凭空另编一个故事
+    // (2026-07-27 用户实测:Agent 把剧情写进剧本节点后,创意生成的产出与剧本毫无关系)。
+    // 按镜头合同/分镜表既有的做法从全画布直取,不改模板连线以免与既有的创意→剧本连线成环。
+    if (kind === "creative" && !inputs.script) {
+        const script = findAuthoredScript(nodes);
+        if (script) appendInput(inputs, "script", readNodeInput(script));
     }
 
     const prompt = PROMPT_BUILDERS[kind](buildNodeContext(kind, inputs));
@@ -650,6 +684,14 @@ export function computeUpstreamVersions(nodes: CanvasNodeData[], connections: Ca
         const version = upstream?.metadata?.toonflow?.output?.version;
         if (typeof version === "number") snapshot[connection.fromNodeId] = version;
     }
+    // 创意读剧本是隐式依赖:剧本在创意的下游,连线方向表达不了它(反向加边会与既有的 creative→script 成环)。
+    // 生成时确实读了剧本,这里就必须把它记进快照,否则剧本出新版本时创意不会失效、画布会一直把基于旧剧本的
+    // 创意显示为有效(Codex 对抗审查 2026-07-27 实锤)。
+    if (nodeById.get(nodeId)?.metadata?.toonflow?.kind === "creative") {
+        const script = findAuthoredScript(nodes);
+        const version = script?.metadata?.toonflow?.output?.version;
+        if (script && typeof version === "number") snapshot[script.id] = version;
+    }
     return snapshot;
 }
 
@@ -705,14 +747,29 @@ export function applyGenerationSuccess(node: CanvasNodeData, rawText: string, wa
     };
     const history = previous ? [...(toonflow.history ?? []), previous].slice(-VERSION_LIMIT_TEXT) : toonflow.history;
 
+    // 纯文本产物按内容撑高。表格/锁定表/继承表的产物是结构化视图,rawText 是 JSON,按它的长度算高度没有意义。
+    // 基准取生成前的高度(流式撑高过就用 streamRestoreHeight 里记着的原值),只增不减。
+    const baseHeight = toonflow.streamRestoreHeight ?? node.height;
+    const fittedHeight = payload.text === undefined ? baseHeight : fitHeightToText(node, payload.text, baseHeight);
+
     return {
         ...node,
+        height: fittedHeight,
         metadata: {
             ...node.metadata,
             content: rawText,
             status: "success" as const,
             errorDetails: undefined,
-            toonflow: { ...toonflow, status: output.status, output, history },
+            toonflow: {
+                ...toonflow,
+                status: output.status,
+                output,
+                history,
+                // 正常成功路径拿到的是不含流式展示字段的准备快照(project.tsx 刻意不把流式态同步进 nodesRef),
+                // 所以这里通常是 undefined、走不到改写。留着是为防守带流式态的节点进来时,
+                // 收尾的 collapseNodeAfterStream 用旧值把刚撑好的高度还原回去。
+                ...(toonflow.streamRestoreHeight === undefined ? {} : { streamRestoreHeight: fittedHeight }),
+            },
         },
     };
 }
@@ -931,6 +988,14 @@ export function propagateAfterNewVersion(nodes: CanvasNodeData[], connections: C
     if (typeof newVersion !== "number" || newVersion <= 0) return nodes;
 
     const staleNodeIds = new Set(propagateStale(graphNodes(nodes), graphEdges(connections), nodeId, newVersion));
+    // 连线之外的隐式依赖(创意读剧本)在图上没有边,只在产物的 upstreamVersions 里留了痕。
+    // 反查这份"我生成时依赖了谁的哪个版本"的记录,谁记着我的旧版本谁就过期了。
+    // 只标直接依赖者、不再往下传:它自己重新生成产出新版本时,会再走一次本函数把它的下游带上。
+    for (const node of nodes) {
+        if (node.id === nodeId || staleNodeIds.has(node.id)) continue;
+        const recorded = node.metadata?.toonflow?.output?.upstreamVersions?.[nodeId];
+        if (typeof recorded === "number" && recorded < newVersion) staleNodeIds.add(node.id);
+    }
     if (!staleNodeIds.size) return nodes;
 
     return nodes.map((node) => {

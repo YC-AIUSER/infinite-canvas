@@ -10,19 +10,26 @@
  *    绝不允许杜撰关键词填充空白（源：05-closed-libraries.md「选取协议」阻断条件第 5 条）。
  */
 
-/** 封闭命名词库的类别标识——用于 isInLibrary / renderLibraries 按类取子集 */
-export type ClosedLibraryCategory =
-    | "composition"
-    | "lighting"
-    | "cameraMovement"
-    | "shotScale"
-    | "performanceIntensity"
-    | "colorGrade"
-    | "emptyShot"
-    | "directorStyle"
-    | "hook"
-    | "directorTechnique"
-    | "speedFreeze";
+/**
+ * 封闭命名词库的类别标识——用于 isInLibrary / renderLibraries 按类取子集。
+ * 写成运行时数组而非纯类型：给 Agent 注入词库时要按"全部类别"现取一次（见 canvas-local-agent-panel
+ * 的 withClosedLibraries），手抄一份类别清单过去就会跟这里漂移。
+ */
+export const CLOSED_LIBRARY_CATEGORIES = [
+    "composition",
+    "lighting",
+    "cameraMovement",
+    "shotScale",
+    "performanceIntensity",
+    "colorGrade",
+    "emptyShot",
+    "directorStyle",
+    "hook",
+    "directorTechnique",
+    "speedFreeze",
+] as const;
+
+export type ClosedLibraryCategory = (typeof CLOSED_LIBRARY_CATEGORIES)[number];
 
 /**
  * 词库词条的统一形状。各库列结构不同，字段含义按库注释说明：

@@ -20,6 +20,7 @@ import {
     setRepairMethod,
 } from "../node-runtime";
 import { cascadeOrder } from "../state-machine";
+import { collapseNodeAfterStream, OUTPUT_MAX_HEIGHT } from "../streaming";
 
 function node(id: string, kind?: ToonflowNodeKind, content = "", status: NodeStatus = "empty"): CanvasNodeData {
     return {
@@ -172,6 +173,19 @@ describe("buildToonflowGeneration", () => {
         expect(buildToonflowGeneration(nodes, [connection("source", "script")], "script").finalPrompt).toContain("【source】\n原始故事");
     });
 
+    it("创意直取画布上的剧本——剧本在创意下游,只走上游遍历永远拿不到,模式判定会误落冷启动", () => {
+        const nodes = [node("creative", "creative"), node("script", "script", "第一集 起源·门开了")];
+        const result = buildToonflowGeneration(nodes, [connection("creative", "script")], "creative");
+        expect(result.finalPrompt).toContain("【script】");
+        expect(result.finalPrompt).toContain("起源·门开了");
+    });
+
+    it("剧本已在创意上游时不重复注入", () => {
+        const nodes = [node("script", "script", "剧本正文"), node("creative", "creative")];
+        const result = buildToonflowGeneration(nodes, [connection("script", "creative")], "creative");
+        expect(result.finalPrompt.match(/剧本正文/g)).toHaveLength(1);
+    });
+
     it("分镜表重生成包含现有 segmentId 与 shotId", () => {
         const target = node("storyboard", "storyboard-table", "", "review");
         target.metadata!.toonflow!.output = { ...output(target.id, "storyboard-table", 1), payload: { table: [storyboardRow()] } };
@@ -192,6 +206,40 @@ describe("applyGenerationSuccess", () => {
             payload: { text: "生成正文" },
             generationMeta: { model: "test-model", sentPrompt: "已发送提示词", washedPrompt: "已发送提示词" },
         });
+    });
+
+    it("长文本产物把节点撑高,短产物保持原高", () => {
+        const longText = Array.from({ length: 60 }, (_, index) => `第 ${index} 行产出内容占位文字占位文字`).join("\n");
+        expect(applyGenerationSuccess(node("script", "script", "", "generating"), longText, []).height).toBeGreaterThan(190);
+        expect(applyGenerationSuccess(node("script", "script", "", "generating"), "短产出", []).height).toBe(190);
+    });
+
+    it("再长的产物也封顶在 OUTPUT_MAX_HEIGHT,不让单个节点吃掉整屏", () => {
+        const hugeText = Array.from({ length: 800 }, (_, index) => `第 ${index} 行`).join("\n");
+        expect(applyGenerationSuccess(node("script", "script", "", "generating"), hugeText, []).height).toBe(OUTPUT_MAX_HEIGHT);
+    });
+
+    it("用户手动调大过的节点不被产物撑高逻辑缩小", () => {
+        const target = { ...node("script", "script", "", "generating"), height: 800 };
+        expect(applyGenerationSuccess(target, "短产出", []).height).toBe(800);
+    });
+
+    it("流式撑高过的节点收尾后落到按产物算的高度,而不是被还原回模板 190", () => {
+        const target = node("script", "script", "", "generating");
+        target.height = 440;
+        target.metadata!.toonflow!.streamRestoreHeight = 190;
+        const longText = Array.from({ length: 60 }, (_, index) => `第 ${index} 行产出内容占位文字占位文字`).join("\n");
+
+        const success = applyGenerationSuccess(target, longText, []);
+        const collapsed = collapseNodeAfterStream(success);
+        expect(collapsed.height).toBeGreaterThan(190);
+        expect(collapsed.height).toBe(success.height);
+        expect(collapsed.metadata?.toonflow?.streamRestoreHeight).toBeUndefined();
+    });
+
+    it("分镜表产物不按 JSON 长度撑高——它渲染成表格,不是正文", () => {
+        const target = node("storyboard", "storyboard-table", "", "generating");
+        expect(applyGenerationSuccess(target, JSON.stringify([storyboardRow()]), []).height).toBe(190);
     });
 
     it("分镜 JSON 解析失败时进入 failed 并保留解析原因", () => {

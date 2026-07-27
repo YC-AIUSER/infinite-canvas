@@ -64,8 +64,45 @@ export function expandNodeForStream(node: CanvasNodeData, streamingText: string)
 }
 
 /**
+ * 产出落定后的高度上限——再长的产物也不许一个节点吃掉整屏,超出部分由内容区自己滚。
+ * 取 520 是跟模板排距(NODE_GAP_Y=300)权衡的结果:内容区约 16 行够读一段完整产出,
+ * 又不至于把下一排节点整个压住(压住的部分点一键整理即可排开)。
+ */
+export const OUTPUT_MAX_HEIGHT = 520;
+/** 标题、阶段徽标、校验行与操作按钮占掉的固定高度,内容区拿剩下的。 */
+const NODE_CHROME_HEIGHT = 150;
+/**
+ * 正文区的真实排版参数,来自 toonflow-node-content.tsx 正文 div 的 `text-xs leading-5 px-2.5`
+ * 与节点容器的 `p-3.5`。刻意不读 metadata.fontSize——那个字号只作用于普通文本节点,
+ * Toonflow 正文的字号是 Tailwind 写死的,拿 fontSize 估算会系统性偏差(Codex 对抗审查 2026-07-27 实锤:
+ * Agent 把 fontSize 改成 8 时公式按更小字体估算,实际显示仍是 12px,高度被系统性低估)。
+ */
+const CONTENT_FONT_SIZE = 12;
+const CONTENT_LINE_HEIGHT = 20;
+/** 节点容器 p-3.5 左右各 14 + 正文 px-2.5 左右各 10。 */
+const CONTENT_PADDING_X = 48;
+
+/**
+ * 按产物文本估算节点该有多高。
+ * 只增不减:基准是生成前的高度(用户手动调大过就以他的为准),估算值更大才撑,并封顶在 OUTPUT_MAX_HEIGHT。
+ * 不这么做的话,流式期间撑到 STREAM_MIN_HEIGHT 的节点会在收尾时被 collapseNodeAfterStream 一路还原回
+ * 模板的 190 高,几千字的产物全挤进一个小框(2026-07-27 用户实测)。
+ */
+export function fitHeightToText(node: CanvasNodeData, text: string, baseHeight: number): number {
+    // 中文按一个字号宽估平均字宽(英文更窄,估宽一点换来估高一点,宁可高不可矮)。
+    // 下限 4 是为了让被改到极窄的节点仍按"每行几个字"折行,而不是塌成一行、彻底不撑高。
+    const charsPerLine = Math.max(4, Math.floor((node.width - CONTENT_PADDING_X) / CONTENT_FONT_SIZE));
+    const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / charsPerLine)), 0);
+    const needed = NODE_CHROME_HEIGHT + lines * CONTENT_LINE_HEIGHT;
+    // 封顶只约束估算值:用户自己把节点拉到比上限还高是他的选择,不能被这里压回来。
+    return Math.max(baseHeight, Math.min(OUTPUT_MAX_HEIGHT, needed));
+}
+
+/**
  * 收尾:剥掉流式字段并还原高度。成功/失败/取消三条路径以及刷新后的中断降级都必须过这里,
  * 否则节点会永远卡在撑高状态。对没有流式痕迹的节点返回原对象,便于调用方跳过无谓重渲染。
+ * 注:成功路径的 applyGenerationSuccess 会先把 streamRestoreHeight 改写成按产物估算的目标高度,
+ * 所以这里的"还原"对成功产物而言就是落到撑好的高度。
  */
 export function collapseNodeAfterStream(node: CanvasNodeData): CanvasNodeData {
     const toonflow = node.metadata?.toonflow;

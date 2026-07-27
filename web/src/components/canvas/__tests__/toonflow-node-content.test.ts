@@ -110,3 +110,49 @@ describe("ToonflowNodeContent 操作区", () => {
         expect(html).toContain("未指定镜头号时按项累加，可能高估");
     });
 });
+
+/**
+ * 内容区的正文渲染。两条都是 2026-07-27 用户实测暴露的缺口：
+ * 纯文本产物没有渲染分支（生成完正文原地消失），Agent 写进 metadata.content 的内容也不显示
+ * （用户让 Agent 写完看画布纹丝不动，只能判断"Agent 没写进去"）。
+ */
+describe("ToonflowNodeContent 正文渲染", () => {
+    function withOutputText(text: string): CanvasNodeData {
+        const base = toonflowNode("script", "review", "剧本");
+        return { ...base, metadata: { ...base.metadata, toonflow: { ...base.metadata!.toonflow!, output: { nodeId: "node-1", kind: "script", version: 1, status: "review", payload: { text }, upstreamVersions: {}, generatedAt: "2026-07-27T00:00:00.000Z" } } } };
+    }
+
+    it("纯文本产物直接渲染在节点上，而不是退回 checks 清单", () => {
+        const html = render(withOutputText("第1场天台对峙：林野扔下伞。"));
+
+        expect(html).toContain("第1场天台对峙：林野扔下伞。");
+        expect(html).not.toContain("爽点覆盖");
+    });
+
+    it("没有产物时兜底渲染 Agent 写入的 metadata.content", () => {
+        const base = toonflowNode("project", "empty", "项目 / 剧集");
+        const html = render({ ...base, metadata: { ...base.metadata, content: "本集 165 秒，倒叙结构，三处爽点落在 12/48/120 秒。" } });
+
+        expect(html).toContain("本集 165 秒，倒叙结构");
+    });
+
+    it("模板初始占位文案不占用正文区，仍显示 checks 清单", () => {
+        const base = toonflowNode("project", "empty", "项目 / 剧集");
+        const html = render({ ...base, metadata: { ...base.metadata, content: `项目 / 剧集\n${base.metadata!.toonflow!.summary}` } });
+
+        expect(html).toContain("爽点覆盖");
+        expect(html).not.toContain("选修环节，可整节跳过。选修环节");
+    });
+});
+
+/** Codex 对抗审查 2026-07-27 疑点4：占位判据依赖标题，标题被 Agent 改写后判据失效。 */
+describe("ToonflowNodeContent 占位判据", () => {
+    it("标题被 Agent 改写后，模板占位文案仍不该被当成正文顶掉 checks 清单", () => {
+        const base = toonflowNode("project", "empty", "项目 / 剧集");
+        const summary = base.metadata!.toonflow!.summary;
+        const html = render({ ...base, title: "项目 / 剧集｜EP1 起源-门开了", metadata: { ...base.metadata, content: `项目 / 剧集\n${summary}` } });
+
+        expect(html).toContain("爽点覆盖");
+        expect(html).not.toContain(`${summary}${summary}`);
+    });
+});
