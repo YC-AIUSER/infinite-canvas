@@ -20,7 +20,9 @@ function registerCanvasTool(server: McpServer, config: CanvasAgentConfig, name: 
     const schema = toolInputSchemas[name];
     server.registerTool(name, { description: toolDescriptions[name], inputSchema: schema.shape }, async (input: unknown) => {
         const result = await postCanvasAgentTool(config, name, schema.parse(input));
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        // 紧凑序列化:缩进只服务人眼,而这里的读者是模型。实测画布快照 29700 字符里
+        // 有 26% 是缩进空白,工具结果又占 rollout 的一半,去掉直接省下整体约 14%。
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     });
 }
 

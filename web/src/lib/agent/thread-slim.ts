@@ -1,5 +1,8 @@
 // 有线程记录大小时只按真实 rollout 字节数判断；旧版 Agent 或文件查找失败时才用宽松兜底。
-export const SLIM_ROLLOUT_BYTES_THRESHOLD = 500_000;
+// 阈值 1.5MB 的来由：500KB 太低，画布类用法几轮工具调用就能撞上，出现「没聊几句就催瘦身」。
+// 实测一条 1394KB 的 rollout，对话本身占 46% 压不掉，精简快照与去缩进合计只省约 20%——
+// 省不下来就只能抬阈值。1.5MB 参照用户反馈「0.8MB 左右开始逐轮变慢」的旧单线程留了余量。
+export const SLIM_ROLLOUT_BYTES_THRESHOLD = 1_500_000;
 export const SLIM_MESSAGE_THRESHOLD = 120;
 export const SLIM_CHARS_THRESHOLD = 300_000;
 
