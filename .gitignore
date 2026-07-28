@@ -13,3 +13,6 @@ web/dist
 .codegraph/
 # blockout 故事板实验参考图(~28MB 二进制,无代码引用,仅本地实验用)
 web/public/sb/
+
+# Supergoal 运行产物（计划/状态/阶段规格，本地过程文件）
+.supergoal/
