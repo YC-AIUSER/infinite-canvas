@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-28 15:44'
-updated_date: '2026-07-28 16:53'
+updated_date: '2026-07-28 17:01'
 labels: []
 dependencies: []
 ordinal: 16000
@@ -40,6 +40,8 @@ stop-gate 追审修复(第3轮)：单 store 水合降级场景——新增 stora
 stop-gate 追审第2轮修复：水合链路上层异常(JSON损坏/资产重建抛错)走 persist error 通道但回调无视——两 store 的 onRehydrateStorage 现在 error 时打降级标；端到端测试(真实store+损坏持久化)3用例，619全绿(d006ae9 之后新 commit)。
 
 stop-gate 追审第3轮修复：水合失败回调的 setState 会触发 persist 把空初始态回写存储(洗白损坏数据,熔断只延迟一轮)——降级会话现拦截该 store 全部持久化写入,原始数据保盘,每会话重新报降级形成稳定熔断循环;已知取舍=降级会话改动不落盘。+3用例(降级拦写/canvas flush不落盘/健康会话正常写),622全绿。
+
+stop-gate 追审第4轮修复：降级标打上前的时序窗口——水合进行中发起的写入(canvas 防抖队列尤甚)会在标记后落盘覆盖损坏数据；写入门槛改为 canPersist=水合定型&&未降级(storage-read-health 新增 settledHydrations)，新增窗口期测试(水合挂起中 createProject+flush 零落盘)，623 全绿。
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
