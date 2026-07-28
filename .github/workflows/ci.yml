@@ -19,7 +19,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
+      # pro-components beta 声明 antd ^5 peer，项目实际用 antd 6（本地即宽松安装），CI 同样放宽
+      - run: npm ci --legacy-peer-deps
       - run: npm run typecheck
       - run: npm test
 
