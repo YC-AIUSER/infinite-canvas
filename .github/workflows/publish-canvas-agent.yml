@@ -48,11 +48,35 @@ jobs:
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # 粘贴 secret 时常混入换行/回车（Windows 尤其），会让 npm 构造 Authorization 头失败
+      # 报 "is not a legal HTTP header value"。这里清洗后再用，并输出不泄露内容的诊断。
+      - name: Check npm token shape
+        if: steps.package.outputs.should_publish == 'true'
+        id: token
+        run: |
+          raw="$NPM_TOKEN_RAW"
+          clean=$(printf '%s' "$raw" | tr -d '[:space:]')
+          if [ -z "$clean" ]; then
+            echo "NPM_TOKEN 未配置或为空，无法发布" >&2
+            exit 1
+          fi
+          if [ "${#raw}" -ne "${#clean}" ]; then
+            echo "注意：token 含空白字符（长度 ${#raw} → ${#clean}），已自动清洗后使用。"
+          fi
+          case "$clean" in
+            npm_*) echo "token 前缀检查：通过（npm_ 开头）" ;;
+            *) echo "警告：token 不以 npm_ 开头，可能粘贴了整行 .npmrc 或类型不对；仍继续尝试。" ;;
+          esac
+          echo "::add-mask::$clean"
+          echo "value=$clean" >> "$GITHUB_OUTPUT"
+        env:
+          NPM_TOKEN_RAW: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish to npm
         if: steps.package.outputs.should_publish == 'true'
         run: npm publish --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ steps.token.outputs.value }}
 
       - name: Skip existing version
         if: steps.package.outputs.should_publish != 'true'
