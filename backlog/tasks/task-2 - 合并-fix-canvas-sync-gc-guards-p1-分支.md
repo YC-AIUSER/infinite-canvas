@@ -1,9 +1,10 @@
 ---
 id: TASK-2
 title: 合并 fix/canvas-sync-gc-guards-p1 分支
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-28 06:12'
+updated_date: '2026-07-28 06:29'
 labels: []
 dependencies: []
 ordinal: 2000
@@ -19,3 +20,9 @@ ordinal: 2000
 <!-- AC:BEGIN -->
 - [ ] #1 git status 干净；改动已合并进 main；CHANGELOG 已更新
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+已快进合并到 main（b0601b7..9593579）并推送远端，功能分支已删除。
+<!-- SECTION:FINAL_SUMMARY:END -->
