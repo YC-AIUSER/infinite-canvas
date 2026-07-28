@@ -2,6 +2,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
+import { registerSessionMediaKey } from "@/services/session-media-keys";
 
 export type UploadedImage = {
     url: string;
@@ -19,6 +20,7 @@ export async function uploadImage(input: string | Blob): Promise<UploadedImage> 
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
     const storageKey = `image:${nanoid()}`;
     await store.setItem(storageKey, blob);
+    registerSessionMediaKey(storageKey);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     const meta = await readImageMeta(url);
@@ -42,6 +44,7 @@ export async function getImageBlob(storageKey: string) {
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
+    registerSessionMediaKey(storageKey);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;

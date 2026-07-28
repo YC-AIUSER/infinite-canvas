@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { App } from "antd";
 
 import { clearConfigUrlImport, parseConfigUrlImport } from "@/lib/config-url-import";
+import { scheduleStartupMediaSweep } from "@/services/startup-media-sweep";
 import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -11,6 +12,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const config = useConfigStore((state) => state.config);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+
+    useEffect(() => {
+        scheduleStartupMediaSweep();
+    }, []);
 
     useEffect(() => {
         if (handledConfigParams.current) return;
