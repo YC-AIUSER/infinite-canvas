@@ -521,6 +521,16 @@ function InfiniteCanvasPage() {
         [cleanupAssetImages],
     );
 
+    // 替换媒体后的回收：等节点新状态经持久化 effect 写入 store（400ms 防抖 + 提交）后再跑，
+    // 否则回收读到旧引用集合——旧键被稳定保住且替换场景之后再无回收触发点，旧文件永久漏删。
+    // extra 仍带上新上传对象兜底，防极端时序下新文件被当孤儿。
+    const scheduleReplaceMediaCleanup = useCallback(
+        (uploaded: unknown) => {
+            window.setTimeout(() => cleanupCanvasFiles(uploaded), 1500);
+        },
+        [cleanupCanvasFiles],
+    );
+
     const startGenerationRequest = useCallback((targetNodeId: string, originNodeId: string, runningId = originNodeId, controller = new AbortController()) => {
         const previous = generationRequestsRef.current.get(targetNodeId);
         if (previous?.controller !== controller) previous?.controller.abort();
@@ -2408,9 +2418,7 @@ function InfiniteCanvasPage() {
                     );
                     setSelectedNodeIds(new Set([target.nodeId]));
                     setSelectedConnectionId(null);
-                    // 新上传对象作为 extra 传入：回收在 setTimeout 里读 store，可能跑在
-                    // 节点状态落库之前，不带上新键会被当孤儿误删
-                    cleanupCanvasFiles(audio);
+                    scheduleReplaceMediaCleanup(audio);
                     return;
                 }
                 if (file.type.startsWith("video/")) {
@@ -2435,7 +2443,7 @@ function InfiniteCanvasPage() {
                     setSelectedNodeIds(new Set([target.nodeId]));
                     setSelectedConnectionId(null);
                     setDialogNodeId(target.nodeId);
-                    cleanupCanvasFiles(video);
+                    scheduleReplaceMediaCleanup(video);
                     return;
                 }
                 const image = await uploadImage(file);
@@ -2475,7 +2483,7 @@ function InfiniteCanvasPage() {
                 setSelectedNodeIds(new Set([target.nodeId]));
                 setSelectedConnectionId(null);
                 setDialogNodeId(target.nodeId);
-                cleanupCanvasFiles(image);
+                scheduleReplaceMediaCleanup(image);
             } else {
                 const basePosition = target?.position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
                 const activate = files.length === 1;
@@ -2493,7 +2501,7 @@ function InfiniteCanvasPage() {
                 })();
             }
         },
-        [cleanupCanvasFiles, createAudioFileNode, createImageFileNode, createVideoFileNode, guardProject, message, screenToCanvas, size.height, size.width],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, guardProject, message, scheduleReplaceMediaCleanup, screenToCanvas, size.height, size.width],
     );
 
     const handleDrop = useCallback(
