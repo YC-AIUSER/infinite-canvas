@@ -31,6 +31,7 @@ describe("启动孤儿媒体清扫", () => {
         vi.resetModules();
         vi.useFakeTimers();
         cleanupMock.mockClear();
+        delete (globalThis as Record<string, unknown>).__infiniteCanvasStartupSweepScheduled;
         assetStore = createMockStore<{ hydrated: boolean; assets: unknown[] }>({ hydrated: false, assets: [{ id: "asset-1" }] });
         canvasStore = createMockStore<{ hydrated: boolean; projects: unknown[] }>({ hydrated: false, projects: [{ id: "project-1" }] });
         vi.doMock("@/services/app-media-cleanup", () => ({ cleanupUnusedAppMedia: cleanupMock }));
@@ -81,6 +82,43 @@ describe("启动孤儿媒体清扫", () => {
         scheduleStartupMediaSweep();
         await vi.advanceTimersByTimeAsync(8_000);
         expect(cleanupMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("调度时未水合、之后经订阅感知双水合，同样恰好触发一次", async () => {
+        const { scheduleStartupMediaSweep } = await importSweep();
+        scheduleStartupMediaSweep();
+        // 先让内部动态导入完成、进入订阅分支，再补水合
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cleanupMock).not.toHaveBeenCalled();
+        assetStore.setState({ hydrated: true });
+        canvasStore.setState({ hydrated: true });
+        await vi.advanceTimersByTimeAsync(8_000);
+        expect(cleanupMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("模块热重载（重新导入）后守卫仍然生效，不产生第二轮清扫", async () => {
+        const first = await importSweep();
+        first.scheduleStartupMediaSweep();
+        assetStore.setState({ hydrated: true });
+        canvasStore.setState({ hydrated: true });
+        await vi.advanceTimersByTimeAsync(8_000);
+        expect(cleanupMock).toHaveBeenCalledTimes(1);
+
+        // 模拟 Vite HMR：模块实例重建（模块变量清零），globalThis 守卫必须仍拦住
+        vi.resetModules();
+        const second = await importSweep();
+        second.scheduleStartupMediaSweep();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(cleanupMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("参照集全空时熔断不清扫（水合可能静默失败）", async () => {
+        assetStore.setState({ hydrated: true, assets: [] });
+        canvasStore.setState({ hydrated: true, projects: [] });
+        const { scheduleStartupMediaSweep } = await importSweep();
+        scheduleStartupMediaSweep();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(cleanupMock).not.toHaveBeenCalled();
     });
 
     it("清扫读取两个 store 的当前状态，并把会话内新写键作为在途引用豁免", async () => {

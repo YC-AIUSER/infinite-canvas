@@ -2,7 +2,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
-import { registerSessionMediaKey } from "@/services/session-media-keys";
+import { getSessionMediaKeys, registerSessionMediaKey } from "@/services/session-media-keys";
 
 export type UploadedImage = {
     url: string;
@@ -19,8 +19,9 @@ const objectUrls = new Map<string, string>();
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
     const storageKey = `image:${nanoid()}`;
-    await store.setItem(storageKey, blob);
+    // 登记必须先于写入：写入后登记会留一个"块已存在、登记表还没有"的窗口，正在进行的清扫会把它当孤儿删掉
     registerSessionMediaKey(storageKey);
+    await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     const meta = await readImageMeta(url);
@@ -43,8 +44,8 @@ export async function getImageBlob(storageKey: string) {
 }
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
-    await store.setItem(storageKey, blob);
     registerSessionMediaKey(storageKey);
+    await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -73,8 +74,10 @@ export async function cleanupUnusedImages(usedData: unknown) {
 
 export async function cleanupUnusedImagesByKeys(usedKeys: ReadonlySet<string>) {
     const unused: string[] = [];
+    // 会话键在删除时刻实时查（不能靠调用方快照）：清扫是异步多步的，期间新写入的键必须豁免
+    const sessionKeys = getSessionMediaKeys();
     await store.iterate((_value, key) => {
-        if (!usedKeys.has(key)) unused.push(key);
+        if (!usedKeys.has(key) && !sessionKeys.has(key)) unused.push(key);
     });
     await deleteStoredImages(unused);
 }

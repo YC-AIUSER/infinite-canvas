@@ -1,7 +1,7 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
-import { registerSessionMediaKey } from "@/services/session-media-keys";
+import { getSessionMediaKeys, registerSessionMediaKey } from "@/services/session-media-keys";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
@@ -11,8 +11,9 @@ const objectUrls = new Map<string, string>();
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
     const storageKey = `${prefix}:${nanoid()}`;
-    await store.setItem(storageKey, blob);
+    // 登记必须先于写入，理由见 image-storage.ts uploadImage
     registerSessionMediaKey(storageKey);
+    await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : blob.type.startsWith("audio/") ? await readAudioMeta(url) : {};
@@ -35,8 +36,8 @@ export async function getMediaBlob(storageKey: string) {
 }
 
 export async function setMediaBlob(storageKey: string, blob: Blob) {
-    await store.setItem(storageKey, blob);
     registerSessionMediaKey(storageKey);
+    await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -59,8 +60,10 @@ export async function cleanupUnusedMedia(usedData: unknown) {
 
 export async function cleanupUnusedMediaByKeys(usedKeys: ReadonlySet<string>) {
     const unused: string[] = [];
+    // 会话键在删除时刻实时查，理由见 image-storage.ts cleanupUnusedImagesByKeys
+    const sessionKeys = getSessionMediaKeys();
     await store.iterate((_value, key) => {
-        if (!usedKeys.has(key)) unused.push(key);
+        if (!usedKeys.has(key) && !sessionKeys.has(key)) unused.push(key);
     });
     await Promise.all(unused.map((key) => store.removeItem(key)));
 }
