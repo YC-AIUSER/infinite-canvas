@@ -1,6 +1,8 @@
 import localforage from "localforage";
 import type { StateStorage } from "zustand/middleware";
 
+import { markStorageReadFallback } from "@/lib/storage-read-health";
+
 localforage.config({
     name: "infinite-canvas",
     storeName: "app_state",
@@ -12,6 +14,7 @@ export const localForageStorage: StateStorage = {
         try {
             return (await localforage.getItem<string>(name)) || null;
         } catch {
+            markStorageReadFallback(name);
             return window.localStorage.getItem(name);
         }
     },

@@ -43,6 +43,7 @@ describe("启动孤儿媒体清扫", () => {
         vi.doUnmock("@/services/app-media-cleanup");
         vi.doUnmock("@/stores/use-asset-store");
         vi.doUnmock("@/stores/canvas/use-canvas-store");
+        vi.doUnmock("@/lib/storage-read-health");
         vi.useRealTimers();
     });
 
@@ -110,6 +111,16 @@ describe("启动孤儿媒体清扫", () => {
         second.scheduleStartupMediaSweep();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(cleanupMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("任一 store 发生降级读取时熔断不清扫（即使参照集非空）", async () => {
+        vi.doMock("@/lib/storage-read-health", () => ({ hasStorageReadFallback: () => true, markStorageReadFallback: () => undefined }));
+        assetStore.setState({ hydrated: true });
+        canvasStore.setState({ hydrated: true });
+        const { scheduleStartupMediaSweep } = await importSweep();
+        scheduleStartupMediaSweep();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(cleanupMock).not.toHaveBeenCalled();
     });
 
     it("参照集全空时熔断不清扫（水合可能静默失败）", async () => {

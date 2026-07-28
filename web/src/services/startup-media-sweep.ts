@@ -1,3 +1,4 @@
+import { hasStorageReadFallback } from "@/lib/storage-read-health";
 import { cleanupUnusedAppMedia } from "@/services/app-media-cleanup";
 import { getSessionMediaKeys } from "@/services/session-media-keys";
 
@@ -32,11 +33,17 @@ export function scheduleStartupMediaSweep(delayMs = STARTUP_SWEEP_DELAY_MS) {
             });
         }
         setTimeout(() => {
+            // 熔断一（精确信号）：任一持久化状态本会话发生过降级读取（IndexedDB 读失败
+            // 回退 localStorage），引用集就不可信——哪怕只有一个 store 受影响也不许清扫，
+            // 否则会拿残缺引用集删掉仅被那个 store 引用的真实媒体。
+            if (hasStorageReadFallback()) {
+                console.debug("[startup-media-sweep] 状态存在降级读取，跳过本轮清扫");
+                return;
+            }
             const assets = useAssetStore.getState().assets;
             const projects = useCanvasStore.getState().projects;
-            // 熔断：hydrated 只代表水合流程结束，不代表读到了可信数据——
-            // localforage 读失败会静默回退（通常得到空状态）且仍置 hydrated。
-            // 参照集全空时宁可不清（孤儿等下次启动），绝不拿空引用集删库。
+            // 熔断二（兜底启发式）：参照集全空时宁可不清（孤儿等下次启动），
+            // 防备"数据丢失但读取未抛错"这类降级信号覆盖不到的情形。
             if (!assets.length && !projects.length) {
                 console.debug("[startup-media-sweep] 参照集为空，跳过本轮清扫");
                 return;
