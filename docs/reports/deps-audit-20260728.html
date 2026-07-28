@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>依赖安全通告逐项暴露面评估 — infinite-canvas</title>
+<style>
+/* ================================================================
+   DESIGN TOKENS — 与 D:\claude\design-tokens.css 一致
+   ================================================================ */
+:root {
+  --ivory:    #FAF9F5;   /* 页面底 */
+  --slate:    #141413;   /* 标题 / 强调块底 */
+  --clay:     #D97757;   /* 主强调色 */
+  --oat:      #E3DACC;
+  --olive:    #788C5D;
+  --rust:     #B04A3F;
+  --white:    #FFFFFF;   /* 卡片底 */
+  --gray-100: #F0EEE6;   /* 次级面 */
+  --gray-300: #D1CFC5;   /* 边框 */
+  --gray-500: #87867F;   /* 弱文字 */
+  --gray-700: #3D3D3A;   /* 正文 */
+
+  --warning:  #C78E3F;
+  --danger:   #B04A4A;
+  --info:     #5C7CA3;
+
+  --serif: ui-serif, Georgia, "Noto Serif SC", "Source Han Serif SC", serif;
+  --sans:  system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius: 12px;
+  --border: 1.5px solid var(--gray-300);
+  --shadow: 0 1px 2px rgba(20,20,19,0.06);
+}
+
+/* 深色模式：只翻转原始 token，语义配色自洽（ivory↔slate 互换是关键）
+   由顶栏按钮写 html[data-theme="dark"]；首次跟随系统偏好 */
+html[data-theme="dark"] {
+  --ivory:    #16161A;
+  --white:    #201F1D;
+  --slate:    #F2EEE6;
+  --oat:      #3A3226;
+  --gray-100: #26251F;
+  --gray-300: #3A3A36;
+  --gray-500: #9C9A92;
+  --gray-700: #D6D3CB;
+  --shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+
+/* ================================================================
+   BASE
+   ================================================================ */
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+body {
+  margin: 0;
+  padding: 0 32px 120px;
+  background: var(--ivory);
+  color: var(--gray-700);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
+}
+.page { max-width: 1180px; margin: 0 auto; }
+
+/* ================================================================
+   00 · DOC NAV — sticky 顶栏：目录 + 搜索 + 主题切换（自动生成）
+   ================================================================ */
+.docnav {
+  position: sticky;
+  top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--ivory) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  border-bottom: 1px solid var(--gray-300);
+  margin: 0 -32px 40px;
+  padding: 10px 32px;
+}
+.docnav-inner {
+  max-width: 1180px; margin: 0 auto;
+  display: flex; align-items: center; gap: 10px;
+}
+.docnav .toc {
+  display: flex; gap: 4px; flex-wrap: wrap; flex: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: thin;
+}
+.docnav .toc a {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--gray-500); text-decoration: none;
+  padding: 5px 10px; border-radius: 7px; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.docnav .toc a:hover { color: var(--clay); background: var(--gray-100); }
+.docnav .toc a.active { color: var(--slate); background: var(--oat); }
+.docnav .search {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--white); color: var(--gray-700);
+  border: var(--border); border-radius: 999px;
+  padding: 6px 12px; width: 150px; transition: width 0.2s, border-color 0.15s;
+}
+.docnav .search:focus { outline: none; width: 200px; border-color: var(--clay); }
+.docnav .search-count {
+  font-family: var(--mono); font-size: 11px; color: var(--gray-500);
+  min-width: 30px; text-align: center;
+}
+.docnav .theme-btn {
+  background: var(--white); border: var(--border); border-radius: 999px;
+  width: 34px; height: 34px; cursor: pointer; font-size: 15px;
+  display: grid; place-items: center; flex-shrink: 0; color: var(--gray-700);
+}
+.docnav .theme-btn:hover { border-color: var(--clay); }
+mark.dochit { background: var(--clay); color: var(--ivory); border-radius: 3px; padding: 0 1px; }
+mark.dochit.current { outline: 2px solid var(--slate); }
+@media (max-width: 640px) {
+  .docnav .search { width: 100px; } .docnav .search:focus { width: 130px; }
+}
+
+/* ================================================================
+   01 · HEADER
+   ================================================================ */
+.eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px;
+}
+h1 {
+  font-family: var(--serif); font-weight: 500; font-size: 36px; line-height: 1.15;
+  color: var(--slate); letter-spacing: -0.01em; margin: 0 0 16px;
+}
+.lede { font-size: 17px; color: var(--gray-500); max-width: 760px; margin: 0 0 48px; }
+
+/* ================================================================
+   02 · PROMPT BOX
+   ================================================================ */
+.prompt-box {
+  background: var(--gray-100); border: var(--border); border-radius: var(--radius);
+  padding: 16px 20px; font-size: 14px; color: var(--gray-700); margin-bottom: 48px;
+}
+.prompt-box .label {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--gray-500); display: block; margin-bottom: 6px;
+}
+
+/* ================================================================
+   03 · SUMMARY BAND
+   ================================================================ */
+.summary-band {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 56px;
+}
+@media (max-width: 720px) { .summary-band { grid-template-columns: repeat(2, 1fr); } }
+.stat-card {
+  background: var(--white); border: var(--border); border-radius: var(--radius);
+  padding: 20px 22px 18px;
+}
+.stat-card.warn { border-left: 4px solid var(--clay); padding-left: 19px; }
+.stat-num {
+  font-family: var(--serif); font-size: 42px; font-weight: 500; line-height: 1;
+  color: var(--slate); margin-bottom: 8px;
+}
+.stat-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gray-500); }
+.stat-delta { font-family: var(--mono); font-size: 11px; margin-top: 6px; }
+.stat-delta.up   { color: var(--olive); }
+.stat-delta.down { color: var(--danger); }
+.stat-delta.flat { color: var(--gray-500); }
+
+/* ================================================================
+   04 · SECTION CHROME
+   ================================================================ */
+section { margin-bottom: 56px; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+.sec-head .num {
+  font-family: var(--mono); font-size: 12px; background: var(--oat); color: var(--slate);
+  padding: 3px 9px; border-radius: 8px;
+}
+.sec-head h2 {
+  font-family: var(--serif); font-weight: 500; font-size: 24px; color: var(--slate);
+  letter-spacing: -0.01em; margin: 0;
+}
+.sec-intro { font-size: 14px; color: var(--gray-500); max-width: 760px; margin-bottom: 24px; }
+hr.rule { border: none; border-top: 1px solid var(--gray-300); margin: 0 0 22px; }
+
+/* ================================================================
+   05 · CARD GRID
+   ================================================================ */
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--white); border: var(--border); border-radius: var(--radius);
+  padding: 20px 24px; box-shadow: var(--shadow);
+}
+.card .role {
+  font-size: 12px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--clay); margin-bottom: 4px;
+}
+.card h3 { font-size: 18px; font-weight: 500; margin: 0 0 8px; color: var(--slate); }
+.card p { margin: 0; font-size: 14px; color: var(--gray-700); }
+/* 被筛选隐藏时 */
+[data-group].filtered-out { display: none !important; }
+
+/* ================================================================
+   06 · TABLE
+   ================================================================ */
+.table-scroll { overflow-x: auto; border-radius: var(--radius); }
+table.data {
+  width: 100%; min-width: 1080px; border-collapse: separate; border-spacing: 0;
+  background: var(--white); border: var(--border); border-radius: var(--radius); overflow: hidden;
+}
+table.data thead th {
+  text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--gray-500); background: var(--gray-100);
+  padding: 12px 16px; border-bottom: 1px solid var(--gray-300);
+}
+table.data.sortable thead th { cursor: pointer; user-select: none; }
+table.data.sortable thead th::after { content: " \2195"; opacity: 0.35; font-size: 10px; }
+table.data.sortable thead th.asc::after  { content: " \2191"; opacity: 1; color: var(--clay); }
+table.data.sortable thead th.desc::after { content: " \2193"; opacity: 1; color: var(--clay); }
+table.data tbody td {
+  padding: 13px 16px; border-bottom: 1px solid var(--gray-100); font-size: 13.5px; color: var(--gray-700);
+  vertical-align: top;
+}
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data tbody td.desc-cell, table.data tbody td.exposure-cell { max-width: 260px; line-height: 1.5; }
+table.data tbody td.pkg-cell { font-family: var(--mono); font-size: 12.5px; color: var(--slate); font-weight: 600; white-space: nowrap; }
+table.data tbody td.src-cell { font-size: 12px; color: var(--gray-500); white-space: nowrap; }
+
+/* ================================================================
+   07 · TAGS & PILLS
+   ================================================================ */
+.tag {
+  display: inline-block; font-family: var(--mono); font-size: 11px;
+  background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 6px;
+  padding: 3px 8px; color: var(--gray-700);
+}
+.badge {
+  display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px; color: #FFF; white-space: nowrap;
+}
+.badge.green { background: var(--olive); } .badge.orange { background: var(--warning); }
+.badge.red { background: var(--danger); } .badge.blue { background: var(--info); }
+.badge.gray { background: var(--gray-500); }
+.pill { font-family: var(--mono); font-size: 12px; color: var(--clay); background: var(--oat); padding: 2px 8px; border-radius: 4px; }
+
+/* ================================================================
+   08 · MILESTONE TIMELINE
+   ================================================================ */
+.milestones { display: flex; flex-direction: column; }
+.milestone { display: grid; grid-template-columns: 120px 28px 1fr; gap: 0 18px; }
+.milestone .when { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--gray-500); padding-top: 4px; }
+.milestone .dot-col { display: flex; flex-direction: column; align-items: center; }
+.milestone .dot {
+  width: 14px; height: 14px; border-radius: 50%; background: var(--white);
+  border: 3px solid var(--clay); margin-top: 4px; flex-shrink: 0;
+}
+.milestone .dot.done { background: var(--olive); border-color: var(--olive); }
+.milestone .line { width: 2px; flex: 1; background: var(--gray-300); margin: 4px 0; }
+.milestone:last-child .line { display: none; }
+.milestone .body { padding-bottom: 32px; }
+.milestone .body h3 { font-family: var(--serif); font-weight: 500; font-size: 18px; color: var(--slate); margin: 0 0 4px; }
+.milestone .body p { font-size: 14px; color: var(--gray-500); margin: 0 0 10px; max-width: 620px; }
+.milestone .tags { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ================================================================
+   09 · HIGHLIGHT LIST
+   ================================================================ */
+.highlights { list-style: none; margin: 0; padding: 0; }
+.highlights li { position: relative; padding: 0 0 14px 26px; font-size: 15px; color: var(--gray-700); }
+.highlights li::before {
+  content: ""; position: absolute; left: 6px; top: 8px; width: 7px; height: 7px;
+  border-radius: 2px; background: var(--clay);
+}
+.highlights li strong { color: var(--slate); font-weight: 600; }
+
+/* ================================================================
+   10 · PIPELINE
+   ================================================================ */
+ol.pipeline { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+ol.pipeline > li {
+  counter-increment: step; position: relative; padding: 16px 0 16px 48px;
+  border-left: 2px solid var(--gray-300); margin-left: 16px;
+}
+ol.pipeline > li::before {
+  content: counter(step, decimal-leading-zero); position: absolute; left: -17px; top: 16px;
+  transform: translateX(-50%); background: var(--ivory); color: var(--clay);
+  font-family: var(--mono); font-size: 13px; font-weight: 500; padding: 0 8px;
+}
+ol.pipeline > li.optional { border-left-style: dashed; border-left-color: var(--clay); }
+
+/* ================================================================
+   11 · COLLAPSIBLE
+   ================================================================ */
+details {
+  background: var(--white); border: var(--border); border-radius: var(--radius);
+  margin-bottom: 10px; overflow: hidden;
+}
+details summary { padding: 14px 20px; font-weight: 500; font-size: 15px; color: var(--slate); cursor: pointer; list-style: none; }
+details summary::before {
+  content: "\25B6"; font-size: 10px; color: var(--clay); margin-right: 10px;
+  display: inline-block; transition: transform 0.15s;
+}
+details[open] summary::before { transform: rotate(90deg); }
+details .detail-body { padding: 0 20px 16px; font-size: 14px; color: var(--gray-700); }
+
+/* ================================================================
+   12 · FILTER CHIPS
+   ================================================================ */
+.chips { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.chip {
+  font-family: var(--mono); font-size: 12px; padding: 4px 12px;
+  border: 1px solid var(--gray-300); border-radius: 6px; background: var(--white);
+  cursor: pointer; color: var(--gray-700); user-select: none;
+}
+.chip.active { background: var(--slate); color: var(--ivory); border-color: var(--slate); }
+.chip:hover:not(.active) { border-color: var(--clay); color: var(--clay); }
+.chip-divider { width: 1px; height: 16px; background: var(--gray-300); margin: 0 4px; }
+.chip-group-label { font-family: var(--mono); font-size: 11px; color: var(--gray-500); margin-right: 2px; }
+
+/* ================================================================
+   13 · CODE BLOCK
+   ================================================================ */
+pre {
+  background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 8px;
+  padding: 16px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
+  line-height: 1.5; color: var(--slate);
+}
+code { font-family: var(--mono); font-size: 13px; color: var(--clay); background: var(--oat); padding: 1px 6px; border-radius: 4px; }
+pre code { background: none; padding: 0; color: inherit; }
+
+/* ================================================================
+   14 · PROGRESS BAR
+   ================================================================ */
+.progress-track { width: 100%; height: 8px; background: var(--gray-100); border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--olive); border-radius: 4px; transition: width 0.3s; }
+
+/* ================================================================
+   15 · FOOTER
+   ================================================================ */
+footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--gray-300); font-size: 13px; color: var(--gray-500); }
+
+@media (max-width: 640px) {
+  body { padding: 0 16px 64px; }
+  .docnav { margin: 0 -16px 32px; padding: 10px 16px; }
+  h1 { font-size: 28px; }
+  .summary-band { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     DOC NAV — 结构固定，内容（目录）由 JS 按 section[data-nav] 自动填。
+     ============================================================ -->
+<div class="docnav">
+  <div class="docnav-inner">
+    <nav class="toc" aria-label="目录"><!-- JS 自动填充 --></nav>
+    <input class="search" type="search" placeholder="搜索…" aria-label="页内搜索">
+    <span class="search-count"></span>
+    <button class="theme-btn" title="深/浅色切换" aria-label="切换主题">🌙</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="eyebrow">安全评估 · infinite-canvas</div>
+  <h1>依赖安全通告逐项暴露面评估</h1>
+  <p class="lede">对 web / canvas-agent / docs 三个包 npm audit 报出的 34 条通告逐条判断：在这个纯本地单机项目里，攻击者到底有没有一条能走通的路。只评估，不改代码、不动依赖。</p>
+
+  <div class="prompt-box">
+    <span class="label">任务范围</span>
+    输入：web（19 条）+ canvas-agent（8 条）+ docs（7 条）npm audit 完整结果，共 34 条。产出：每条给出包名 / 严重级别 / 依赖类型 / 漏洞简述 / 本项目实际暴露面判断 / 结论（建议升级｜无实际暴露可缓办｜需进一步确认）。edge-relay/ 不在本次范围内。
+  </div>
+
+  <!-- SUMMARY BAND -->
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">34</div><div class="stat-label">通告总数</div></div>
+    <div class="stat-card warn"><div class="stat-num">5</div><div class="stat-label">建议升级</div></div>
+    <div class="stat-card"><div class="stat-num">25</div><div class="stat-label">无实际暴露可缓办</div></div>
+    <div class="stat-card"><div class="stat-num">4</div><div class="stat-label">需进一步确认</div></div>
+  </div>
+
+  <!-- 01 摘要 -->
+  <section id="s-summary" data-nav="摘要">
+    <div class="sec-head"><span class="num">01</span><h2>摘要</h2></div>
+    <p class="sec-intro">34 条里 25 条（74%）在这个项目的实际用法下走不通利用路径，多数是构建期/测试期才跑的工具链，或者代码里根本没调用到出问题的那部分。真正值得动手的是下面 3 条。</p>
+    <ul class="highlights">
+      <li><strong>axios（web，高危，直接依赖）</strong> — 10 条通告集中在一个包上，且它是真正会带着用户配置的 API 地址、密钥去发请求的库。是直接依赖，修复版本现成，升级成本最低、收益最实在，排第一优先级。</li>
+      <li><strong>dompurify（web，低危，经 mermaid ← streamdown 传递）</strong> — 严重级别虽然只是"低"，但这是本次审计里唯一一条查实了"确实会碰到 AI 生成内容"的链路：<code>web/src/components/canvas/canvas-agent-chat-ui.tsx:55</code> 用 Streamdown 渲染 Agent 聊天文本，Streamdown 内部靠 mermaid 画图表、mermaid 又用 dompurify 净化输出。如果 Agent 被提示注入诱导吐出恶意 mermaid 代码块，这条链路是理论上能被摸到的。优先级按"路径是否真实"排，不是按严重级别数字排。</li>
+      <li><strong>vitest + vite + vite-node（canvas-agent，含 1 条严重级别）</strong> — vitest 那条是本次唯一的 critical：Vitest UI server 监听时可以被读取并执行任意文件。canvas-agent 的 test 脚本平时跑的是 <code>vitest run</code>（没开 --ui），风险不算火烧眉毛，但升级三个包一次搞定、成本很低，没有理由留着一个 critical 级别的通告不处理。</li>
+    </ul>
+  </section>
+
+  <!-- 02 评估前提 -->
+  <section id="s-premise" data-nav="评估前提">
+    <div class="sec-head"><span class="num">02</span><h2>评估前提</h2></div>
+    <p class="sec-intro">判断"暴露面"离不开"这是个什么样的应用"。下面这段是评估的前提，逐条判断都基于它。</p>
+    <div class="card" style="margin-bottom:20px">
+      <p>infinite-canvas 是纯本地单机应用：前端画布（web/，React + Vite，浏览器里跑，数据存 IndexedDB/localforage）+ 本地 Agent CLI（canvas-agent/，Node，跑在用户自己电脑上）+ 文档站（docs/，fumadocs/Next.js，只用于生成静态文档）。没有对外服务端：不接收公网请求、不处理多租户数据、没有服务器渲染的用户输入面。edge-relay/ 是可选的转发 Worker，本次审计范围外。用户是单人使用，攻击者要能利用漏洞，通常需要先能控制用户的输入内容（比如诱导打开恶意画布文件、让 Agent 处理恶意内容）。</p>
+      <p style="margin-top:12px">已知事实：<code>@ant-design/pro-components@3.0.0-beta.3</code> 声明 peer <code>antd@^5</code>，项目实际用 antd 6，CI 里靠 <code>--legacy-peer-deps</code> 装 —— 升级 pro-components 时要注意这个兼容问题。</p>
+    </div>
+    <p class="sec-intro" style="margin-bottom:12px">为了不让判断停留在"理论上可能"，逐项打分前先翻了一遍代码库，核实到以下几个直接影响判断的事实：</p>
+    <ul class="highlights">
+      <li><strong>web 的 dev/preview 脚本绑定 0.0.0.0</strong> — <code>web/package.json</code> 里 <code>"dev": "vite --host 0.0.0.0 --port 3000"</code>、<code>"start": "vite preview --host 0.0.0.0 --port 3000"</code>，开发/预览服务器会监听所有网卡，不是只有本机能连，这个背景信息在判断 vite/esbuild 类"需要访问到本地 dev server"的漏洞时要考虑进去（虽然本次给到的 web 侧 34 条里没有直接列出 vite/esbuild，这条是留给后续复审的背景注记）。</li>
+      <li><strong>pro-components 的代码高亮链路实际没被用到</strong> — <code>web/src/components/layout/app-providers.tsx:3</code> 只 import 了 <code>ProConfigProvider</code>（纯主题/Context Provider），没有引入 pro-components 里会渲染代码高亮的组件。这意味着 react-syntax-highlighter → refractor → prismjs 这条依赖链在这个项目里实际渲染代码路径从未被执行。</li>
+      <li><strong>dompurify 真实经由 mermaid ← streamdown 引入</strong> — <code>web/src/components/canvas/canvas-agent-chat-ui.tsx:55</code> 用 <code>&lt;Streamdown&gt;</code> 渲染 <code>item.text</code>（Agent 返回的聊天内容），这是本次审计里唯一确认"渲染路径可能接触到 AI 生成/外部内容"的一条，详见摘要。</li>
+      <li><strong>@modelcontextprotocol/sdk 在 web 侧其实来自 shadcn CLI 工具</strong> — <code>web/package.json</code> 里 <code>"shadcn": "^4.7.0"</code>（shadcn 组件脚手架 CLI），是它把 <code>@modelcontextprotocol/sdk</code>、<code>hono</code>、<code>@hono/node-server</code> 一起带进来的；<code>web/src</code> 全目录搜索不到任何地方 import 这三个包，说明它们只是"装了但没在应用代码里用到"的 CLI 附带依赖。</li>
+      <li><strong>canvas-agent 的 MCP server 不走 HTTP/hono</strong> — <code>canvas-agent/src/mcp-server.ts:14</code> 用的是 <code>StdioServerTransport</code>（标准输入输出管道），不是走 HTTP 的 transport，hono 的 serve-static 那段代码根本不会被跑到。canvas-agent 自己对外的 HTTP 服务器（<code>canvas-agent/src/http-server.ts</code>）用的是 Express，不是 hono，并且在第 169 行显式 <code>app.listen(port, "127.0.0.1", ...)</code>，只监听本机回环地址。</li>
+      <li><strong>canvas-agent 的 test 脚本不开 vitest UI</strong> — <code>canvas-agent/package.json</code> 里 <code>"test": "vitest run && npm run test:session"</code>，日常跑的是无 UI 模式；docs 的 <code>next.config.mjs</code> 设了 <code>output: 'standalone'</code>（理论上可以起 Node 服务器），但 <code>docker-compose.yml</code>／<code>Dockerfile</code> 里都没有把 docs 纳入实际部署的服务，目前确实只是本地 <code>next build</code>/<code>next dev</code> 使用。</li>
+    </ul>
+  </section>
+
+  <!-- 03 逐项明细表 -->
+  <section id="s-table" data-nav="逐项明细">
+    <div class="sec-head"><span class="num">03</span><h2>逐项明细（34 条，可排序、可筛选）</h2></div>
+    <p class="sec-intro">点表头可排序；下面两组 chips 分别按"结论"和"严重级别"筛选（点一个 chip 只按那一个维度筛，两组切换会互相覆盖，不是叠加 AND —— 这是复用模板自带的单维度筛选机制，没有另写新逻辑）。</p>
+    <div class="chips" data-filter="风险表">
+      <span class="chip-group-label">结论</span>
+      <div class="chip active" data-tag="all">全部</div>
+      <div class="chip" data-tag="upgrade">建议升级</div>
+      <div class="chip" data-tag="safe">无实际暴露可缓办</div>
+      <div class="chip" data-tag="confirm">需进一步确认</div>
+      <div class="chip-divider"></div>
+      <span class="chip-group-label">严重级别</span>
+      <div class="chip" data-tag="critical">critical</div>
+      <div class="chip" data-tag="high">high</div>
+      <div class="chip" data-tag="moderate">moderate</div>
+      <div class="chip" data-tag="low">low</div>
+    </div>
+    <div class="table-scroll">
+    <table class="data sortable">
+      <thead>
+        <tr>
+          <th>包</th>
+          <th>所属包</th>
+          <th>严重级别</th>
+          <th>依赖类型</th>
+          <th>漏洞简述</th>
+          <th>本项目暴露面判断</th>
+          <th>结论</th>
+        </tr>
+      </thead>
+      <tbody>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">@ant-design/pro-components</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">直接依赖<br>（问题实际来自 react-syntax-highlighter）</td>
+          <td class="desc-cell">审计工具因其依赖链里的 react-syntax-highlighter/refractor/prismjs 存在 DOM Clobbering 而标记它。</td>
+          <td class="exposure-cell"><code>app-providers.tsx:3</code> 只 import 了 <code>ProConfigProvider</code>，会渲染代码高亮的 pro-components 组件本项目没有引入，该链路的渲染代码从未被执行。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe low">
+          <td class="pkg-cell">@babel/core</td>
+          <td>web</td>
+          <td><span class="badge gray">low</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">处理带 sourceMappingURL 注释的代码时可被诱导读取任意文件（GHSA-4x5r-pxfx-6jf8）。</td>
+          <td class="exposure-cell">只在构建期编译项目自己的源码，不处理外部/不可信代码，触发条件（构建恶意代码库）不成立。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">@hono/node-server</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 @modelcontextprotocol/sdk）</td>
+          <td class="desc-cell">serve-static 在 Windows 上可被编码反斜杠路径绕过，导致路径穿越（GHSA-frvp-7c67-39w9）。</td>
+          <td class="exposure-cell">该包链条是 shadcn CLI（脚手架工具）带进来的，<code>web/src</code> 全目录搜不到任何引用，不是应用运行时代码路径。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">@modelcontextprotocol/sdk</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 @hono/node-server）</td>
+          <td class="desc-cell">因依赖 @hono/node-server 而继承同一路径穿越风险。</td>
+          <td class="exposure-cell">同上：来自 <code>shadcn</code>（web/package.json 里的脚手架 CLI 依赖），web/src 没有任何地方 import 它。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="upgrade high">
+          <td class="pkg-cell">axios</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">直接依赖</td>
+          <td class="desc-cell">10 条通告：原型污染导致 Basic auth/请求构造被篡改、递归结构引发拒绝服务、maxBodyLength 限制可被 fetch/HTTP2 流式上传绕过、NO_PROXY 处理及拦截器代理配置缺陷等。</td>
+          <td class="exposure-cell">直接依赖，真实用于调用用户配置的 AI 服务地址/密钥。原型污染类利用需要攻击者能影响响应内容，威胁链条不算短，但这是唯一一个"直接依赖 + 修复版本现成 + 用量大"的包，性价比最高。当前锁定 1.16.0，需重新核对是否已覆盖全部 10 条。</td>
+          <td><span class="badge orange">建议升级</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe low">
+          <td class="pkg-cell">body-parser</td>
+          <td>web</td>
+          <td><span class="badge gray">low</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">无效的 limit 配置值会静默禁用大小限制，可能被用来做资源耗尽型拒绝服务（GHSA-v422-hmwv-36x6）。</td>
+          <td class="exposure-cell">body-parser 是 Node 中间件，web 是浏览器打包产物，不会在浏览器运行时执行这段 Node 代码；随构建/CLI 工具链附带引入。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">brace-expansion</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">特定花括号展开输入可导致指数级计算或无界内存增长（GHSA-3jxr-9vmj-r5cp / GHSA-mh99-v99m-4gvg）。</td>
+          <td class="exposure-cell">用于 lint/构建期的 glob 匹配，输入是开发者自己写的文件匹配模式，不接受外部/用户输入。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="upgrade low">
+          <td class="pkg-cell">dompurify</td>
+          <td>web</td>
+          <td><span class="badge gray">low</span></td>
+          <td class="src-cell">传递（经 mermaid ← streamdown）</td>
+          <td class="desc-cell">CUSTOM_ELEMENT_HANDLING 配置在 afterSanitizeElements 净化阶段可被绕过（GHSA-c2j3-45gr-mqc4）。</td>
+          <td class="exposure-cell">经查实由 mermaid（streamdown 的依赖）带入；streamdown 在 <code>canvas-agent-chat-ui.tsx:55</code> 用于渲染 Agent 聊天文本。若 Agent 输出的 mermaid 图表代码块受到提示注入影响，这条链路理论上摸得到。严重级别低，但升级成本也低，作为对"AI 生成内容渲染路径"的兜底处理。</td>
+          <td><span class="badge orange">建议升级</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="confirm high">
+          <td class="pkg-cell">fast-uri</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">反斜杠 authority 分隔符处理及 IDN 规范化失败，均可导致 host 混淆（GHSA-v2hh-gcrm-f6hx / GHSA-4c8g-83qw-93j6）。</td>
+          <td class="exposure-cell">没能定位到具体是谁把它引进来的（候选：某个 JSON Schema 校验库或 shadcn CLI 链路）。host 混淆只有在代码用它做"这个 URL 是否可信"的判断时才有意义 —— 需要跑一次 <code>npm ls fast-uri</code> 确认引入路径和实际用途再下结论。</td>
+          <td><span class="badge blue">需进一步确认</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">form-data</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">构造 multipart 请求时字段名/文件名未转义，可注入 CRLF 篡改请求结构（GHSA-hmw2-7cc7-3qxx）。</td>
+          <td class="exposure-cell">这是 Node 环境下的 multipart 实现，浏览器运行时用的是原生 FormData，不会执行这段代码；多半是构建期工具链附带。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">hono</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 shadcn → @modelcontextprotocol/sdk）</td>
+          <td class="desc-cell">12 条通告：IP 限制绕过、Cookie/CORS 处理缺陷、JWT 校验绕过、路由剥前缀错误，以及多条 AWS Lambda/API Gateway 云函数适配器专属问题等。</td>
+          <td class="exposure-cell">与上面 @hono/node-server 同一证据：来自 shadcn CLI，web/src 未引用。且这 12 条里大半是 Lambda/API Gateway 部署形态才会触发的，本项目从不以这些形态部署 hono。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">js-yaml</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">YAML merge key 别名可构造出复杂度爆炸，导致解析长时间占用 CPU（GHSA-h67p-54hq-rp68 / GHSA-52cp-r559-cp3m）。</td>
+          <td class="exposure-cell">构建/lint 期工具链解析的是仓库自己的配置文件，不解析用户上传或外部来源的 YAML。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">postcss</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">sourceMappingURL 处理时自动加载源码映射文件，可被诱导路径穿越读取任意 .map 文件（GHSA-r28c-9q8g-f849）。</td>
+          <td class="exposure-cell">Tailwind v4 构建管线只处理项目自己的 CSS 源文件，不接收外部/用户上传的样式表输入。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">prismjs</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 refractor）</td>
+          <td class="desc-cell">语法高亮渲染存在 DOM Clobbering，特定 HTML 结构可劫持 DOM 全局查找（GHSA-x7hr-w5r2-h6wg）。</td>
+          <td class="exposure-cell">同 @ant-design/pro-components 那条证据：代码高亮组件在本项目没被实际渲染，链路未被执行。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">qs</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">comma-format 数组含 null/undefined 且开启 encodeValuesOnly 时 stringify 会抛未捕获异常，可被远程触发拒绝服务（GHSA-q8mj-m7cp-5q26）。</td>
+          <td class="exposure-cell">触发条件是对不可信输入做这种特定形式的 query string 序列化，本项目没有这种用法，多半随其他包附带引入。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">react-router</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">直接依赖</td>
+          <td class="desc-cell">RSC（React Server Components）模式下存在 CSRF 绕过，可在返回 400 前执行 action（GHSA-qwww-vcr4-c8h2）。</td>
+          <td class="exposure-cell">本项目是纯客户端 SPA（Vite 打包，浏览器里跑），不使用 RSC / 服务端 action，漏洞要求的服务端执行入口在这个项目里根本不存在。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">react-router-dom</td>
+          <td>web</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">直接依赖（经 react-router）</td>
+          <td class="desc-cell">因依赖 react-router 而继承同一 RSC CSRF 绕过问题。</td>
+          <td class="exposure-cell">同上：不使用 RSC，不适用。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">react-syntax-highlighter</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 refractor，由 @ant-design/pro-components 引入）</td>
+          <td class="desc-cell">因依赖 refractor 而继承 DOM Clobbering 问题。</td>
+          <td class="exposure-cell">同一条证据：该组件在本项目没被引入/渲染，是 pro-components 依赖树里的死代码路径。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">refractor</td>
+          <td>web</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 prismjs，由 react-syntax-highlighter 引入）</td>
+          <td class="desc-cell">因依赖 prismjs 而继承 DOM Clobbering 问题。</td>
+          <td class="exposure-cell">同一条证据：链路未被执行。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">@hono/node-server</td>
+          <td>canvas-agent</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 @modelcontextprotocol/sdk）</td>
+          <td class="desc-cell">同上：serve-static 在 Windows 上可被编码反斜杠路径绕过（GHSA-frvp-7c67-39w9）。</td>
+          <td class="exposure-cell"><code>mcp-server.ts:14</code> 用 <code>StdioServerTransport</code>（标准输入输出管道），不是 HTTP transport，hono 的 serve-static 代码根本不会被执行；canvas-agent 自己的 HTTP 服务器用 Express（<code>http-server.ts</code>），不是 hono。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">@modelcontextprotocol/sdk</td>
+          <td>canvas-agent</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">直接依赖（经 @hono/node-server）</td>
+          <td class="desc-cell">因依赖 @hono/node-server 而继承路径穿越风险。</td>
+          <td class="exposure-cell">同上证据，另外补充：canvas-agent 真正对外监听的 HTTP 服务器显式绑定 <code>127.0.0.1</code>（<code>http-server.ts:169</code>），不接受局域网/公网请求。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">@vitest/mocker</td>
+          <td>canvas-agent</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 vite ← vitest）</td>
+          <td class="desc-cell">因依赖 vite 而继承相关风险。</td>
+          <td class="exposure-cell">只在 <code>npm test</code> 期间跑，不常驻监听端口，单机开发场景无实际暴露。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe moderate">
+          <td class="pkg-cell">esbuild</td>
+          <td>canvas-agent</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 vite）</td>
+          <td class="desc-cell">任意网站可以向正在运行的开发服务器发请求并读取响应（GHSA-67mh-4wv8-2f99）。</td>
+          <td class="exposure-cell">canvas-agent 的 dev/test 脚本是 <code>tsx src/index.ts</code> / <code>vitest run</code>，不起 Vite 开发服务器，漏洞要求的"dev server 正在监听 + 被恶意网站访问到"两个条件都不成立。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="confirm high">
+          <td class="pkg-cell">fast-uri</td>
+          <td>canvas-agent</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递</td>
+          <td class="desc-cell">同上：反斜杠/IDN 规范化处理缺陷导致 host 混淆。</td>
+          <td class="exposure-cell">同 web 侧同款疑点，没能定位具体引入路径和用途，需要 <code>npm ls fast-uri</code> 确认后再判断是否用于 host 信任判断。</td>
+          <td><span class="badge blue">需进一步确认</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="upgrade high">
+          <td class="pkg-cell">vite</td>
+          <td>canvas-agent</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 vitest）</td>
+          <td class="desc-cell">Optimized Deps 处理 .map 文件时路径穿越；launch-editor 在 Windows 上因 UNC 路径可能泄露 NTLMv2 哈希；Windows 下有绕过 server.fs.deny 的备用路径；以及 esbuild 相关问题。</td>
+          <td class="exposure-cell">开发机是 Windows，其中两条是 Windows 专属场景，理论上适用。虽然只在 <code>npm test</code> 时跑（不是常驻开发服务器），但升级 vitest 会连带把它一起修，成本很低。</td>
+          <td><span class="badge orange">建议升级</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="upgrade moderate">
+          <td class="pkg-cell">vite-node</td>
+          <td>canvas-agent</td>
+          <td><span class="badge blue">moderate</span></td>
+          <td class="src-cell">传递（经 vite ← vitest）</td>
+          <td class="desc-cell">因依赖 vite 而继承相关风险。</td>
+          <td class="exposure-cell">随 vitest 升级自动带动修复，不需要单独处理。</td>
+          <td><span class="badge orange">建议升级</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="upgrade critical">
+          <td class="pkg-cell">vitest</td>
+          <td>canvas-agent</td>
+          <td><span class="badge red">critical</span></td>
+          <td class="src-cell">直接依赖</td>
+          <td class="desc-cell">Vitest UI server 监听时，攻击者可以读取并执行任意文件（GHSA-5xrq-8626-4rwp）。</td>
+          <td class="exposure-cell">canvas-agent 的 test 脚本是 <code>vitest run</code>，日常不开 UI，实际触发需要有人手动跑 <code>vitest --ui</code> 且监听地址不是 127.0.0.1。级别是本次审计里唯一的 critical，修复版本现成、升级成本低，不建议靠"记得别开 UI"扛着——升级掉更可靠。若确实要用 <code>vitest --ui</code>，务必只绑定 127.0.0.1，不要暴露到局域网/公网。</td>
+          <td><span class="badge orange">建议升级</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">brace-expansion</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 minimatch）</td>
+          <td class="desc-cell">无界展开可导致 OOM 崩溃（GHSA-mh99-v99m-4gvg）。</td>
+          <td class="exposure-cell">同 web 侧同款问题：构建/预览期工具链的 glob 匹配，模式由开发者自己写，不接受外部输入。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">minimatch</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 serve-handler）</td>
+          <td class="desc-cell">因依赖 brace-expansion 而继承 OOM 风险。</td>
+          <td class="exposure-cell">同上，serve-handler 只是本地静态预览用的工具链一环。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="confirm high">
+          <td class="pkg-cell">next</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">直接依赖</td>
+          <td class="desc-cell">9 条通告：Turbopack 单 locale 下中间件绕过、Server Actions 拒绝服务/SSRF、请求体缓存混淆两种、Edge runtime 载荷无上限、rewrites 目标主机名可控导致 SSRF、图片优化 API 处理 SVG 拒绝服务、未认证泄露内部 Server Function 端点，以及 postcss/sharp 相关问题。</td>
+          <td class="exposure-cell">这 9 条几乎全部要求"有一个正在处理外部请求的 Next 服务端"才谈得上利用。docs 目前只用来本地 <code>next build</code>/<code>next dev</code> 生成和预览文档，docker-compose/Dockerfile 里没有把它纳入实际部署的服务。但 <code>next.config.mjs</code> 设了 <code>output: 'standalone'</code>，说明技术上具备起 Node 服务端对外提供服务的能力——需要确认的是"docs 有没有计划真的以 standalone 模式跑起来对外提供服务"，这个问题只有用户能回答。</td>
+          <td><span class="badge blue">需进一步确认</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">postcss</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 next）</td>
+          <td class="desc-cell">CSS Stringify 输出未转义 &lt;/style&gt; 可致 XSS；sourceMappingURL 可控可致任意文件读；路径穿越导致 .map 文件泄露（三条 GHSA）。</td>
+          <td class="exposure-cell">处理的是文档站自己的 CSS/MDX 源文件，不接受用户上传或外部提交的样式表内容。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">serve</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">直接依赖（经 serve-handler）</td>
+          <td class="desc-cell">因依赖 serve-handler/minimatch 而继承相关风险。</td>
+          <td class="exposure-cell">本地预览用的静态文件服务器，单机跑给自己看，默认不对外网暴露（除非手动开公网端口/端口转发）。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="safe high">
+          <td class="pkg-cell">serve-handler</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 minimatch）</td>
+          <td class="desc-cell">因依赖 minimatch/brace-expansion 而继承 OOM 风险。</td>
+          <td class="exposure-cell">同 serve 一条，本地预览用途，不对外暴露。</td>
+          <td><span class="badge green">无实际暴露可缓办</span></td>
+        </tr>
+
+        <tr data-group="风险表" data-tag="confirm high">
+          <td class="pkg-cell">sharp</td>
+          <td>docs</td>
+          <td><span class="badge orange">high</span></td>
+          <td class="src-cell">传递（经 next）</td>
+          <td class="desc-cell">继承底层 libvips 的多个 CVE（CVE-2026-33327/33328/35590/35591，GHSA-f88m-g3jw-g9cj）。</td>
+          <td class="exposure-cell">触发前提和 next 那条一样：需要 Next 的 image 优化 API 去处理攻击者可控的图片。如果 docs 从不接收外部上传/远程图片走 next/image 优化管线，就无实际暴露；这取决于 next 是否真的以服务端模式跑，判断前提与上面 next 那条相同，一并确认。</td>
+          <td><span class="badge blue">需进一步确认</span></td>
+        </tr>
+
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- 04 建议处理顺序 -->
+  <section id="s-order" data-nav="处理顺序">
+    <div class="sec-head"><span class="num">04</span><h2>建议处理顺序</h2></div>
+    <p class="sec-intro">按"实际风险 × 升级成本"排序，成本低、风险路径真实的排前面。</p>
+    <ol class="pipeline">
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">升级 axios</div>
+        <span class="pill">web · 直接依赖</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:4px 0 0">10 条通告集中在一个包、是真正对外发请求的库、修复版本现成。跑一次 <code>npm audit fix</code> 或手动升级到最新 1.x patch，再确认当前锁定的 1.16.0 是否已完全覆盖这 10 条 GHSA。</p>
+      </li>
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">升级 vitest（连带 vite / vite-node）</div>
+        <span class="pill">canvas-agent</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:4px 0 0">唯一的 critical 通告，且是三个包一起升的一次性操作，成本很低，没有理由拖着。</p>
+      </li>
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">处理 dompurify（经 mermaid）</div>
+        <span class="pill">web</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:4px 0 0">严重级别低，但这是唯一确认摸得到"AI 生成内容渲染"路径的一条。升级 mermaid 或给 dompurify 加 npm overrides 都行，成本不高，值得顺手处理。</p>
+      </li>
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">找用户确认 next / sharp 的部署形态，以及 fast-uri 的实际引入路径</div>
+        <span class="pill">docs · web · canvas-agent</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:4px 0 0">这 4 条不是"不用管"，是"现在的信息不够下结论"。next/sharp 需要用户明确"docs 会不会真用 standalone 模式对外跑"；fast-uri 需要跑一次 <code>npm ls fast-uri</code> 定位引入路径和用途。确认完再决定升不升。</p>
+      </li>
+      <li class="optional">
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">暂不动 @ant-design/pro-components 及其代码高亮链路</div>
+        <span class="pill">web · 低优先级</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:4px 0 0">已确认这条链路的漏洞代码路径在本项目里没被执行，属于"无实际暴露可缓办"。如果以后因为别的原因（比如要用 pro-components 新特性）想升级它，要留意它声明的 peer 是 <code>antd@^5</code>，而项目实际用的是 antd 6，目前靠 <code>--legacy-peer-deps</code> 硬装——升级前要么继续用这个绕过参数，要么等上游把 peer range 放开到 antd 6，否则会撞包管理器报错。</p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- 05 未采取行动的说明 -->
+  <section id="s-noaction" data-nav="为什么先出报告">
+    <div class="sec-head"><span class="num">05</span><h2>未采取行动的说明</h2></div>
+    <p class="sec-intro">这次是评估，没有升级任何依赖、没有改任何代码。原因不是"怕出错走个流程"，是这份报告本身就改变了要不要动手的判断。</p>
+    <div class="card">
+      <p>34 条 npm audit 通告如果直接一股脑 <code>npm audit fix --force</code>，会出两个实际问题：一是会升级掉 25 条这次查实"用不到"的依赖，这些依赖该不该动跟安全没关系，纯粹是不必要的改动风险（比如 pro-components 升级会直接撞上 antd6 的 peer dependency 冲突，得手动处理）；二是 next.js、vite/vitest 这类工具经常有跨大版本的破坏性变更，盲目升级可能把现在能跑的东西升坏，却换不来真实的安全收益。</p>
+      <p style="margin-top:12px">所以顺序应该是：先把这份报告看完，挑出"建议升级"的 5 条动手（axios、dompurify、vitest 三兄弟），"需进一步确认"的 4 条找用户或者查一下代码定位清楚，再决定动不动。25 条"无实际暴露可缓办"的可以先放着，不用为了清空 audit 输出的红字而做无谓的升级。</p>
+    </div>
+  </section>
+
+  <footer>
+    <!-- Generated by Claude · 2026-07-28 -->
+    数据来源：web / canvas-agent / docs 三处 npm audit 完整结果（34 条）+ 代码库实地核查（import 关系、绑定地址、部署配置）。组件参考：<code>thariqs.github.io/html-effectiveness/</code> · 轻交互模板 v2
+  </footer>
+
+</div>
+
+<script>
+/* ================================================================
+   交互层 — 零依赖、data-* 驱动、对静态内容无侵入
+   四块：① 主题切换 ② 目录自动生成 + 滚动高亮 ③ chips 筛选 ④ 表格排序 ⑤ 页内搜索
+   ================================================================ */
+(function () {
+  "use strict";
+  var $  = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+  /* ---- ① 主题切换：localStorage 记忆，首次跟随系统 ---------------- */
+  var root = document.documentElement, btn = $(".theme-btn");
+  function applyTheme(t) {
+    root.setAttribute("data-theme", t);
+    if (btn) btn.textContent = t === "dark" ? "☀️" : "🌙";
+  }
+  var saved = null;
+  try { saved = localStorage.getItem("doc-theme"); } catch (e) {}
+  var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+  if (btn) btn.addEventListener("click", function () {
+    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem("doc-theme", next); } catch (e) {}
+  });
+
+  /* ---- ② 目录：按 section[data-nav] 自动生成 + 滚动高亮 ----------- */
+  var toc = $(".docnav .toc");
+  var secs = $$("section[data-nav]");
+  var links = [];
+  if (toc && secs.length) {
+    secs.forEach(function (sec) {
+      if (!sec.id) return;
+      var a = document.createElement("a");
+      a.href = "#" + sec.id;
+      a.textContent = sec.getAttribute("data-nav");
+      toc.appendChild(a);
+      links.push(a);
+    });
+    var spy = function () {
+      var y = window.scrollY + 90, cur = null;
+      secs.forEach(function (sec) { if (sec.offsetTop <= y) cur = sec.id; });
+      links.forEach(function (a) {
+        a.classList.toggle("active", a.getAttribute("href") === "#" + cur);
+      });
+    };
+    window.addEventListener("scroll", spy, { passive: true });
+    spy();
+  }
+
+  /* ---- ③ 筛选 chips：data-filter 组名 ↔ data-group/data-tag ------- */
+  $$(".chips[data-filter]").forEach(function (bar) {
+    var group = bar.getAttribute("data-filter");
+    var targets = $$('[data-group="' + group + '"]');
+    bar.addEventListener("click", function (e) {
+      var chip = e.target.closest(".chip");
+      if (!chip) return;
+      $$(".chip", bar).forEach(function (c) { c.classList.remove("active"); });
+      chip.classList.add("active");
+      var want = chip.getAttribute("data-tag");
+      targets.forEach(function (el) {
+        var tags = (el.getAttribute("data-tag") || "").split(/\s+/);
+        var show = want === "all" || tags.indexOf(want) !== -1;
+        el.classList.toggle("filtered-out", !show);
+      });
+    });
+  });
+
+  /* ---- ④ 表格排序：table.data.sortable 表头点击 ------------------- */
+  $$("table.data.sortable").forEach(function (tbl) {
+    var ths = $$("thead th", tbl), tbody = $("tbody", tbl);
+    ths.forEach(function (th, i) {
+      th.addEventListener("click", function () {
+        var asc = !th.classList.contains("asc");
+        ths.forEach(function (h) { h.classList.remove("asc", "desc"); });
+        th.classList.add(asc ? "asc" : "desc");
+        var rows = $$("tr", tbody);
+        rows.sort(function (a, b) {
+          var x = (a.children[i] ? a.children[i].textContent : "").trim();
+          var y = (b.children[i] ? b.children[i].textContent : "").trim();
+          var nx = parseFloat(x.replace(/[^0-9.\-]/g, "")), ny = parseFloat(y.replace(/[^0-9.\-]/g, ""));
+          var num = !isNaN(nx) && !isNaN(ny) && x !== "" && y !== "";
+          var cmp = num ? nx - ny : x.localeCompare(y, "zh");
+          return asc ? cmp : -cmp;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  });
+
+  /* ---- ⑤ 页内搜索：高亮全文 <mark>，回车跳下一处 ----------------- */
+  var input = $(".docnav .search"), count = $(".docnav .search-count");
+  var page = $(".page"), hits = [], idx = -1;
+  function clearMarks() {
+    $$("mark.dochit", page).forEach(function (m) {
+      var t = document.createTextNode(m.textContent);
+      m.parentNode.replaceChild(t, m); m.parentNode.normalize();
+    });
+    hits = []; idx = -1;
+  }
+  function highlight(term) {
+    clearMarks();
+    if (!term || term.length < 2) { if (count) count.textContent = ""; return; }
+    var rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        if (!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        var p = n.parentNode.nodeName;
+        if (p === "SCRIPT" || p === "STYLE" || p === "MARK") return NodeFilter.FILTER_REJECT;
+        return rx.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    var nodes = [], n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    nodes.forEach(function (node) {
+      var frag = document.createDocumentFragment(), last = 0, s = node.nodeValue, m;
+      rx.lastIndex = 0;
+      while ((m = rx.exec(s))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+        var mk = document.createElement("mark"); mk.className = "dochit"; mk.textContent = m[0];
+        frag.appendChild(mk); hits.push(mk); last = m.index + m[0].length;
+        if (m[0].length === 0) rx.lastIndex++;
+      }
+      if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+    if (count) count.textContent = hits.length ? "0/" + hits.length : "0";
+    if (hits.length) jump(0);
+  }
+  function jump(i) {
+    if (!hits.length) return;
+    if (idx >= 0 && hits[idx]) hits[idx].classList.remove("current");
+    idx = (i + hits.length) % hits.length;
+    hits[idx].classList.add("current");
+    hits[idx].scrollIntoView({ block: "center", behavior: "smooth" });
+    if (count) count.textContent = (idx + 1) + "/" + hits.length;
+  }
+  if (input) {
+    var deb;
+    input.addEventListener("input", function () {
+      clearTimeout(deb); var v = input.value;
+      deb = setTimeout(function () { highlight(v.trim()); }, 180);
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); jump(idx + (e.shiftKey ? -1 : 1)); }
+      if (e.key === "Escape") { input.value = ""; clearMarks(); if (count) count.textContent = ""; }
+    });
+  }
+})();
+</script>
+</body>
+</html>
