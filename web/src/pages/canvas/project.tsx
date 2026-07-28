@@ -68,6 +68,7 @@ import { collapseNodeAfterStream, expandNodeForStream } from "@/lib/toonflow/str
 import { cascadeOrder } from "@/lib/toonflow/state-machine";
 import { skillCards } from "@/pages/skills/skills-data";
 import { buildSkillFlowOps } from "@/lib/canvas/skill-flow";
+import { cloneCanvasNodes, copyCanvasNodes } from "@/lib/canvas/node-clone";
 import {
     CanvasNodeType,
     type CanvasAssistantImage,
@@ -1290,31 +1291,25 @@ function InfiniteCanvasPage() {
         const source = nodesRef.current.find((node) => node.id === nodeId);
         if (!source) return;
 
-        const id = `${source.type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const next: CanvasNodeData = {
-            ...source,
-            id,
-            title: `${source.title} Copy`,
-            position: { x: source.position.x + 36, y: source.position.y + 36 },
-        };
+        const { nodes: clonedNodes } = cloneCanvasNodes([source], nodesRef.current, (node, index) => `${node.type}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`);
+        const nextNodes = clonedNodes.map((node) => ({
+            ...node,
+            title: `${node.title} Copy`,
+            position: { x: node.position.x + 36, y: node.position.y + 36 },
+        }));
+        const next = nextNodes[0];
 
-        setNodes((prev) => [...prev, next]);
-        setSelectedNodeIds(new Set([id]));
+        setNodes((prev) => [...prev, ...nextNodes]);
+        setSelectedNodeIds(new Set(nextNodes.map((node) => node.id)));
         setSelectedConnectionId(null);
-        if (next.type !== CanvasNodeType.Group) setDialogNodeId(id);
+        if (next.type !== CanvasNodeType.Group) setDialogNodeId(next.id);
     }, []);
 
     const copySelectedNodes = useCallback(() => {
         const selectedIds = selectedNodeIdsRef.current;
         if (!selectedIds.size) return;
 
-        const copiedNodes = nodesRef.current
-            .filter((node) => selectedIds.has(node.id))
-            .map((node) => ({
-                ...node,
-                position: { ...node.position },
-                metadata: node.metadata ? { ...node.metadata } : undefined,
-            }));
+        const copiedNodes = copyCanvasNodes(nodesRef.current.filter((node) => selectedIds.has(node.id)));
 
         if (!copiedNodes.length) return;
 
@@ -1340,27 +1335,15 @@ function InfiniteCanvasPage() {
         );
         const dx = center.x - (bounds.left + bounds.right) / 2;
         const dy = center.y - (bounds.top + bounds.bottom) / 2;
-        const idMap = new Map<string, string>();
-        const nextNodes = clipboard.nodes.map((node, index) => {
-            const id = `${node.type}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
-            idMap.set(node.id, id);
-            return {
-                ...node,
-                id,
+        const { nodes: clonedNodes, idMap } = cloneCanvasNodes(clipboard.nodes, nodesRef.current, (node, index) => `${node.type}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`);
+        const pastedNodes = clonedNodes.map((node) => ({
+            ...node,
                 title: node.title.endsWith(" Copy") ? node.title : `${node.title} Copy`,
                 position: {
                     x: node.position.x + dx,
                     y: node.position.y + dy,
                 },
-                metadata: node.metadata ? { ...node.metadata } : undefined,
-            };
-        });
-
-        const pastedNodes = nextNodes.map((node) => {
-            const groupId = node.metadata?.groupId;
-            if (!groupId) return node;
-            return { ...node, metadata: { ...node.metadata, groupId: idMap.get(groupId) } };
-        });
+            }));
 
         const nextConnections = clipboard.connections.flatMap((connection, index) => {
             const fromNodeId = idMap.get(connection.fromNodeId);
