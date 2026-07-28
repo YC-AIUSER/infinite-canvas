@@ -217,7 +217,9 @@ export const CanvasNode = React.memo(function CanvasNode({
         const textarea = textareaRef.current;
         if (!textarea) return;
 
-        const handleWheel = (event: WheelEvent) => event.stopPropagation();
+        const handleWheel = (event: WheelEvent) => {
+            if (!event.ctrlKey) event.stopPropagation();
+        };
         textarea.addEventListener("wheel", handleWheel, { passive: false });
         return () => textarea.removeEventListener("wheel", handleWheel);
     }, [data.type, isEditingContent]);
@@ -558,6 +560,7 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
             {isEditingContent ? (
                 <CanvasResourceMentionTextarea
                     ref={textareaRef}
+                    data-canvas-scrollable
                     className="thin-scrollbar block h-full w-full resize-none overflow-y-auto whitespace-pre-wrap break-words border-none bg-transparent pl-4 pr-14 pt-0 pb-4 m-0 font-mono outline-none select-text appearance-none"
                     style={textStyle}
                     value={node.metadata?.content || ""}
@@ -570,13 +573,18 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                     }}
                     onMouseDown={(event) => event.stopPropagation()}
                     onPointerDown={(event) => event.stopPropagation()}
-                    onWheel={(event) => event.stopPropagation()}
+                    onWheel={(event) => {
+                        if (!event.ctrlKey) event.stopPropagation();
+                    }}
                 />
             ) : (
                 <div
+                    data-canvas-scrollable
                     className="thin-scrollbar block h-full w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent pl-4 pr-14 pt-0 pb-4 font-mono"
                     style={textStyle}
-                    onWheel={(event) => event.stopPropagation()}
+                    onWheel={(event) => {
+                        if (!event.ctrlKey) event.stopPropagation();
+                    }}
                 >
                     {node.metadata?.content || <span style={{ color: theme.node.placeholder }}>双击编辑文字</span>}
                     {node.metadata?.status === "loading" && node.metadata.content ? <span className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse align-[-0.12em]" style={{ background: theme.node.activeStroke }} /> : null}

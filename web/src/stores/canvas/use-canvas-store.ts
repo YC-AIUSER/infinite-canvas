@@ -6,6 +6,7 @@ import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { buildToonflowCanvasTemplate, TOONFLOW_CANVAS_TITLE } from "@/lib/canvas/toonflow-canvas-template";
 import { recordSyncDeletions } from "@/services/sync-tombstones";
+import { createCanvasStorePersistQueue } from "@/stores/canvas/canvas-store-persist";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasProjectKind, ViewportTransform } from "@/types/canvas";
 
 export type CanvasProject = {
@@ -39,8 +40,10 @@ type CanvasStore = {
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
 const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
 type PersistedCanvasState = Pick<CanvasStore, "projects">;
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;
+const canvasPersistQueue = createCanvasStorePersistQueue(localForageStorage);
+
+export const flushCanvasStorePersist = () => canvasPersistQueue.flush();
 
 const canvasStorage: PersistStorage<CanvasStore> = {
     getItem: async (name) => {
@@ -54,11 +57,7 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         const nextState = value.state as PersistedCanvasState;
         if (queuedPersistState && queuedPersistState.projects === nextState.projects) return;
         queuedPersistState = nextState;
-        if (saveTimer) clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => {
-            saveTimer = null;
-            void localForageStorage.setItem(name, JSON.stringify(value));
-        }, 400);
+        canvasPersistQueue.schedule(name, JSON.stringify(value));
     },
     removeItem: (name) => localForageStorage.removeItem(name),
 };

@@ -57,7 +57,7 @@ function FieldRow({ label, value }: { label: string; value?: string }) {
 
 function DetailScroll({ background, children }: { background: string; children: ReactNode }) {
     return (
-        <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2 py-1.5" style={{ background }}>
+        <div data-canvas-scrollable className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2 py-1.5" style={{ background }}>
             {children}
         </div>
     );

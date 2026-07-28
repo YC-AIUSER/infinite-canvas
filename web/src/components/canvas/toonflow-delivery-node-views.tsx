@@ -32,7 +32,7 @@ export function ToonflowSegmentQualityReview({ review, background, blockReason, 
                 七项质检 · {checkedCount}/7 已查{p0Count ? ` · ${p0Count} 项 P0 未清` : ""}
             </summary>
             {blockReason ? <p className="mt-1.5 text-amber-600 dark:text-amber-300">暂不可通过：{blockReason}</p> : null}
-            <div className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
+            <div data-canvas-scrollable className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
                 {normalized.items.map((item) => (
                     <div key={item.key} className="rounded-md border border-current/10 p-2">
                         <div className="flex items-center justify-between gap-2">
@@ -102,7 +102,7 @@ export function ToonflowAudioMixPanel({
     }, [plan]);
 
     return (
-        <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs" style={{ background }} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+        <div data-canvas-scrollable className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs" style={{ background }} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
             <details open>
                 <summary className="cursor-pointer select-none font-medium">角色音色 · {roles.length} 项</summary>
                 <div className="mt-2 space-y-1.5">

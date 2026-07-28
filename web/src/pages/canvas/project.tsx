@@ -42,7 +42,7 @@ import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { useAgentStore } from "@/stores/use-agent-store";
-import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { flushCanvasStorePersist, useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { computeFocusViewport, computeNodesBounds, easeInOutCubic, interpolateViewport, VIEWPORT_CAMERA_COOLDOWN, VIEWPORT_CAMERA_DURATION } from "@/lib/canvas/viewport-camera";
 import { resolveFreePosition, resolveFreePositionsForNodes } from "@/lib/canvas/free-position";
@@ -799,18 +799,43 @@ function InfiniteCanvasPage() {
         if (!dialogNodeId) setNodeImageSettingsOpen(false);
     }, [dialogNodeId]);
 
+    const flushViewportPersist = useCallback(() => {
+        if (!viewportSaveTimerRef.current) return;
+        clearTimeout(viewportSaveTimerRef.current);
+        viewportSaveTimerRef.current = null;
+        const currentProjectId = projectIdRef.current;
+        if (loadedProjectIdRef.current !== currentProjectId) return;
+        updateProject(currentProjectId, { viewport: viewportRef.current });
+    }, [updateProject]);
+
     useEffect(() => {
         if (!projectLoaded || loadedProjectIdRef.current !== projectId) return;
         if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
-        viewportSaveTimerRef.current = setTimeout(() => {
-            if (loadedProjectIdRef.current !== projectId) return;
-            updateProject(projectId, { viewport: viewportRef.current });
-            viewportSaveTimerRef.current = null;
-        }, 500);
+        viewportSaveTimerRef.current = setTimeout(flushViewportPersist, 500);
         return () => {
-            if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
+            if (viewportSaveTimerRef.current) {
+                clearTimeout(viewportSaveTimerRef.current);
+                viewportSaveTimerRef.current = null;
+            }
         };
-    }, [projectId, projectLoaded, updateProject, viewport]);
+    }, [flushViewportPersist, projectId, projectLoaded, viewport]);
+
+    useEffect(() => {
+        const flushPersist = () => {
+            flushViewportPersist();
+            void flushCanvasStorePersist();
+        };
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden") flushPersist();
+        };
+
+        window.addEventListener("pagehide", flushPersist);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        return () => {
+            window.removeEventListener("pagehide", flushPersist);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, [flushViewportPersist]);
 
     useLayoutEffect(() => {
         nodesRef.current = nodes;
@@ -2383,6 +2408,9 @@ function InfiniteCanvasPage() {
                     );
                     setSelectedNodeIds(new Set([target.nodeId]));
                     setSelectedConnectionId(null);
+                    // 新上传对象作为 extra 传入：回收在 setTimeout 里读 store，可能跑在
+                    // 节点状态落库之前，不带上新键会被当孤儿误删
+                    cleanupCanvasFiles(audio);
                     return;
                 }
                 if (file.type.startsWith("video/")) {
@@ -2407,6 +2435,7 @@ function InfiniteCanvasPage() {
                     setSelectedNodeIds(new Set([target.nodeId]));
                     setSelectedConnectionId(null);
                     setDialogNodeId(target.nodeId);
+                    cleanupCanvasFiles(video);
                     return;
                 }
                 const image = await uploadImage(file);
@@ -2446,6 +2475,7 @@ function InfiniteCanvasPage() {
                 setSelectedNodeIds(new Set([target.nodeId]));
                 setSelectedConnectionId(null);
                 setDialogNodeId(target.nodeId);
+                cleanupCanvasFiles(image);
             } else {
                 const basePosition = target?.position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
                 const activate = files.length === 1;
@@ -2463,7 +2493,7 @@ function InfiniteCanvasPage() {
                 })();
             }
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, guardProject, message, screenToCanvas, size.height, size.width],
+        [cleanupCanvasFiles, createAudioFileNode, createImageFileNode, createVideoFileNode, guardProject, message, screenToCanvas, size.height, size.width],
     );
 
     const handleDrop = useCallback(
@@ -2524,9 +2554,17 @@ function InfiniteCanvasPage() {
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
-                buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
-            );
+            let generationContext: Awaited<ReturnType<typeof hydrateNodeGenerationContext>>;
+            try {
+                generationContext = await hydrateNodeGenerationContext(
+                    buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
+                );
+            } catch (error) {
+                finishGenerationRequest(nodeId, runController);
+                endRunningNode(runningToken);
+                if (isProjectActive(capturedProjectId)) message.error(`生成前置内容加载失败：${error instanceof Error ? error.message : "未知错误"}`);
+                return;
+            }
             if (!guardProject(capturedProjectId)) {
                 finishGenerationRequest(nodeId, runController);
                 endRunningNode(runningToken);

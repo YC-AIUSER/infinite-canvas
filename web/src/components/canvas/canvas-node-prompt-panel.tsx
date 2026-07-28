@@ -61,9 +61,12 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
-            onWheel={(event) => event.stopPropagation()}
+            onWheel={(event) => {
+                if (!event.ctrlKey) event.stopPropagation();
+            }}
         >
             <CanvasResourceMentionTextarea
+                data-canvas-scrollable
                 value={prompt}
                 references={mentionReferences}
                 onChange={updatePrompt}

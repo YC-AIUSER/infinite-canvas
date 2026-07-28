@@ -100,6 +100,23 @@ function normalizePath(path: string) {
 
 function assertWebdavConfig(config: WebdavSyncConfig) {
     if (!config.url.trim()) throw new Error("请先填写 WebDAV 地址");
+    let url: URL;
+    try {
+        url = new URL(config.url.trim());
+    } catch {
+        throw new Error("WebDAV 地址格式不正确，请填写完整的 HTTP 或 HTTPS 地址");
+    }
+    if (url.protocol === "http:" && !isPrivateHost(url.hostname)) throw new Error("公网 WebDAV 使用 HTTP 会明文传输账号凭据和同步内容，请改用 HTTPS");
+}
+
+export function isPrivateHost(hostname: string) {
+    const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized.endsWith(".local") || normalized === "::1") return true;
+    const parts = normalized.split(".");
+    if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) return false;
+    const octets = parts.map(Number);
+    if (octets.some((part) => part > 255)) return false;
+    return octets[0] === 127 || octets[0] === 10 || (octets[0] === 192 && octets[1] === 168) || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) || (octets[0] === 169 && octets[1] === 254);
 }
 
 async function throwWebdavError(response: Response, fallback: string): Promise<never> {

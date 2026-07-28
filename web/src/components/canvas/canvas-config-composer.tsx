@@ -111,7 +111,9 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
             style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
             onMouseDown={stopCanvasInteraction}
             onPointerDown={stopCanvasInteraction}
-            onWheel={(event) => event.stopPropagation()}
+            onWheel={(event) => {
+                if (!event.ctrlKey) event.stopPropagation();
+            }}
         >
             <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-baseline gap-2">
@@ -124,6 +126,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                 {!value.trim() ? <div className="pointer-events-none absolute left-3 top-2 text-sm leading-7" style={{ color: theme.node.placeholder }}>输入提示词，按 @ 引用连接的图片或文本</div> : null}
                 <div
                     ref={editorRef}
+                    data-canvas-scrollable
                     contentEditable
                     suppressContentEditableWarning
                     className="thin-scrollbar min-h-28 w-full overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 text-sm leading-7 outline-none"

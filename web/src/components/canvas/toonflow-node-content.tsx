@@ -57,6 +57,7 @@ function ToonflowStreamingView({ preview, background, accent }: { preview: Toonf
             </div>
             <div
                 ref={scrollRef}
+                data-canvas-scrollable
                 className={`mt-1.5 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 whitespace-pre-wrap ${preview.mode === "raw" ? "text-[11px] leading-4 opacity-55 break-all" : "text-xs leading-5"}`}
                 style={{ background }}
             >
@@ -254,7 +255,7 @@ function VideoQualityRepairSection({
     }
 
     return (
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+        <div data-canvas-scrollable className="min-h-0 flex-1 overflow-y-auto pr-1" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
             <ToonflowSegmentQualityReview review={review} background={background} blockReason={blockReason} onChange={saveReview} />
             <details className="mt-2 rounded-md px-2.5 py-2 text-xs" style={{ background }} open={repairPlan.length > 0 || p2Items.length > 0}>
                 <summary className="cursor-pointer select-none font-medium">最小返修计划 · {repairPlan.length} 项</summary>
@@ -505,7 +506,7 @@ export function ToonflowNodeContent({
                 </p>
             ) : null}
             {toonflow.status === "failed" && module4Issues.length ? (
-                <div className="mt-1 max-h-20 overflow-y-auto rounded-md px-2 py-1.5 text-xs" style={{ background: `${statusColor}12`, color: statusColor }}>
+                <div data-canvas-scrollable className="mt-1 max-h-20 overflow-y-auto rounded-md px-2 py-1.5 text-xs" style={{ background: `${statusColor}12`, color: statusColor }}>
                     {module4Issues.map((issue) => (
                         <div key={issue}>· {issue}</div>
                     ))}
@@ -521,7 +522,7 @@ export function ToonflowNodeContent({
             {streamPreview ? (
                 <ToonflowStreamingView preview={streamPreview} background={theme.node.fill} accent={accent} />
             ) : toonflow.kind === "compliance" ? (
-                <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2 py-1.5 text-xs" style={{ background: theme.node.fill }}>
+                <div data-canvas-scrollable className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2 py-1.5 text-xs" style={{ background: theme.node.fill }}>
                     {washHits.length ? (
                         washHits.map((hit) => (
                             <div key={`${hit.term}-${hit.replacement}`} className="truncate" title={`${hit.term} → ${hit.replacement}`}>
@@ -608,11 +609,11 @@ export function ToonflowNodeContent({
             ) : toonflow.kind === "audio-mix" && toonflow.segmentId ? (
                 <AudioMixSection nodeId={node.id} segmentId={toonflow.segmentId} voiceMap={toonflow.voiceMap ?? {}} dubbing={dubbing} background={theme.node.fill} onVoiceMapChange={(voiceMap) => onVoiceMapChange?.(node.id, voiceMap)} />
             ) : module4Text ? (
-                <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
+                <div data-canvas-scrollable className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
                     {module4Text}
                 </div>
             ) : outputText ? (
-                <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
+                <div data-canvas-scrollable className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre-wrap" style={{ background: theme.node.fill }}>
                     {outputText}
                 </div>
             ) : (
