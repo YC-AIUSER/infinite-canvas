@@ -1,9 +1,11 @@
 ---
 id: TASK-4
 title: 实测画布数据完整性三修（复制连坐/导出漏键/导入覆盖）
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-28 06:12'
+updated_date: '2026-07-28 14:42'
 labels: []
 dependencies: []
 ordinal: 4000

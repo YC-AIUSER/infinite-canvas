@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toonflow 制作流程全景 — infinite-canvas</title>
+<style>
+:root {
+  --ivory:    #FAF9F5;
+  --slate:    #141413;
+  --clay:     #D97757;
+  --oat:      #E3DACC;
+  --olive:    #788C5D;
+  --rust:     #B04A3F;
+  --white:    #FFFFFF;
+  --gray-100: #F0EEE6;
+  --gray-300: #D1CFC5;
+  --gray-500: #87867F;
+  --gray-700: #3D3D3A;
+
+  --warning:  #C78E3F;
+  --danger:   #B04A4A;
+  --info:     #5C7CA3;
+
+  --serif: ui-serif, Georgia, "Noto Serif SC", "Source Han Serif SC", serif;
+  --sans:  system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius: 12px;
+  --border: 1.5px solid var(--gray-300);
+  --shadow: 0 1px 2px rgba(20,20,19,0.06);
+}
+
+html[data-theme="dark"] {
+  --ivory:    #16161A;
+  --white:    #201F1D;
+  --slate:    #F2EEE6;
+  --oat:      #3A3226;
+  --gray-100: #26251F;
+  --gray-300: #3A3A36;
+  --gray-500: #9C9A92;
+  --gray-700: #D6D3CB;
+  --shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+body {
+  margin: 0;
+  padding: 0 32px 120px;
+  background: var(--ivory);
+  color: var(--gray-700);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
+}
+.page { max-width: 1000px; margin: 0 auto; }
+
+.docnav {
+  position: sticky;
+  top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--ivory) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  border-bottom: 1px solid var(--gray-300);
+  margin: 0 -32px 40px;
+  padding: 10px 32px;
+}
+.docnav-inner {
+  max-width: 1000px; margin: 0 auto;
+  display: flex; align-items: center; gap: 10px;
+}
+.docnav .toc {
+  display: flex; gap: 4px; flex-wrap: wrap; flex: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: thin;
+}
+.docnav .toc a {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--gray-500); text-decoration: none;
+  padding: 5px 10px; border-radius: 7px; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.docnav .toc a:hover { color: var(--clay); background: var(--gray-100); }
+.docnav .toc a.active { color: var(--slate); background: var(--oat); }
+.docnav .search {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--white); color: var(--gray-700);
+  border: var(--border); border-radius: 999px;
+  padding: 6px 12px; width: 150px; transition: width 0.2s, border-color 0.15s;
+}
+.docnav .search:focus { outline: none; width: 200px; border-color: var(--clay); }
+.docnav .search-count {
+  font-family: var(--mono); font-size: 11px; color: var(--gray-500);
+  min-width: 30px; text-align: center;
+}
+.docnav .theme-btn {
+  background: var(--white); border: var(--border); border-radius: 999px;
+  width: 34px; height: 34px; cursor: pointer; font-size: 15px;
+  display: grid; place-items: center; flex-shrink: 0; color: var(--gray-700);
+}
+.docnav .theme-btn:hover { border-color: var(--clay); }
+mark.dochit { background: var(--clay); color: var(--ivory); border-radius: 3px; padding: 0 1px; }
+mark.dochit.current { outline: 2px solid var(--slate); }
+@media (max-width: 640px) {
+  .docnav .search { width: 100px; } .docnav .search:focus { width: 130px; }
+}
+
+.eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px;
+}
+h1 {
+  font-family: var(--serif); font-weight: 500; font-size: 36px; line-height: 1.15;
+  color: var(--slate); letter-spacing: -0.01em; margin: 0 0 16px;
+}
+.lede { font-size: 17px; color: var(--gray-500); max-width: 720px; margin: 0 0 48px; }
+
+.prompt-box {
+  background: var(--gray-100); border: var(--border); border-radius: var(--radius);
+  padding: 16px 20px; font-size: 14px; color: var(--gray-700); margin-bottom: 48px;
+}
+.prompt-box .label {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--gray-500); display: block; margin-bottom: 6px;
+}
+
+.summary-band {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 56px;
+}
+@media (max-width: 720px) { .summary-band { grid-template-columns: repeat(2, 1fr); } }
+.stat-card {
+  background: var(--white); border: var(--border); border-radius: var(--radius);
+  padding: 20px 22px 18px;
+}
+.stat-card.warn { border-left: 4px solid var(--clay); padding-left: 19px; }
+.stat-num {
+  font-family: var(--serif); font-size: 42px; font-weight: 500; line-height: 1;
+  color: var(--slate); margin-bottom: 8px;
+}
+.stat-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gray-500); }
+.stat-delta { font-family: var(--mono); font-size: 11px; margin-top: 6px; }
+.stat-delta.up   { color: var(--olive); }
+.stat-delta.down { color: var(--danger); }
+.stat-delta.flat { color: var(--gray-500); }
+
+section { margin-bottom: 56px; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+.sec-head .num {
+  font-family: var(--mono); font-size: 12px; background: var(--oat); color: var(--slate);
+  padding: 3px 9px; border-radius: 8px;
+}
+.sec-head h2 {
+  font-family: var(--serif); font-weight: 500; font-size: 24px; color: var(--slate);
+  letter-spacing: -0.01em; margin: 0;
+}
+.sec-intro { font-size: 14px; color: var(--gray-500); max-width: 720px; margin-bottom: 24px; }
+hr.rule { border: none; border-top: 1px solid var(--gray-300); margin: 0 0 22px; }
+
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--white); border: var(--border); border-radius: var(--radius);
+  padding: 20px 24px; box-shadow: var(--shadow);
+}
+.card .role {
+  font-size: 12px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--clay); margin-bottom: 4px;
+}
+.card h3 { font-size: 18px; font-weight: 500; margin: 0 0 8px; color: var(--slate); }
+.card p { margin: 0; font-size: 14px; color: var(--gray-700); }
+[data-group].filtered-out { display: none !important; }
+
+.table-wrap { overflow-x: auto; }
+table.data {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  background: var(--white); border: var(--border); border-radius: var(--radius); overflow: hidden;
+}
+table.data thead th {
+  text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--gray-500); background: var(--gray-100);
+  padding: 12px 16px; border-bottom: 1px solid var(--gray-300);
+}
+table.data.sortable thead th { cursor: pointer; user-select: none; }
+table.data.sortable thead th::after { content: " \2195"; opacity: 0.35; font-size: 10px; }
+table.data.sortable thead th.asc::after  { content: " \2191"; opacity: 1; color: var(--clay); }
+table.data.sortable thead th.desc::after { content: " \2193"; opacity: 1; color: var(--clay); }
+table.data tbody td {
+  padding: 13px 16px; border-bottom: 1px solid var(--gray-100); font-size: 14px; color: var(--gray-700);
+}
+table.data tbody tr:last-child td { border-bottom: none; }
+
+.tag {
+  display: inline-block; font-family: var(--mono); font-size: 11px;
+  background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 6px;
+  padding: 3px 8px; color: var(--gray-700);
+}
+.badge {
+  display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px; color: #FFF;
+}
+.badge.green { background: var(--olive); } .badge.orange { background: var(--warning); }
+.badge.red { background: var(--danger); } .badge.blue { background: var(--info); }
+.badge.gray { background: var(--gray-500); }
+.pill { font-family: var(--mono); font-size: 12px; color: var(--clay); background: var(--oat); padding: 2px 8px; border-radius: 4px; }
+
+.highlights { list-style: none; margin: 0; padding: 0; }
+.highlights li { position: relative; padding: 0 0 14px 26px; font-size: 15px; color: var(--gray-700); }
+.highlights li::before {
+  content: ""; position: absolute; left: 6px; top: 8px; width: 7px; height: 7px;
+  border-radius: 2px; background: var(--clay);
+}
+.highlights li strong { color: var(--slate); font-weight: 600; }
+
+ol.pipeline { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+ol.pipeline > li {
+  counter-increment: step; position: relative; padding: 16px 0 16px 48px;
+  border-left: 2px solid var(--gray-300); margin-left: 16px;
+}
+ol.pipeline > li::before {
+  content: counter(step, decimal-leading-zero); position: absolute; left: -17px; top: 16px;
+  transform: translateX(-50%); background: var(--ivory); color: var(--clay);
+  font-family: var(--mono); font-size: 13px; font-weight: 500; padding: 0 8px;
+}
+ol.pipeline > li.optional { border-left-style: dashed; border-left-color: var(--clay); }
+
+details {
+  background: var(--white); border: var(--border); border-radius: var(--radius);
+  margin-bottom: 10px; overflow: hidden;
+}
+details summary { padding: 14px 20px; font-weight: 500; font-size: 15px; color: var(--slate); cursor: pointer; list-style: none; }
+details summary::before {
+  content: "\25B6"; font-size: 10px; color: var(--clay); margin-right: 10px;
+  display: inline-block; transition: transform 0.15s;
+}
+details[open] summary::before { transform: rotate(90deg); }
+details .detail-body { padding: 0 20px 16px; font-size: 14px; color: var(--gray-700); }
+
+.chips { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.chip {
+  font-family: var(--mono); font-size: 12px; padding: 4px 12px;
+  border: 1px solid var(--gray-300); border-radius: 6px; background: var(--white);
+  cursor: pointer; color: var(--gray-700); user-select: none;
+}
+.chip.active { background: var(--slate); color: var(--ivory); border-color: var(--slate); }
+.chip:hover:not(.active) { border-color: var(--clay); color: var(--clay); }
+
+pre {
+  background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 8px;
+  padding: 16px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
+  line-height: 1.5; color: var(--slate);
+}
+code { font-family: var(--mono); font-size: 13px; color: var(--clay); background: var(--oat); padding: 1px 6px; border-radius: 4px; }
+pre code { background: none; padding: 0; color: inherit; }
+
+.src { font-family: var(--mono); font-size: 11px; color: var(--gray-500); }
+
+footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--gray-300); font-size: 13px; color: var(--gray-500); }
+
+@media (max-width: 640px) {
+  body { padding: 0 16px 64px; }
+  .docnav { margin: 0 -16px 32px; padding: 10px 16px; }
+  h1 { font-size: 28px; }
+  .summary-band { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="docnav">
+  <div class="docnav-inner">
+    <nav class="toc" aria-label="目录"></nav>
+    <input class="search" type="search" placeholder="搜索…" aria-label="页内搜索">
+    <span class="search-count"></span>
+    <button class="theme-btn" title="深/浅色切换" aria-label="切换主题">🌙</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <div class="eyebrow">流程说明 · infinite-canvas / Toonflow</div>
+  <h1>Toonflow 制作流程全景</h1>
+  <p class="lede">从剧本到成片，画布上 17 个环节节点怎么串起来、每一步吃什么吐什么、哪里有闸门拦你、Agent 在其中干什么。全部内容对照当前 main 分支代码写成，每节附源文件行号。</p>
+
+  <div class="prompt-box">
+    <span class="label">Prompt</span>
+    你给我生成一个 html 来介绍目前 agent 整个制作流程是怎么样的
+  </div>
+
+  <div class="summary-band">
+    <div class="stat-card"><div class="stat-num">17</div><div class="stat-label">流程环节</div><div class="stat-delta flat">其中 2 个默认跳过</div></div>
+    <div class="stat-card"><div class="stat-num">7</div><div class="stat-label">节点状态</div><div class="stat-delta flat">统一状态机管辖</div></div>
+    <div class="stat-card warn"><div class="stat-num">3</div><div class="stat-label">硬闸门</div><div class="stat-delta down">图片 / 视频 / 返修 20%</div></div>
+    <div class="stat-card"><div class="stat-num">24</div><div class="stat-label">Agent 画布工具</div><div class="stat-delta flat">canvas_* 全集</div></div>
+  </div>
+
+  <section id="s-tldr" data-nav="一句话">
+    <div class="sec-head"><span class="num">01</span><h2>先看整体：这条流水线在解决什么</h2></div>
+    <p class="sec-intro">Toonflow 不是"输入剧本、点一下出片"。它把 AI 短剧的失控点（角色漂移、越轴、镜头雷同、跨段跳变、审核被拒）逐个前置成一个可验收的文本环节，等所有约束都锁死了才开始烧钱生成图和视频。</p>
+    <ul class="highlights">
+      <li><strong>先文本、后图像、最后视频</strong> — 画布分三排：前 7 个是纯文本决策，中间 5 个是分镜与图像，后 5 个是生成与交付。<span class="src">toonflow-canvas-template.ts:24</span></li>
+      <li><strong>每个环节都要人工验收</strong> — 生成完进入"待验收"，你点通过它才变 approved，下游才允许开跑。</li>
+      <li><strong>约束一次锁死、后续只引用</strong> — 风格、调色、布光、运镜基调在「分镜决策锁定表」一次锁定，后面所有环节都是引用它，不重新发挥。</li>
+      <li><strong>钱在闸门后面</strong> — 一键跑全链时，第一次遇到图像环节弹一次成本确认，第一次遇到视频环节再弹一次；返修超过全片 20% 镜头也要再确认。</li>
+      <li><strong>Agent 是操作者不是导演</strong> — 画布侧的 Agent 拿到的是"这个环节的方法论红线"，它替你改内容、摆节点、触发生成，但改不了上面这些硬规则。</li>
+    </ul>
+  </section>
+
+  <section id="s-nodes" data-nav="17 环节">
+    <div class="sec-head"><span class="num">02</span><h2>17 个环节：每一步吃什么、吐什么</h2></div>
+    <p class="sec-intro">点表头可排序；用下面的标签筛选看某一排。「已退役」的两个环节不会参与一键跑全链。<span class="src">来源 toonflow-canvas-template.ts:26-201</span></p>
+    <div class="chips" data-filter="环节">
+      <div class="chip active" data-tag="all">全部 17</div>
+      <div class="chip" data-tag="text">前期文本决策</div>
+      <div class="chip" data-tag="image">分镜与图像</div>
+      <div class="chip" data-tag="deliver">生成与交付</div>
+      <div class="chip" data-tag="off">默认跳过</div>
+    </div>
+    <div class="table-wrap">
+    <table class="data sortable">
+      <thead><tr><th>#</th><th>环节</th><th>阶段</th><th>产出</th><th>关键约束</th></tr></thead>
+      <tbody>
+        <tr data-group="环节" data-tag="text"><td>01</td><td><strong>项目 / 剧集</strong></td><td>入口</td><td>本集生产上下文</td><td>比例与平台先定死</td></tr>
+        <tr data-group="环节" data-tag="text off"><td>02</td><td><strong>创意</strong> <span class="badge gray">选修</span></td><td>P0 创意</td><td>创意体检报告 / 冷启动方向</td><td>有剧本走体检，无剧本走碰撞</td></tr>
+        <tr data-group="环节" data-tag="text"><td>03</td><td><strong>剧本</strong></td><td>内容源</td><td>结构化剧本摘要</td><td>冲突与转折要标出来</td></tr>
+        <tr data-group="环节" data-tag="text"><td>04</td><td><strong>资产库</strong></td><td>参考资产</td><td>可引用资产清单</td><td>角色 / 场景 / 道具锚点图</td></tr>
+        <tr data-group="环节" data-tag="text"><td>05</td><td><strong>空间合同</strong></td><td>空间约束</td><td>点位图 / 空间规则</td><td>固定轴线，防越轴与站位漂移</td></tr>
+        <tr data-group="环节" data-tag="text"><td>06</td><td><strong>跨段继承表</strong></td><td>跨段连续性</td><td>跨段状态继承表</td><td>全片一张，逐段更新道具/光向/装备</td></tr>
+        <tr data-group="环节" data-tag="text"><td>07</td><td><strong>分镜决策锁定表</strong></td><td>决策锁定</td><td>A 表 + B 表 + 缝合同</td><td>一次锁死，后续只引用</td></tr>
+        <tr data-group="环节" data-tag="image"><td>08</td><td><strong>分镜表</strong></td><td>镜头规划</td><td>镜头清单（结构化 JSON）</td><td>段 12-15 秒、单镜 3-5 秒</td></tr>
+        <tr data-group="环节" data-tag="image"><td>09</td><td><strong>镜头合同</strong></td><td>镜头约束</td><td>每镜拍法约束</td><td>景别、角度、运动速度、落点</td></tr>
+        <tr data-group="环节" data-tag="image"><td>10</td><td><strong>动作合同</strong></td><td>动作约束</td><td>动作链说明</td><td>补原因/过程/反应，禁假静止</td></tr>
+        <tr data-group="环节" data-tag="image"><td>11</td><td><strong>故事板页</strong></td><td>Module3 粗模预演</td><td>blockout 灰模故事板</td><td><span class="badge orange">不传参考图</span> 只锁构图体块</td></tr>
+        <tr data-group="环节" data-tag="image off"><td>12</td><td><strong>分镜图 / 首帧</strong> <span class="badge gray">已退役</span></td><td>兼容旧画布</td><td>（不产出）</td><td>仅为打开旧画布保留</td></tr>
+        <tr data-group="环节" data-tag="deliver"><td>13</td><td><strong>过审</strong></td><td>生成前检查</td><td>可生成提示词</td><td>避词、文字、logo、水印</td></tr>
+        <tr data-group="环节" data-tag="deliver"><td>14</td><td><strong>视频工作台</strong></td><td>视频生成</td><td>视频片段</td><td><span class="badge red">必须挂构图锁</span> 单镜可重跑</td></tr>
+        <tr data-group="环节" data-tag="deliver"><td>15</td><td><strong>接缝检查</strong></td><td>连续性验收</td><td>接缝问题清单</td><td>动作尾首、方向连续、画面不跳</td></tr>
+        <tr data-group="环节" data-tag="deliver"><td>16</td><td><strong>音频混音</strong></td><td>声音层</td><td>音频轨道</td><td>按镜头时长累计偏移逐句 TTS</td></tr>
+        <tr data-group="环节" data-tag="deliver"><td>17</td><td><strong>成片 / 导出</strong></td><td>交付</td><td>分段成片包</td><td>顺序预览、逐段下载、打包</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="s-flow" data-nav="三段流水">
+    <div class="sec-head"><span class="num">03</span><h2>三段流水：文本 → 图像 → 视频</h2></div>
+    <p class="sec-intro">节点在画布上按这个顺序首尾相连（模板默认是一条链）。真正的分水岭是第 08 步：分镜表一旦通过验收，画布会"炸开"成按段并列的多条支线。</p>
+    <ol class="pipeline">
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">第一排 · 前期文本决策（01-07）</div>
+        <span class="pill">全部纯文本</span> <span class="pill">零成本</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:6px 0 0">剧本进来，先把"这片子长什么样"全部谈完：资产锚点、空间轴线、跨段继承、全局风格。这一排跑完，后面所有环节都只是在执行，不再做审美决策。这也是为什么锁定表叫"锁定"——A 表锁全片风格/调色/布光/运镜基调/表演档位，B 表逐段锁构图与景别跨度。</p>
+      </li>
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">第二排 · 分镜与图像（08-12）</div>
+        <span class="pill">结构化 JSON</span> <span class="pill">首次烧钱</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:6px 0 0">分镜表把剧本切成"段 + 镜"，每段贴满 12-15 秒、每镜 3-5 秒。镜头合同和动作合同逐镜补细节。故事板页把一段画成一张多格灰模图——它只锁镜序与构图，<strong>刻意不传任何参考图</strong>，防止角色/装备细节污染粗模。</p>
+      </li>
+      <li>
+        <div style="font-size:17px;font-weight:500;margin-bottom:4px">第三排 · 生成与交付（13-17）</div>
+        <span class="pill">大额成本</span> <span class="pill">人工验收</span>
+        <p style="font-size:14px;color:var(--gray-500);margin:6px 0 0">过审做一遍避雷词清洗，视频工作台按段生成视频（必须以该段故事板页为构图锁），接缝检查验跨段连续性，音频混音铺配音/BGM/SFX，最后导出。</p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="s-segment" data-nav="段实例化">
+    <div class="sec-head"><span class="num">04</span><h2>分镜表通过之后：画布按段炸开</h2></div>
+    <p class="sec-intro">这是整条流程里最容易看不懂的一步。前 10 个环节全片各一个节点，从第 11 步开始变成"每段一套"。<span class="src">instances.ts:5-6, 55-59</span></p>
+    <div class="grid">
+      <div class="card">
+        <div class="role">触发条件</div>
+        <h3>分镜表必须先 approved</h3>
+        <p>只有分镜表节点状态是 approved、且产物本身也是 approved 时才会同步实例。没验收就没有段。<span class="src">instances.ts:59</span></p>
+      </div>
+      <div class="card">
+        <div class="role">派生对象</div>
+        <h3>每段派生 3-4 个节点</h3>
+        <p>故事板页 · 视频工作台 · 音频混音（画布上有该根节点才建），外加已退役的首帧。节点标题形如「故事板页 · 段1」。<span class="src">instances.ts:131-132</span></p>
+      </div>
+      <div class="card">
+        <div class="role">改表之后</div>
+        <h3>差异同步，不是重建</h3>
+        <p>改了分镜表重新验收，系统算出新增 / 失效 / 归档三份清单，弹窗让你确认再落地——不会默默删掉你已经生成好的段。</p>
+      </div>
+      <div class="card">
+        <div class="role">段的物理含义</div>
+        <h3>一段 = 一次视频生成</h3>
+        <p>12-15 秒的上限来自视频模型单次生成能力。段内的镜头切换由模型在一次生成里原生完成，天然连贯；只有段之间才是真的"缝"，要走缝合同。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="s-state" data-nav="状态与级联">
+    <div class="sec-head"><span class="num">05</span><h2>状态机、级联、成本闸门</h2></div>
+    <p class="sec-intro">每个节点共用一套七态状态机，"一键向下重生成"沿拓扑序严格串行执行。</p>
+
+    <details open>
+      <summary>七个状态与合法迁移</summary>
+      <div class="detail-body">
+        <pre><code>empty ──generate──&gt; generating ──成功──&gt; review ──通过──&gt; approved
+                        └──失败──&gt; failed ──重试──&gt; generating
+
+上游出新版本 → 下游自动变 stale（需重跑）
+选修环节初始为 skipped，点一下即启用</code></pre>
+        <p><span class="src">schema.ts:4-14, state-machine.ts:153-179</span>。<code>generating</code> 是唯一不允许再次进入生成的状态——重复点按钮会被状态机挡掉。</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>级联为什么是串行的（不是能力不够，是踩过坑）</summary>
+      <div class="detail-body">
+        <p>「一键向下重生成」用一个 for 循环走拓扑序，一次只跑一个节点<span class="src">cascade.ts:62</span>，并且同时只允许一条级联在跑<span class="src">project.tsx:3662</span>。</p>
+        <p>原因写在代码注释里：下游节点准备输入时读的是内存快照，背靠背并行调用时 React 还没提交上一个节点的结果，下游会拿到旧版本并把新结果冲掉。实测现象是空间合同的"待验收"被分镜表的准备快照冲回"生成中"。<span class="src">project.tsx:2868-2870</span></p>
+        <p>另一个原因是成本要按批算——并行就没法在跨入图像/视频边界时统一弹确认。</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>三道闸门分别在哪</summary>
+      <div class="detail-body">
+        <ul class="highlights">
+          <li><strong>图像闸门</strong> — 级联第一次遇到图像类环节时弹一次，列出本次会烧掉的所有图像节点。<span class="src">cascade.ts:73-78</span></li>
+          <li><strong>视频闸门</strong> — 第一次遇到视频类环节时再弹一次。<span class="src">cascade.ts:79-84</span></li>
+          <li><strong>返修 20% 闸门</strong> — 质量检查后提返修计划时，如果预计重做的镜头数超过<strong>全片</strong>总镜头数的 20%，先把范围和成本摆给你看。注意分母是全片不是本段（2026-07-27 对抗审查纠正过一次：按本段算的话「4 镜里改 1 镜」会显示 25%，而全片其实只有 1/40）。<span class="src">node-runtime.ts:153-177</span></li>
+        </ul>
+      </div>
+    </details>
+  </section>
+
+  <section id="s-quality" data-nav="质量红线">
+    <div class="sec-head"><span class="num">06</span><h2>质量红线：机器能判的部分不靠人眼</h2></div>
+    <p class="sec-intro">分镜表生成后会跑一遍结构化检查，把"镜头长得都一样"这类问题在图像生成之前就拦下来。</p>
+    <div class="grid">
+      <div class="card" >
+        <div class="role">四维多样性</div>
+        <h3>运镜 / 景别 / 角度 / 构图</h3>
+        <p>每段运镜 ≥2 种、景别跨度 ≥3 档且含极值 L0 或 L5、角度 ≥2 种、构图主策略 ≠ 次策略。连续 3 镜同景别、连续 3 镜同运镜直接判不达标。</p>
+      </div>
+      <div class="card">
+        <div class="role">短段保护</div>
+        <h3>凑不出来的不算不达标</h3>
+        <p>一段只有 2 镜时物理上凑不出 3 档景别，这种情况标 unknown 而不是 fail，避免冤枉合法的短段。<span class="src">quality-check.ts:27-30, 334-338</span></p>
+      </div>
+      <div class="card">
+        <div class="role">高潮镜三件套</div>
+        <h3>缺一不许输出</h3>
+        <p>爆点镜必须同时有：L5 五部位动作编码、Speed Ramp 四要素、景别只能取 L4/L5。字段落点固定，供下游机械识别。<span class="src">prompts.ts:239-243</span></p>
+      </div>
+      <div class="card">
+        <div class="role">封闭词库</div>
+        <h3>只许抄，不许自创</h3>
+        <p>导演风格 9 种、调色 22 组、布光 10 方案、运镜 8 种、P7 技法九类——全部逐字选取，禁止改名、简写、拼接。<span class="src">closed-libraries.ts</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="s-ref" data-nav="参考图规则">
+    <div class="sec-head"><span class="num">07</span><h2>参考图什么时候传、什么时候刻意不传</h2></div>
+    <p class="sec-intro">这块最容易被误认为是 bug，单独拎出来说。全部逻辑集中在一个函数里，Agent 触发和手点按钮走的是同一条路。<span class="src">node-runtime.ts:361-416</span></p>
+    <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>环节</th><th>参考图</th><th>行为</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td><strong>故事板页</strong></td><td><span class="badge orange">刻意不传</span></td><td>纯文生图，<code>referenceKeys = []</code></td><td>blockout 只锁构图与体块，传角色/装备/色板参考会把不该出现的细节带进粗模</td></tr>
+        <tr><td><strong>首帧（已退役）</strong></td><td><span class="badge red">强制必传</span></td><td>故事板页线稿设为 mandatory，读取失败直接中止</td><td>线稿是构图锁，只上色不改构图，不得退化为文生图</td></tr>
+        <tr><td><strong>视频工作台</strong></td><td><span class="badge red">强制必传</span></td><td>找不到该段故事板页就抛「请先生成该段故事板页」</td><td>视频必须基于 Module3 故事板页</td></tr>
+        <tr><td><strong>资产锚点卡</strong></td><td><span class="badge blue">有则跟随</span></td><td>有参考图时以参考图为唯一形象基准</td><td>锚点卡本身就是后续所有环节的形象来源</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p style="margin-top:16px;font-size:14px;color:var(--gray-500)">音频卡会被主动从图像参考里剔除——它的 storageKey 是音频媒体键，混进来会当图像读取失败。<span class="src">node-runtime.ts:381-383</span></p>
+  </section>
+
+  <section id="s-agent" data-nav="Agent 角色">
+    <div class="sec-head"><span class="num">08</span><h2>Agent 在这条流水线里干什么</h2></div>
+    <p class="sec-intro">画布右侧的 Agent 面板背后是 canvas-agent 服务，它把画布暴露成 24 个工具给模型调用。它是操作者，不是决策者。</p>
+    <div class="grid">
+      <div class="card">
+        <div class="role">能做</div>
+        <h3>读画布、改内容、触发生成</h3>
+        <p>取全画布或选中节点的状态、创建/更新/移动/连线/删除节点、直接调起文生图/图生视频/TTS、跑既有生成流。</p>
+      </div>
+      <div class="card">
+        <div class="role">方法论注入</div>
+        <h3>按环节发红线，不是发全文</h3>
+        <p>Agent 看到画布上有 Toonflow 环节时会拿到一份总纲，改具体环节前再取该环节的方法论红线。工具调用返回时会在边界处重新注入，防止多轮对话把方法论聊忘。<span class="src">canvas-agent/src/methodology.ts</span></p>
+      </div>
+      <div class="card">
+        <div class="role">本地能力</div>
+        <h3>读本地文件、ffmpeg 拼接</h3>
+        <p>Agent 能读本机图片转 dataURL 送进画布；成片阶段可调本地 ffmpeg 做无损拼接，不重编码。</p>
+      </div>
+      <div class="card">
+        <div class="role">改不了</div>
+        <h3>硬规则不归 Agent 管</h3>
+        <p>参考图组装、状态机迁移、成本闸门、质量红线都在画布代码里。Agent 只能触发生成，改不了这些规则——所以"某环节没带参考图"这类现象要去看环节定义，不是看 Agent。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="s-gaps" data-nav="已知缺口">
+    <div class="sec-head"><span class="num">09</span><h2>已知缺口（本次排查发现，尚未修）</h2></div>
+    <p class="sec-intro">下面三条是查这条流程时顺带确认的真问题，跟流程设计无关，属于实现缺陷。</p>
+    <ul class="highlights">
+      <li><strong>生成完成后节点被压回原高度</strong> — 流式生成时节点临时撑到 440px，跑完无条件还原到生成前的高度（模板默认 190px）。结果就是过程看得见、产物反而看不见。<span class="src">streaming.ts:76</span></li>
+      <li><strong>生成期间手动调高会被吞掉</strong> — 还原用的是生成开始前记录的旧值，不是你改后的当前高度。<span class="src">streaming.ts:51, 76</span></li>
+      <li><strong>并行生成时"停止"按钮会丢</strong> — 运行态是单值 state，先跑完的那个会把它清空，另一个节点的停止按钮跟着消失。实际并行跑了，只是 UI 跟不住。<span class="src">project.tsx:408, 2854, 2889</span></li>
+    </ul>
+  </section>
+
+  <footer>
+    Generated by Claude · 2026-07-27 · 对照 infinite-canvas main 分支代码（7f4d081）撰写，所有行号为撰写时状态
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $  = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+  var root = document.documentElement, btn = $(".theme-btn");
+  function applyTheme(t) {
+    root.setAttribute("data-theme", t);
+    if (btn) btn.textContent = t === "dark" ? "☀️" : "🌙";
+  }
+  var saved = null;
+  try { saved = localStorage.getItem("doc-theme"); } catch (e) {}
+  var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+  if (btn) btn.addEventListener("click", function () {
+    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem("doc-theme", next); } catch (e) {}
+  });
+
+  var toc = $(".docnav .toc");
+  var secs = $$("section[data-nav]");
+  var links = [];
+  if (toc && secs.length) {
+    secs.forEach(function (sec) {
+      if (!sec.id) return;
+      var a = document.createElement("a");
+      a.href = "#" + sec.id;
+      a.textContent = sec.getAttribute("data-nav");
+      toc.appendChild(a);
+      links.push(a);
+    });
+    var spy = function () {
+      var y = window.scrollY + 90, cur = null;
+      secs.forEach(function (sec) { if (sec.offsetTop <= y) cur = sec.id; });
+      links.forEach(function (a) {
+        a.classList.toggle("active", a.getAttribute("href") === "#" + cur);
+      });
+    };
+    window.addEventListener("scroll", spy, { passive: true });
+    spy();
+  }
+
+  $$(".chips[data-filter]").forEach(function (bar) {
+    var group = bar.getAttribute("data-filter");
+    var targets = $$('[data-group="' + group + '"]');
+    bar.addEventListener("click", function (e) {
+      var chip = e.target.closest(".chip");
+      if (!chip) return;
+      $$(".chip", bar).forEach(function (c) { c.classList.remove("active"); });
+      chip.classList.add("active");
+      var want = chip.getAttribute("data-tag");
+      targets.forEach(function (el) {
+        var tags = (el.getAttribute("data-tag") || "").split(/\s+/);
+        var show = want === "all" || tags.indexOf(want) !== -1;
+        el.classList.toggle("filtered-out", !show);
+      });
+    });
+  });
+
+  $$("table.data.sortable").forEach(function (tbl) {
+    var ths = $$("thead th", tbl), tbody = $("tbody", tbl);
+    ths.forEach(function (th, i) {
+      th.addEventListener("click", function () {
+        var asc = !th.classList.contains("asc");
+        ths.forEach(function (h) { h.classList.remove("asc", "desc"); });
+        th.classList.add(asc ? "asc" : "desc");
+        var rows = $$("tr", tbody);
+        rows.sort(function (a, b) {
+          var x = (a.children[i] ? a.children[i].textContent : "").trim();
+          var y = (b.children[i] ? b.children[i].textContent : "").trim();
+          var nx = parseFloat(x.replace(/[^0-9.\-]/g, "")), ny = parseFloat(y.replace(/[^0-9.\-]/g, ""));
+          var num = !isNaN(nx) && !isNaN(ny) && x !== "" && y !== "";
+          var cmp = num ? nx - ny : x.localeCompare(y, "zh");
+          return asc ? cmp : -cmp;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  });
+
+  var input = $(".docnav .search"), count = $(".docnav .search-count");
+  var page = $(".page"), hits = [], idx = -1;
+  function clearMarks() {
+    $$("mark.dochit", page).forEach(function (m) {
+      var t = document.createTextNode(m.textContent);
+      m.parentNode.replaceChild(t, m); m.parentNode.normalize();
+    });
+    hits = []; idx = -1;
+  }
+  function highlight(term) {
+    clearMarks();
+    if (!term || term.length < 2) { if (count) count.textContent = ""; return; }
+    var rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        if (!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        var p = n.parentNode.nodeName;
+        if (p === "SCRIPT" || p === "STYLE" || p === "MARK") return NodeFilter.FILTER_REJECT;
+        return rx.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    var nodes = [], n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    nodes.forEach(function (node) {
+      var frag = document.createDocumentFragment(), last = 0, s = node.nodeValue, m;
+      rx.lastIndex = 0;
+      while ((m = rx.exec(s))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+        var mk = document.createElement("mark"); mk.className = "dochit"; mk.textContent = m[0];
+        frag.appendChild(mk); hits.push(mk); last = m.index + m[0].length;
+        if (m[0].length === 0) rx.lastIndex++;
+      }
+      if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+    if (count) count.textContent = hits.length ? "0/" + hits.length : "0";
+    if (hits.length) jump(0);
+  }
+  function jump(i) {
+    if (!hits.length) return;
+    if (idx >= 0 && hits[idx]) hits[idx].classList.remove("current");
+    idx = (i + hits.length) % hits.length;
+    hits[idx].classList.add("current");
+    hits[idx].scrollIntoView({ block: "center", behavior: "smooth" });
+    if (count) count.textContent = (idx + 1) + "/" + hits.length;
+  }
+  if (input) {
+    var deb;
+    input.addEventListener("input", function () {
+      clearTimeout(deb); var v = input.value;
+      deb = setTimeout(function () { highlight(v.trim()); }, 180);
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); jump(idx + (e.shiftKey ? -1 : 1)); }
+      if (e.key === "Escape") { input.value = ""; clearMarks(); if (count) count.textContent = ""; }
+    });
+  }
+})();
+</script>
+</body>
+</html>
