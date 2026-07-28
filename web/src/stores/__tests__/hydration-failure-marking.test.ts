@@ -39,6 +39,50 @@ describe("store 上层水合异常打降级标", () => {
         expect(hasStorageReadFallback()).toBe(true);
     });
 
+    it("降级会话禁止回写：水合失败后 asset store 的任何持久化写入被拦截", async () => {
+        const setItemMock = vi.fn(async () => undefined);
+        vi.doMock("@/lib/localforage-storage", () => ({
+            localForageStorage: { getItem: async () => "corrupted{{{", setItem: setItemMock, removeItem: async () => undefined },
+        }));
+        const { useAssetStore } = await import("@/stores/use-asset-store");
+        await vi.waitFor(() => {
+            expect(useAssetStore.getState().hydrated).toBe(true);
+        });
+        // 水合失败回调的 setState 与后续业务写入都不许把空状态回写存储
+        useAssetStore.getState().addAsset({ kind: "text", title: "t", coverUrl: "", tags: [], data: { content: "x" } });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(setItemMock).not.toHaveBeenCalled();
+    });
+
+    it("降级会话禁止回写：canvas store 建画布后 flush 也不落盘", async () => {
+        const setItemMock = vi.fn(async () => undefined);
+        vi.doMock("@/lib/localforage-storage", () => ({
+            localForageStorage: { getItem: async () => "corrupted{{{", setItem: setItemMock, removeItem: async () => undefined },
+        }));
+        const { useCanvasStore, flushCanvasStorePersist } = await import("@/stores/canvas/use-canvas-store");
+        await vi.waitFor(() => {
+            expect(useCanvasStore.getState().hydrated).toBe(true);
+        });
+        useCanvasStore.getState().createProject("测试画布");
+        await flushCanvasStorePersist();
+        expect(setItemMock).not.toHaveBeenCalled();
+    });
+
+    it("健康会话回写正常：hydration 无误时业务写入照常落盘", async () => {
+        const setItemMock = vi.fn(async () => undefined);
+        vi.doMock("@/lib/localforage-storage", () => ({
+            localForageStorage: { getItem: async () => JSON.stringify({ state: { assets: [] }, version: 0 }), setItem: setItemMock, removeItem: async () => undefined },
+        }));
+        const { useAssetStore } = await import("@/stores/use-asset-store");
+        await vi.waitFor(() => {
+            expect(useAssetStore.getState().hydrated).toBe(true);
+        });
+        useAssetStore.getState().addAsset({ kind: "text", title: "t", coverUrl: "", tags: [], data: { content: "x" } });
+        await vi.waitFor(() => {
+            expect(setItemMock).toHaveBeenCalled();
+        });
+    });
+
     it("持久化内容正常时不打降级标", async () => {
         vi.doMock("@/lib/localforage-storage", () => ({
             localForageStorage: { getItem: async () => JSON.stringify({ state: { assets: [] }, version: 0 }), setItem: async () => undefined, removeItem: async () => undefined },

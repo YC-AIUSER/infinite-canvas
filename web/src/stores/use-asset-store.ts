@@ -3,7 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { markStorageReadFallback } from "@/lib/storage-read-health";
+import { hasStorageReadFallbackFor, markStorageReadFallback } from "@/lib/storage-read-health";
 import { cleanupUnusedAppMedia } from "@/services/app-media-cleanup";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
@@ -62,7 +62,13 @@ const assetStorage: PersistStorage<AssetStore> = {
         );
         return parsed;
     },
-    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(value)),
+    setItem: async (name, value) => {
+        // 降级会话禁止回写：水合失败后 store 是空初始态，任何 set（包括置 hydrated）
+        // 都会把空状态写回存储，把"损坏但可能可恢复"的原始数据洗成"干净的空数据"，
+        // 让下个会话的清扫熔断失效。宁可本会话改动不落盘，也不覆盖原始数据。
+        if (hasStorageReadFallbackFor(name)) return;
+        await localForageStorage.setItem(name, JSON.stringify(value));
+    },
     removeItem: (name) => localForageStorage.removeItem(name),
 };
 

@@ -10,3 +10,7 @@ export function markStorageReadFallback(name: string) {
 export function hasStorageReadFallback() {
     return degradedReads.size > 0;
 }
+
+export function hasStorageReadFallbackFor(name: string) {
+    return degradedReads.has(name);
+}
