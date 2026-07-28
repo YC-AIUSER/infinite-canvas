@@ -3,6 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
+import { markStorageReadFallback } from "@/lib/storage-read-health";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { buildToonflowCanvasTemplate, TOONFLOW_CANVAS_TITLE } from "@/lib/canvas/toonflow-canvas-template";
 import { recordSyncDeletions } from "@/services/sync-tombstones";
@@ -153,7 +154,9 @@ export const useCanvasStore = create<CanvasStore>()(
                 ({
                     projects: state.projects,
                 }) as StorageValue<CanvasStore>["state"],
-            onRehydrateStorage: () => () => {
+            onRehydrateStorage: () => (_state, error) => {
+                // 水合失败打降级标，理由见 use-asset-store 同位置注释
+                if (error) markStorageReadFallback(CANVAS_STORE_KEY);
                 useCanvasStore.setState({ hydrated: true });
             },
         },

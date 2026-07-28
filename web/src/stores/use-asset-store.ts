@@ -3,6 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
+import { markStorageReadFallback } from "@/lib/storage-read-health";
 import { cleanupUnusedAppMedia } from "@/services/app-media-cleanup";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
@@ -99,7 +100,10 @@ export const useAssetStore = create<AssetStore>()(
             name: ASSET_STORE_KEY,
             storage: assetStorage,
             partialize: (state) => ({ assets: state.assets }) as StorageValue<AssetStore>["state"],
-            onRehydrateStorage: () => () => {
+            onRehydrateStorage: () => (_state, error) => {
+                // 水合失败（存储读取之上的 JSON.parse/资产重建抛错）时 store 停留在空初始态，
+                // 必须打降级标：启动清扫等破坏性操作靠它判断引用集是否可信
+                if (error) markStorageReadFallback(ASSET_STORE_KEY);
                 useAssetStore.setState({ hydrated: true });
             },
         },
