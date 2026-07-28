@@ -15,10 +15,21 @@ export function corsRelayPlugin(): Plugin {
         configureServer(server) {
             server.middlewares.use((req, res, next) => {
                 if (!req.url || !req.url.startsWith(RELAY_PREFIX)) return next();
+                if (!isRelayClientAllowed(req.socket.remoteAddress)) {
+                    res.statusCode = 403;
+                    res.setHeader("content-type", "application/json; charset=utf-8");
+                    res.end(JSON.stringify({ error: { message: "开发中继默认仅允许本机访问；如需局域网访问，请显式设置 RELAY_ALLOW_LAN=1" } }));
+                    return;
+                }
                 void relay(req, res);
             });
         },
     };
+}
+
+function isRelayClientAllowed(remoteAddress: string | undefined) {
+    if (process.env.RELAY_ALLOW_LAN === "1") return true;
+    return remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress === "::ffff:127.0.0.1";
 }
 
 async function relay(req: IncomingMessage, res: ServerResponse) {

@@ -136,7 +136,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         }
         setLoadingChannelId(channel.id);
         try {
-            const models = await fetchChannelModels(channel);
+            const models = await fetchChannelModels(channel, config.relayToken);
             updateChannels(config.channels.map((item) => (item.id === channel.id ? { ...item, models } : item)));
             message.success(`${channel.name} 模型列表已更新`);
         } catch (error) {
@@ -154,7 +154,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         }
         setLoadingChannelId("all");
         try {
-            const entries = await Promise.all(runnable.map(async (channel) => [channel.id, await fetchChannelModels(channel)] as const));
+            const entries = await Promise.all(runnable.map(async (channel) => [channel.id, await fetchChannelModels(channel, config.relayToken)] as const));
             const modelMap = new Map(entries);
             updateChannels(config.channels.map((channel) => (modelMap.has(channel.id) ? { ...channel, models: modelMap.get(channel.id) || [] } : channel)));
             message.success("模型列表已更新");
@@ -261,6 +261,9 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                         </Button>
                                     </div>
                                 </div>
+                                <Form.Item label="转发访问 token" extra="仅当渠道 Base URL 使用 /relay/http 转发形态时随请求发送，不会发送给普通 API 端点。" className="mb-4">
+                                    <Input.Password prefix={<ShieldCheck className="mr-1 size-4 text-stone-400" />} value={config.relayToken} placeholder="与 edge-relay 的 RELAY_ACCESS_TOKEN 一致" onChange={(event) => updateConfig("relayToken", event.target.value)} />
+                                </Form.Item>
                                 <div className="space-y-3">
                                     {config.channels.map((channel) => (
                                         <section key={channel.id} className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">

@@ -13,3 +13,15 @@ export function serializeApiParams(params?: ApiParams) {
     }
     return queryParams;
 }
+
+export function isRelayRequestUrl(url: string) {
+    try {
+        return /(?:^|\/)relay\/https?:\/\//i.test(new URL(url, "http://localhost").pathname);
+    } catch {
+        return false;
+    }
+}
+
+export function withRelayTokenHeader(url: string, relayToken: string, headers: Record<string, string>) {
+    return isRelayRequestUrl(url) && relayToken ? { ...headers, "x-relay-token": relayToken } : headers;
+}

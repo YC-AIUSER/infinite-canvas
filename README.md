@@ -73,10 +73,10 @@ docker compose up -d
 如果使用 New API，可在 `系统设置 -> 聊天方式 -> 添加聊天设置` 中填入：
 
 ```text
-https://canvas.best?apiKey={key}&baseUrl={address}
+https://canvas.best#apiKey={key}&baseUrl={address}
 ```
 
-跳转后会自动打开配置弹窗并填入 API Key 和 Base URL。
+跳转后会自动打开配置弹窗并填入 API Key 和 Base URL。配置放在 URL fragment（`#` 后）中，不会随请求发送到服务器访问日志。
 如果自己部署了，可以把 `https://canvas.best` 替换成你部署的地址。
 
 ## 效果展示

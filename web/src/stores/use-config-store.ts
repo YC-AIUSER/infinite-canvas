@@ -18,6 +18,7 @@ export type AiConfig = {
     channelMode: "remote" | "local";
     baseUrl: string;
     apiKey: string;
+    relayToken: string;
     apiFormat: ApiCallFormat;
     channels: ModelChannel[];
     model: string;
@@ -65,6 +66,7 @@ export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: OPENAI_BASE_URL,
     apiKey: "",
+    relayToken: "",
     apiFormat: "openai",
     channels: [
         {

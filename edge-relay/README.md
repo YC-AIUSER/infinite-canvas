@@ -19,7 +19,9 @@
 ## 前端接法
 
 渠道 Base URL 从 dev 的 `/relay/https://上游/api/v1` 改为指向部署后的转发域名：
-`https://<你的转发域名>/relay/https://cano.gewuzhihui.com/api/v1`，并让前端在请求头带上 `x-relay-token`。
+`https://<你的转发域名>/relay/https://cano.gewuzhihui.com/api/v1`。
+
+然后在无限画布右上角“配置”的渠道页填写“转发访问 token”，值必须与服务端环境变量 `RELAY_ACCESS_TOKEN` 一致。前端只会对 `/relay/http://...` 或 `/relay/https://...` 形态的请求附加 `x-relay-token`，不会把 token 发给普通 API 端点。
 
 ## 部署（先手动跑通，再考虑 CI）
 

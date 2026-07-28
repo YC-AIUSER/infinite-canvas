@@ -2,6 +2,7 @@ import axios from "axios";
 
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { withRelayTokenHeader } from "@/services/api/request";
 import { buildApiUrl, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 
 type RequestOptions = { signal?: AbortSignal };
@@ -11,10 +12,10 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function aiHeaders(config: AiConfig) {
-    return {
+    return withRelayTokenHeader(config.baseUrl, config.relayToken, {
         Authorization: `Bearer ${config.apiKey}`,
         "Content-Type": "application/json",
-    };
+    });
 }
 
 export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<Blob> {

@@ -146,4 +146,4 @@ claude mcp add --scope user --transport stdio infinite-canvas -- npx -y @yinchen
 claude mcp add --scope user --transport stdio infinite-canvas -- node /path/to/infinite-canvas/canvas-agent/dist/index.js mcp
 ```
 
-Canvas Agent 调用 Claude Code 时会默认带上 `--allowedTools mcp__infinite-canvas__*`，画布写操作仍由网页侧边栏确认。
+Canvas Agent 调用 Claude Code 时会默认带上 `--allowedTools mcp__infinite-canvas__*`，画布写操作仍由网页侧边栏确认。自动放行范围包含可读取本地图片的 `assets_add`，使用来源不明的提示词时请注意提示注入风险。

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { App } from "antd";
 
+import { clearConfigUrlImport, parseConfigUrlImport } from "@/lib/config-url-import";
 import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -13,16 +14,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (handledConfigParams.current) return;
-        const searchParams = new URLSearchParams(window.location.search);
-        const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
-        const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
+        const { baseUrl, apiKey } = parseConfigUrlImport(window.location.search, window.location.hash);
         if (!baseUrl && !apiKey) return;
         handledConfigParams.current = true;
-        searchParams.delete("baseUrl");
-        searchParams.delete("baseurl");
-        searchParams.delete("apiKey");
-        searchParams.delete("apikey");
-        window.history.replaceState(null, "", `${window.location.pathname}${searchParams.size ? `?${searchParams}` : ""}${window.location.hash}`);
+        window.history.replaceState(null, "", clearConfigUrlImport(window.location));
         const firstChannel = config.channels[0];
         updateConfig(
             "channels",

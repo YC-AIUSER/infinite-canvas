@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
+import { withRelayTokenHeader } from "@/services/api/request";
 import type { ReferenceImage } from "@/types/image";
 
 export type AiTextMessage = {
@@ -277,10 +278,10 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
-    return {
+    return withRelayTokenHeader(config.baseUrl, config.relayToken, {
         Authorization: `Bearer ${config.apiKey}`,
         ...(contentType ? { "Content-Type": contentType } : {}),
-    };
+    });
 }
 
 function geminiBaseUrl(config: Pick<AiConfig, "baseUrl">) {
@@ -299,11 +300,11 @@ function geminiApiUrl(config: Pick<AiConfig, "baseUrl" | "model">, action?: "gen
     return `${baseUrl}/models/${encodeURIComponent(geminiModelName(config.model))}:${action}`;
 }
 
-function geminiHeaders(config: Pick<AiConfig, "apiKey">) {
-    return {
+function geminiHeaders(config: Pick<AiConfig, "baseUrl" | "apiKey" | "relayToken">) {
+    return withRelayTokenHeader(config.baseUrl, config.relayToken, {
         "x-goog-api-key": config.apiKey,
         "Content-Type": "application/json",
-    };
+    });
 }
 
 function withSystemMessage<T extends ResponseInputMessage>(config: AiConfig, messages: T[]): ResponseInputMessage[] {
@@ -753,7 +754,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
     }
 }
 
-export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat">) {
+export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "relayToken">) {
     try {
         if (config.apiFormat === "gemini") {
             const response = await axios.get<GeminiPayload>(geminiApiUrl({ ...defaultGeminiConfig, ...config }), { headers: geminiHeaders({ ...defaultGeminiConfig, ...config }) });
@@ -764,9 +765,9 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
                 .sort((a, b) => a.localeCompare(b));
         }
         const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
-            headers: {
+            headers: withRelayTokenHeader(config.baseUrl, config.relayToken, {
                 Authorization: `Bearer ${config.apiKey}`,
-            },
+            }),
         });
         return (response.data.data || [])
             .map((model) => model.id)
@@ -777,14 +778,15 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
     }
 }
 
-export async function fetchChannelModels(channel: ModelChannel) {
-    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+export async function fetchChannelModels(channel: ModelChannel, relayToken = "") {
+    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat, relayToken });
 }
 
-const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {
+const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt" | "relayToken"> = {
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
     apiFormat: "gemini",
     model: "",
     systemPrompt: "",
+    relayToken: "",
 };
