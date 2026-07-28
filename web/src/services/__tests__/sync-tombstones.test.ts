@@ -28,13 +28,14 @@ describe("WebDAV 同步墓碑", () => {
         expect(merged.deletions).toEqual([]);
     });
 
-    it("裁掉超过 180 天及超过 1000 条的墓碑", () => {
+    it("只按 180 天龄期裁剪，不按数量截断——批量删除的墓碑一条不丢", () => {
         const recent: SyncTombstone[] = Array.from({ length: 1005 }, (_, index) => ({ id: `recent-${index}`, deletedAt: new Date(now - index * 1000).toISOString() }));
         const old = { id: "old", deletedAt: new Date(now - 181 * 24 * 60 * 60 * 1000).toISOString() };
         const pruned = pruneSyncTombstones([...recent, old], now);
 
-        expect(pruned).toHaveLength(1000);
+        expect(pruned).toHaveLength(1005);
         expect(pruned[0].id).toBe("recent-0");
-        expect(pruned.some((item) => item.id === "recent-1000" || item.id === "old")).toBe(false);
+        expect(pruned.some((item) => item.id === "recent-1004")).toBe(true);
+        expect(pruned.some((item) => item.id === "old")).toBe(false);
     });
 });

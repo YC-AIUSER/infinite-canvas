@@ -685,6 +685,8 @@ function InfiniteCanvasPage() {
         toonflowPendingStreamRef.current.clear();
         generationRequestsRef.current.forEach((request) => request.controller.abort());
         generationRequestsRef.current.clear();
+        // 旧画布任务的运行标不带进新画布；旧任务晚到的 finally 用逐任务比对清理，不会误抹新任务
+        setRunningNodeId(null);
         if (!hydrated) return;
         setProjectLoaded(false);
         const project = openProject(projectId);
@@ -2226,7 +2228,7 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
             } finally {
                 finishGenerationRequest(childId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === childId ? null : current));
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -2312,7 +2314,7 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
             } finally {
                 finishGenerationRequest(childId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === childId ? null : current));
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, openConfigDialog, startGenerationRequest],
@@ -2512,20 +2514,20 @@ function InfiniteCanvasPage() {
             );
             if (!guardProject(capturedProjectId)) {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
                 return;
             }
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
                 return;
             }
             const markSourceStatus = sourceNode?.type !== CanvasNodeType.Image && !editingTextNode;
             const statusPrompt = sourceNode?.type === CanvasNodeType.Config ? effectivePrompt : prompt;
             if (!effectivePrompt && (mode === "text" || mode === "audio")) {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
                 return;
             }
             let pendingChildIds: string[] = [];
@@ -2894,7 +2896,7 @@ function InfiniteCanvasPage() {
                 );
             } finally {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
             }
         },
         [cancelStreamNodeUpdate, effectiveConfig, finishGenerationRequest, flushStreamNodeUpdate, focusNodes, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleStreamNodeUpdate, startGenerationRequest],
@@ -2968,7 +2970,7 @@ function InfiniteCanvasPage() {
             } finally {
                 clearToonflowStreamText(nodeId);
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
             }
         },
         [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
@@ -3058,7 +3060,7 @@ function InfiniteCanvasPage() {
             } finally {
                 clearToonflowStreamText(nodeId);
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
             }
         },
         [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
@@ -3249,7 +3251,7 @@ function InfiniteCanvasPage() {
                 setNodes(next);
             } finally {
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -3329,7 +3331,7 @@ function InfiniteCanvasPage() {
                 setNodes(next);
             } finally {
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -3591,7 +3593,7 @@ function InfiniteCanvasPage() {
                 setToonflowDiversityRepair({ nodeId, loading: false, error: errorDetails });
             } finally {
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === nodeId ? null : current));
             }
         },
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -3993,7 +3995,7 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
             } finally {
                 finishGenerationRequest(node.id, controller);
-                setRunningNodeId(null);
+                setRunningNodeId((current) => (current === node.id ? null : current));
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, startGenerationRequest],

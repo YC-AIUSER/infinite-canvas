@@ -3,8 +3,9 @@ import localforage from "localforage";
 export type SyncTombstoneDomain = "canvas" | "assets" | "image-workbench" | "video-workbench";
 export type SyncTombstone = { id: string; deletedAt: string };
 
+// 只按龄期保留，不设数量上限：数量截断会把超出部分的墓碑立即丢弃，
+// 离线设备一同步对应条目就复活，与"删除不复活"的保证冲突。
 const TOMBSTONE_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
-const TOMBSTONE_LIMIT = 1000;
 const tombstoneStore = localforage.createInstance({ name: "infinite-canvas", storeName: "sync_tombstones" });
 const pendingWrites = new Map<SyncTombstoneDomain, Promise<void>>();
 
@@ -59,9 +60,7 @@ export function pruneSyncTombstones(deletions: SyncTombstone[], now = Date.now()
         const current = latest.get(deletion.id);
         if (!current || deletedAt >= getTombstoneTime(current)) latest.set(deletion.id, deletion);
     });
-    return Array.from(latest.values())
-        .sort((a, b) => getTombstoneTime(b) - getTombstoneTime(a))
-        .slice(0, TOMBSTONE_LIMIT);
+    return Array.from(latest.values()).sort((a, b) => getTombstoneTime(b) - getTombstoneTime(a));
 }
 
 export async function readSyncTombstones(domain: SyncTombstoneDomain) {
