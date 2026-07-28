@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-28 15:44'
-updated_date: '2026-07-28 17:01'
+updated_date: '2026-07-28 17:10'
 labels: []
 dependencies: []
 ordinal: 16000
@@ -42,6 +42,8 @@ stop-gate 追审第2轮修复：水合链路上层异常(JSON损坏/资产重建
 stop-gate 追审第3轮修复：水合失败回调的 setState 会触发 persist 把空初始态回写存储(洗白损坏数据,熔断只延迟一轮)——降级会话现拦截该 store 全部持久化写入,原始数据保盘,每会话重新报降级形成稳定熔断循环;已知取舍=降级会话改动不落盘。+3用例(降级拦写/canvas flush不落盘/健康会话正常写),622全绿。
 
 stop-gate 追审第4轮修复：降级标打上前的时序窗口——水合进行中发起的写入(canvas 防抖队列尤甚)会在标记后落盘覆盖损坏数据；写入门槛改为 canPersist=水合定型&&未降级(storage-read-health 新增 settledHydrations)，新增窗口期测试(水合挂起中 createProject+flush 零落盘)，623 全绿。
+
+stop-gate 追审第5轮：'健康慢水合写入被吞'实证不成立——定型回调 setState 触发的持久化会补落盘窗口期改动(门已开、写最新内存态)；新增测试锁定自愈链路+承重注释，624全绿。zustand rehydrate merge 覆盖窗口期内存态属既有语义、改动前后一致。
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
