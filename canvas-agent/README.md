@@ -8,6 +8,8 @@
 npx -y @yinchenhuang/canvas-agent
 ```
 
+Node 版本要求：**使用**（npx 或作为依赖安装）只需 Node ≥ 18；**参与开发**（跑本仓库的测试）需要 Node ≥ 20.19 或 ≥ 22.12——测试链路的 vitest 3 / vite 7 要求更高，CI 用的是 Node 22。
+
 本仓库开发时也可以直接运行：
 
 ```bash
