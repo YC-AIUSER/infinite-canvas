@@ -112,6 +112,8 @@ export const useAssetStore = create<AssetStore>()(
                 // 定型标记必须在降级判定之后，写入门自此才可能放行。
                 if (error) markStorageReadFallback(ASSET_STORE_KEY);
                 markHydrationSettled(ASSET_STORE_KEY);
+                // 这次 setState 承重两件事：置 hydrated；同时触发一次持久化——
+                // 健康慢水合窗口期被写入门拦下的改动靠它在定型瞬间补落盘（有测试锁定）
                 useAssetStore.setState({ hydrated: true });
             },
         },

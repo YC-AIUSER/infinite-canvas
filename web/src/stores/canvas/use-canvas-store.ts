@@ -161,6 +161,7 @@ export const useCanvasStore = create<CanvasStore>()(
                 // 水合失败打降级标，理由见 use-asset-store 同位置注释
                 if (error) markStorageReadFallback(CANVAS_STORE_KEY);
                 markHydrationSettled(CANVAS_STORE_KEY);
+                // 承重 setState：置 hydrated + 定型瞬间补落盘窗口期写入，见 use-asset-store 注释
                 useCanvasStore.setState({ hydrated: true });
             },
         },

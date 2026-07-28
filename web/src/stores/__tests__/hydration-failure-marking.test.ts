@@ -95,6 +95,36 @@ describe("store 上层水合异常打降级标", () => {
         expect(setItemMock).not.toHaveBeenCalled();
     });
 
+    it("健康慢水合：窗口期写入在水合定型时自动补落盘，不被吞", async () => {
+        const setItemMock = vi.fn(async (_name: string, _value: string) => undefined);
+        let resolveRead!: (value: string | null) => void;
+        const pendingRead = new Promise<string | null>((resolve) => {
+            resolveRead = resolve;
+        });
+        vi.doMock("@/lib/localforage-storage", () => ({
+            localForageStorage: { getItem: () => pendingRead, setItem: setItemMock, removeItem: async () => undefined },
+        }));
+        const { useAssetStore } = await import("@/stores/use-asset-store");
+
+        // 水合仍在进行（asset store 重建资产 URL 可能耗时数秒），用户此刻新增素材
+        expect(useAssetStore.getState().hydrated).toBe(false);
+        useAssetStore.getState().addAsset({ kind: "text", title: "窗口期素材", coverUrl: "", tags: [], data: { content: "x" } });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(setItemMock).not.toHaveBeenCalled();
+
+        // 水合定型（无存量数据）：定型时置 hydrated 的 setState 触发一次持久化，
+        // 此刻门已放行、写的是包含窗口期素材的最新内存态——写入被推迟而非被吞
+        resolveRead(null);
+        await vi.waitFor(() => {
+            expect(useAssetStore.getState().hydrated).toBe(true);
+        });
+        await vi.waitFor(() => {
+            expect(setItemMock).toHaveBeenCalled();
+        });
+        const lastPayload = String(setItemMock.mock.calls.at(-1)?.[1] ?? "");
+        expect(lastPayload).toContain("窗口期素材");
+    });
+
     it("健康会话回写正常：hydration 无误时业务写入照常落盘", async () => {
         const setItemMock = vi.fn(async () => undefined);
         vi.doMock("@/lib/localforage-storage", () => ({
