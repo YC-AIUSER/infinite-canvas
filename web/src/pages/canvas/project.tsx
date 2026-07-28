@@ -411,6 +411,20 @@ function InfiniteCanvasPage() {
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [nodeCreatePosition, setNodeCreatePosition] = useState<Position | null>(null);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
+    // 运行标按任务实例令牌管理：同节点快速重试时，旧任务晚到的收尾不会误清新任务的运行标
+    const runningSeqRef = useRef(0);
+    const runningOwnerRef = useRef(0);
+    const beginRunningNode = useCallback((nodeId: string) => {
+        const token = ++runningSeqRef.current;
+        runningOwnerRef.current = token;
+        setRunningNodeId(nodeId);
+        return token;
+    }, []);
+    const endRunningNode = useCallback((token: number) => {
+        if (runningOwnerRef.current !== token) return;
+        runningOwnerRef.current = 0;
+        setRunningNodeId(null);
+    }, []);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
@@ -685,7 +699,8 @@ function InfiniteCanvasPage() {
         toonflowPendingStreamRef.current.clear();
         generationRequestsRef.current.forEach((request) => request.controller.abort());
         generationRequestsRef.current.clear();
-        // 旧画布任务的运行标不带进新画布；旧任务晚到的 finally 用逐任务比对清理，不会误抹新任务
+        // 旧画布任务的运行标不带进新画布；旧任务晚到的收尾按任务令牌比对，不会误抹新任务
+        runningOwnerRef.current = 0;
         setRunningNodeId(null);
         if (!hydrated) return;
         setProjectLoaded(false);
@@ -2196,7 +2211,7 @@ function InfiniteCanvasPage() {
             const source = { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [source]);
             setMaskEditNodeId(null);
-            setRunningNodeId(childId);
+            const runningToken = beginRunningNode(childId);
             setNodes((prev) => [
                 ...prev,
                 {
@@ -2228,7 +2243,7 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
             } finally {
                 finishGenerationRequest(childId, controller);
-                setRunningNodeId((current) => (current === childId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -2278,7 +2293,7 @@ function InfiniteCanvasPage() {
                 { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey },
             ]);
             setAngleNodeId(null);
-            setRunningNodeId(childId);
+            const runningToken = beginRunningNode(childId);
             setNodes((prev) => [
                 ...prev,
                 {
@@ -2314,7 +2329,7 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
             } finally {
                 finishGenerationRequest(childId, controller);
-                setRunningNodeId((current) => (current === childId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, openConfigDialog, startGenerationRequest],
@@ -2505,7 +2520,7 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            setRunningNodeId(nodeId);
+            const runningToken = beginRunningNode(nodeId);
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
@@ -2514,20 +2529,20 @@ function InfiniteCanvasPage() {
             );
             if (!guardProject(capturedProjectId)) {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
                 return;
             }
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
                 return;
             }
             const markSourceStatus = sourceNode?.type !== CanvasNodeType.Image && !editingTextNode;
             const statusPrompt = sourceNode?.type === CanvasNodeType.Config ? effectivePrompt : prompt;
             if (!effectivePrompt && (mode === "text" || mode === "audio")) {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
                 return;
             }
             let pendingChildIds: string[] = [];
@@ -2896,7 +2911,7 @@ function InfiniteCanvasPage() {
                 );
             } finally {
                 finishGenerationRequest(nodeId, runController);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [cancelStreamNodeUpdate, effectiveConfig, finishGenerationRequest, flushStreamNodeUpdate, focusNodes, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleStreamNodeUpdate, startGenerationRequest],
@@ -2931,7 +2946,7 @@ function InfiniteCanvasPage() {
             });
             nodesRef.current = preparedNodes;
             setNodes(preparedNodes);
-            setRunningNodeId(nodeId);
+            const runningToken = beginRunningNode(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
             const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
 
@@ -2970,7 +2985,7 @@ function InfiniteCanvasPage() {
             } finally {
                 clearToonflowStreamText(nodeId);
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
@@ -3002,7 +3017,7 @@ function InfiniteCanvasPage() {
             const upstreamSnapshot = computeUpstreamVersions(preparedNodes, connectionsRef.current, nodeId);
             nodesRef.current = preparedNodes;
             setNodes(preparedNodes);
-            setRunningNodeId(nodeId);
+            const runningToken = beginRunningNode(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
             const preparedNode = preparedNodes.find((node) => node.id === nodeId)!;
 
@@ -3060,7 +3075,7 @@ function InfiniteCanvasPage() {
             } finally {
                 clearToonflowStreamText(nodeId);
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
@@ -3110,7 +3125,7 @@ function InfiniteCanvasPage() {
             const upstreamSnapshot = computeUpstreamVersions(preparedNodes, connectionsRef.current, nodeId);
             nodesRef.current = preparedNodes;
             setNodes(preparedNodes);
-            setRunningNodeId(nodeId);
+            const runningToken = beginRunningNode(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
             let videoTaskId: string | undefined;
             let videoStorageKey: string | undefined;
@@ -3251,7 +3266,7 @@ function InfiniteCanvasPage() {
                 setNodes(next);
             } finally {
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -3279,7 +3294,7 @@ function InfiniteCanvasPage() {
             const upstreamSnapshot = computeUpstreamVersions(preparedNodes, connectionsRef.current, nodeId);
             nodesRef.current = preparedNodes;
             setNodes(preparedNodes);
-            setRunningNodeId(nodeId);
+            const runningToken = beginRunningNode(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
             const createdKeys: string[] = [];
 
@@ -3331,7 +3346,7 @@ function InfiniteCanvasPage() {
                 setNodes(next);
             } finally {
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -3572,7 +3587,7 @@ function InfiniteCanvasPage() {
             const prompt = buildDiversityRepairPrompt({ rows, shotContracts: contracts, failedItems });
 
             setToonflowDiversityRepair({ nodeId, loading: true });
-            setRunningNodeId(nodeId);
+            const runningToken = beginRunningNode(nodeId);
             const controller = startGenerationRequest(nodeId, nodeId, nodeId);
             try {
                 const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: prompt }], () => {}, { signal: controller.signal });
@@ -3593,7 +3608,7 @@ function InfiniteCanvasPage() {
                 setToonflowDiversityRepair({ nodeId, loading: false, error: errorDetails });
             } finally {
                 finishGenerationRequest(nodeId, controller);
-                setRunningNodeId((current) => (current === nodeId ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
@@ -3906,7 +3921,7 @@ function InfiniteCanvasPage() {
             }
             const retryImages = retryReferenceImages || [];
 
-            setRunningNodeId(node.id);
+            const runningToken = beginRunningNode(node.id);
             setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
 
@@ -3995,7 +4010,7 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
             } finally {
                 finishGenerationRequest(node.id, controller);
-                setRunningNodeId((current) => (current === node.id ? null : current));
+                endRunningNode(runningToken);
             }
         },
         [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, startGenerationRequest],
