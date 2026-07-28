@@ -14,3 +14,16 @@ export function hasStorageReadFallback() {
 export function hasStorageReadFallbackFor(name: string) {
     return degradedReads.has(name);
 }
+
+// 水合"定型"（成功或失败均算）之后才允许该 store 持久化写入。
+// 只挡降级是不够的：降级标要等水合结束才打上，水合进行中发起的写入
+// （含 canvas 400ms 防抖队列里排队的）会带着空初始态穿过守卫覆盖原始数据。
+const settledHydrations = new Set<string>();
+
+export function markHydrationSettled(name: string) {
+    settledHydrations.add(name);
+}
+
+export function canPersist(name: string) {
+    return settledHydrations.has(name) && !degradedReads.has(name);
+}

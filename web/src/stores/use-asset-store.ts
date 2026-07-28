@@ -3,7 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { hasStorageReadFallbackFor, markStorageReadFallback } from "@/lib/storage-read-health";
+import { canPersist, markHydrationSettled, markStorageReadFallback } from "@/lib/storage-read-health";
 import { cleanupUnusedAppMedia } from "@/services/app-media-cleanup";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
@@ -63,10 +63,10 @@ const assetStorage: PersistStorage<AssetStore> = {
         return parsed;
     },
     setItem: async (name, value) => {
-        // 降级会话禁止回写：水合失败后 store 是空初始态，任何 set（包括置 hydrated）
-        // 都会把空状态写回存储，把"损坏但可能可恢复"的原始数据洗成"干净的空数据"，
-        // 让下个会话的清扫熔断失效。宁可本会话改动不落盘，也不覆盖原始数据。
-        if (hasStorageReadFallbackFor(name)) return;
+        // 水合定型且未降级才允许回写：降级会话回写会把"损坏但可能可恢复"的原始数据
+        // 洗成"干净的空数据"，让下个会话的清扫熔断失效；而水合进行中的写入带着
+        // 空初始态、降级标还没来得及打，同样必须拦。宁可改动不落盘，不覆盖原始数据。
+        if (!canPersist(name)) return;
         await localForageStorage.setItem(name, JSON.stringify(value));
     },
     removeItem: (name) => localForageStorage.removeItem(name),
@@ -108,8 +108,10 @@ export const useAssetStore = create<AssetStore>()(
             partialize: (state) => ({ assets: state.assets }) as StorageValue<AssetStore>["state"],
             onRehydrateStorage: () => (_state, error) => {
                 // 水合失败（存储读取之上的 JSON.parse/资产重建抛错）时 store 停留在空初始态，
-                // 必须打降级标：启动清扫等破坏性操作靠它判断引用集是否可信
+                // 必须打降级标：启动清扫等破坏性操作靠它判断引用集是否可信。
+                // 定型标记必须在降级判定之后，写入门自此才可能放行。
                 if (error) markStorageReadFallback(ASSET_STORE_KEY);
+                markHydrationSettled(ASSET_STORE_KEY);
                 useAssetStore.setState({ hydrated: true });
             },
         },

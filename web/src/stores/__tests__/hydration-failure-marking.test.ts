@@ -68,6 +68,33 @@ describe("store 上层水合异常打降级标", () => {
         expect(setItemMock).not.toHaveBeenCalled();
     });
 
+    it("水合进行中发起的写入也被拦（降级标打上前的时序窗口）", async () => {
+        const setItemMock = vi.fn(async () => undefined);
+        let resolveRead!: (value: string) => void;
+        const pendingRead = new Promise<string>((resolve) => {
+            resolveRead = resolve;
+        });
+        vi.doMock("@/lib/localforage-storage", () => ({
+            localForageStorage: { getItem: () => pendingRead, setItem: setItemMock, removeItem: async () => undefined },
+        }));
+        const { useCanvasStore, flushCanvasStorePersist } = await import("@/stores/canvas/use-canvas-store");
+
+        // 水合仍在进行（读取未返回），此刻发起写入——旧实现会带着空初始态排进防抖队列
+        expect(useCanvasStore.getState().hydrated).toBe(false);
+        useCanvasStore.getState().createProject("窗口期画布");
+        await flushCanvasStorePersist();
+        expect(setItemMock).not.toHaveBeenCalled();
+
+        // 读取返回损坏内容 → 水合失败定型 → 此前排队与此后的写入都不许落盘
+        resolveRead("corrupted{{{");
+        await vi.waitFor(() => {
+            expect(useCanvasStore.getState().hydrated).toBe(true);
+        });
+        useCanvasStore.getState().createProject("降级后画布");
+        await flushCanvasStorePersist();
+        expect(setItemMock).not.toHaveBeenCalled();
+    });
+
     it("健康会话回写正常：hydration 无误时业务写入照常落盘", async () => {
         const setItemMock = vi.fn(async () => undefined);
         vi.doMock("@/lib/localforage-storage", () => ({

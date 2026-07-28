@@ -3,7 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { hasStorageReadFallbackFor, markStorageReadFallback } from "@/lib/storage-read-health";
+import { canPersist, markHydrationSettled, markStorageReadFallback } from "@/lib/storage-read-health";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { buildToonflowCanvasTemplate, TOONFLOW_CANVAS_TITLE } from "@/lib/canvas/toonflow-canvas-template";
 import { recordSyncDeletions } from "@/services/sync-tombstones";
@@ -55,8 +55,9 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         return parsed;
     },
     setItem: (name, value) => {
-        // 降级会话禁止回写，理由见 use-asset-store 同位置注释
-        if (hasStorageReadFallbackFor(name)) return;
+        // 水合定型且未降级才允许回写，理由见 use-asset-store 同位置注释；
+        // 对 canvas 尤其关键：防抖队列会把水合窗口内排队的写入延迟到降级标打上之后才落盘
+        if (!canPersist(name)) return;
         const nextState = value.state as PersistedCanvasState;
         if (queuedPersistState && queuedPersistState.projects === nextState.projects) return;
         queuedPersistState = nextState;
@@ -159,6 +160,7 @@ export const useCanvasStore = create<CanvasStore>()(
             onRehydrateStorage: () => (_state, error) => {
                 // 水合失败打降级标，理由见 use-asset-store 同位置注释
                 if (error) markStorageReadFallback(CANVAS_STORE_KEY);
+                markHydrationSettled(CANVAS_STORE_KEY);
                 useCanvasStore.setState({ hydrated: true });
             },
         },
