@@ -55,13 +55,18 @@ jobs:
         id: token
         run: |
           raw="$NPM_TOKEN_RAW"
-          clean=$(printf '%s' "$raw" | tr -d '[:space:]')
+          # 只保留可打印 ASCII（0x21-0x7E）：既去换行/空格，也去掉网页复制常带的
+          # 不间断空格、零宽空格等多字节字符——后者正是 tr -d '[:space:]' 抓不到、
+          # 却会让 Authorization 头非法的元凶。
+          clean=$(printf '%s' "$raw" | tr -cd '\41-\176')
           if [ -z "$clean" ]; then
             echo "NPM_TOKEN 未配置或为空，无法发布" >&2
             exit 1
           fi
           if [ "${#raw}" -ne "${#clean}" ]; then
-            echo "注意：token 含空白字符（长度 ${#raw} → ${#clean}），已自动清洗后使用。"
+            echo "注意：token 含非法字符（字节长度 ${#raw} → ${#clean}），已清洗后使用。"
+          else
+            echo "token 字符集检查：全部为可打印 ASCII。"
           fi
           case "$clean" in
             npm_*) echo "token 前缀检查：通过（npm_ 开头）" ;;
