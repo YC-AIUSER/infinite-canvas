@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { buildToonflowCanvasTemplate, TOONFLOW_CANVAS_TITLE } from "@/lib/canvas/toonflow-canvas-template";
+import { recordSyncDeletions } from "@/services/sync-tombstones";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasProjectKind, ViewportTransform } from "@/types/canvas";
 
 export type CanvasProject = {
@@ -137,6 +138,7 @@ export const useCanvasStore = create<CanvasStore>()(
             deleteProjects: (ids) =>
                 set((state) => {
                     const projects = state.projects.filter((project) => !ids.includes(project.id));
+                    void recordSyncDeletions("canvas", ids).catch(() => undefined);
                     return { projects };
                 }),
             replaceProjects: (projects) => set({ projects }),

@@ -3,8 +3,10 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import { cleanupUnusedAppMedia } from "@/services/app-media-cleanup";
+import { resolveMediaUrl } from "@/services/file-storage";
+import { resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { recordSyncDeletions } from "@/services/sync-tombstones";
 
 export type AssetKind = "text" | "image" | "video";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -81,6 +83,7 @@ export const useAssetStore = create<AssetStore>()(
             removeAsset: (id) =>
                 set((state) => {
                     const assets = state.assets.filter((asset) => asset.id !== id);
+                    void recordSyncDeletions("assets", [id]).catch(() => undefined);
                     get().cleanupImages({ assets });
                     return { assets };
                 }),
@@ -88,8 +91,7 @@ export const useAssetStore = create<AssetStore>()(
             cleanupImages: (extra) => {
                 window.setTimeout(async () => {
                     const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
-                    await cleanupUnusedImages({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
-                    await cleanupUnusedMedia({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
+                    await cleanupUnusedAppMedia({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
                 }, 0);
             },
         }),

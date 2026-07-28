@@ -50,7 +50,10 @@ export async function deleteStoredMedia(keys: Iterable<string>) {
 }
 
 export async function cleanupUnusedMedia(usedData: unknown) {
-    const usedKeys = collectMediaStorageKeys(usedData);
+    await cleanupUnusedMediaByKeys(collectMediaStorageKeys(usedData));
+}
+
+export async function cleanupUnusedMediaByKeys(usedKeys: ReadonlySet<string>) {
     const unused: string[] = [];
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);

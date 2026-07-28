@@ -338,6 +338,8 @@ function InfiniteCanvasPage() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const projectId = params.id || "";
+    const projectIdRef = useRef(projectId);
+    projectIdRef.current = projectId;
     const localAgentConnected = useAgentStore((state) => state.connected);
     const localAgentActivity = useAgentStore((state) => state.activity);
     const localAgentEnabled = useAgentStore((state) => state.enabled);
@@ -360,6 +362,7 @@ function InfiniteCanvasPage() {
     const nodeDraggingRef = useRef(false);
     const assetsProjectionVersionRef = useRef(0);
     const restoreVersionRef = useRef(0);
+    const loadedProjectIdRef = useRef("");
     const dragRef = useRef<{
         isDraggingNode: boolean;
         hasMoved: boolean;
@@ -467,6 +470,16 @@ function InfiniteCanvasPage() {
     const skillInsertedRef = useRef(false);
     const cascadeCancelledRef = useRef(false);
     const cascadeRunningRef = useRef(false);
+
+    const isProjectActive = useCallback((capturedProjectId: string) => capturedProjectId === projectIdRef.current && loadedProjectIdRef.current === capturedProjectId, []);
+    const guardProject = useCallback(
+        (capturedProjectId: string) => {
+            if (isProjectActive(capturedProjectId)) return true;
+            message.warning("画布已切换，本次异步结果已丢弃");
+            return false;
+        },
+        [isProjectActive, message],
+    );
     const resumedVideoTaskIdsRef = useRef(new Set<string>());
     const cameraAnimationFrameRef = useRef<number | null>(null);
     const lastManualViewportAtRef = useRef(Number.NEGATIVE_INFINITY);
@@ -663,6 +676,15 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         const restoreVersion = ++restoreVersionRef.current;
         assetsProjectionVersionRef.current += 1;
+        loadedProjectIdRef.current = "";
+        streamUpdateTimersRef.current.forEach((timer) => clearTimeout(timer));
+        streamUpdateTimersRef.current.clear();
+        pendingStreamTextRef.current.clear();
+        toonflowStreamTimersRef.current.forEach((timer) => clearTimeout(timer));
+        toonflowStreamTimersRef.current.clear();
+        toonflowPendingStreamRef.current.clear();
+        generationRequestsRef.current.forEach((request) => request.controller.abort());
+        generationRequestsRef.current.clear();
         if (!hydrated) return;
         setProjectLoaded(false);
         const project = openProject(projectId);
@@ -679,6 +701,7 @@ function InfiniteCanvasPage() {
             const withInstanceGroups = reconcileInstanceGroups(projected);
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
             if (restoreVersion !== restoreVersionRef.current) return;
+            loadedProjectIdRef.current = projectId;
             nodesRef.current = withInstanceGroups;
             connectionsRef.current = project.connections;
             setNodes(withInstanceGroups);
@@ -751,7 +774,7 @@ function InfiniteCanvasPage() {
     }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
 
     useEffect(() => {
-        if (!projectLoaded || historyPausedRef.current) return;
+        if (!projectLoaded || loadedProjectIdRef.current !== projectId || historyPausedRef.current) return;
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
     }, [activeChatId, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
 
@@ -760,9 +783,10 @@ function InfiniteCanvasPage() {
     }, [dialogNodeId]);
 
     useEffect(() => {
-        if (!projectLoaded) return;
+        if (!projectLoaded || loadedProjectIdRef.current !== projectId) return;
         if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
         viewportSaveTimerRef.current = setTimeout(() => {
+            if (loadedProjectIdRef.current !== projectId) return;
             updateProject(projectId, { viewport: viewportRef.current });
             viewportSaveTimerRef.current = null;
         }, 500);
@@ -1710,8 +1734,9 @@ function InfiniteCanvasPage() {
         };
     }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
 
-    const createImageFileNode = useCallback(async (file: File, position: Position, activate = true) => {
+    const createImageFileNode = useCallback(async (file: File, position: Position, activate = true, capturedProjectId = projectIdRef.current) => {
         const image = await uploadImage(file);
+        if (!guardProject(capturedProjectId)) return;
         const size = fitNodeSize(image.width, image.height);
         const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const newNode: CanvasNodeData = {
@@ -1729,10 +1754,11 @@ function InfiniteCanvasPage() {
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
         setDialogNodeId(id);
-    }, []);
+    }, [guardProject]);
 
-    const createVideoFileNode = useCallback(async (file: File, position: Position, activate = true) => {
+    const createVideoFileNode = useCallback(async (file: File, position: Position, activate = true, capturedProjectId = projectIdRef.current) => {
         const video = await uploadMediaFile(file, "video");
+        if (!guardProject(capturedProjectId)) return;
         const size = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
         const id = `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         setNodes((prev) => [
@@ -1751,10 +1777,11 @@ function InfiniteCanvasPage() {
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
         setDialogNodeId(id);
-    }, []);
+    }, [guardProject]);
 
-    const createAudioFileNode = useCallback(async (file: File, position: Position, activate = true) => {
+    const createAudioFileNode = useCallback(async (file: File, position: Position, activate = true, capturedProjectId = projectIdRef.current) => {
         const audio = await uploadMediaFile(file, "audio");
+        if (!guardProject(capturedProjectId)) return;
         const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
         const id = `audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         setNodes((prev) => [
@@ -1772,7 +1799,7 @@ function InfiniteCanvasPage() {
         if (!activate) return;
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
-    }, []);
+    }, [guardProject]);
 
     const createTextNodeFromClipboard = useCallback(
         (text: string) => {
@@ -1796,22 +1823,25 @@ function InfiniteCanvasPage() {
 
     const pasteSystemClipboard = useCallback(async () => {
         if (!navigator.clipboard) return;
+        const capturedProjectId = projectIdRef.current;
 
         const items = await navigator.clipboard.read();
+        if (!guardProject(capturedProjectId)) return;
         const imageItem = items.find((item) => item.types.some((type) => type.startsWith("image/")));
         if (imageItem) {
             const imageType = imageItem.types.find((type) => type.startsWith("image/"));
             if (!imageType) return;
             const blob = await imageItem.getType(imageType);
             const file = new File([blob], "clipboard-image.png", { type: imageType });
-            void createImageFileNode(file, getCanvasCenter());
+            void createImageFileNode(file, getCanvasCenter(), true, capturedProjectId);
             message.success("已从剪切板添加图片");
             return;
         }
 
         const text = await navigator.clipboard.readText();
+        if (!guardProject(capturedProjectId)) return;
         if (createTextNodeFromClipboard(text)) message.success("已从剪切板添加文本");
-    }, [createImageFileNode, createTextNodeFromClipboard, getCanvasCenter, message]);
+    }, [createImageFileNode, createTextNodeFromClipboard, getCanvasCenter, guardProject, message]);
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -2084,8 +2114,10 @@ function InfiniteCanvasPage() {
 
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
         if (!node.metadata?.content) return;
+        const capturedProjectId = projectIdRef.current;
         const cropped = await cropDataUrl(node.metadata.content, crop);
         const image = await uploadImage(cropped);
+        if (!guardProject(capturedProjectId)) return;
         const width = Math.min(node.width, Math.max(220, image.width));
         const childId = nanoid();
         const child: CanvasNodeData = {
@@ -2105,11 +2137,12 @@ function InfiniteCanvasPage() {
         setSelectedNodeIds(new Set([childId]));
         setDialogNodeId(childId);
         setCropNodeId(null);
-    }, []);
+    }, [guardProject]);
 
     const splitImageNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageSplitParams) => {
             if (!node.metadata?.content) return;
+            const capturedProjectId = projectIdRef.current;
             setSplitNodeId(null);
             const pieces = await splitDataUrl(node.metadata.content, params);
             const gap = 16;
@@ -2135,6 +2168,7 @@ function InfiniteCanvasPage() {
                     } satisfies CanvasNodeData;
                 }),
             );
+            if (!guardProject(capturedProjectId)) return;
             setNodes((prev) => [...prev, ...childNodes]);
             setConnections((prev) => [...prev, ...childNodes.map((child) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: child.id }))]);
             setSelectedNodeIds(new Set(childNodes.map((child) => child.id)));
@@ -2142,12 +2176,13 @@ function InfiniteCanvasPage() {
             setDialogNodeId(null);
             message.success(`已切分为 ${childNodes.length} 个子节点`);
         },
-        [message],
+        [guardProject, message],
     );
 
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
+            const capturedProjectId = projectIdRef.current;
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: node.metadata?.size || "auto" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
@@ -2180,9 +2215,11 @@ function InfiniteCanvasPage() {
             try {
                 const image = await requestEdit(generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, { signal: controller.signal }).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl);
+                if (!guardProject(capturedProjectId)) return;
                 const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
             } catch (error) {
+                if (!guardProject(capturedProjectId)) return;
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "局部修改失败";
                 message.error(errorDetails);
@@ -2192,14 +2229,16 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
         if (!node.metadata?.content) return;
+        const capturedProjectId = projectIdRef.current;
         setUpscaleNodeId(null);
         const upscaled = await upscaleDataUrl(node.metadata.content, params);
         const image = await uploadImage(upscaled);
+        if (!guardProject(capturedProjectId)) return;
         const size = fitNodeSize(image.width, image.height);
         const childId = nanoid();
         const child: CanvasNodeData = {
@@ -2218,11 +2257,12 @@ function InfiniteCanvasPage() {
         setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
         setSelectedNodeIds(new Set([childId]));
         setDialogNodeId(childId);
-    }, []);
+    }, [guardProject]);
 
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
+            const capturedProjectId = projectIdRef.current;
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
@@ -2262,9 +2302,11 @@ function InfiniteCanvasPage() {
                     { signal: controller.signal },
                 ).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl);
+                if (!guardProject(capturedProjectId)) return;
                 const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
             } catch (error) {
+                if (!guardProject(capturedProjectId)) return;
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
@@ -2273,7 +2315,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, guardProject, openConfigDialog, startGenerationRequest],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2291,6 +2333,7 @@ function InfiniteCanvasPage() {
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
+            const capturedProjectId = projectIdRef.current;
             const allFiles = Array.from(event.target.files ?? []);
             const files = pickMediaFiles(allFiles);
             const target = uploadTargetRef.current;
@@ -2304,6 +2347,7 @@ function InfiniteCanvasPage() {
             if (target?.nodeId) {
                 if (classifyMediaFile(file) === "audio") {
                     const audio = await uploadMediaFile(file, "audio");
+                    if (!guardProject(capturedProjectId)) return;
                     const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
                     setNodes((prev) =>
                         prev.map((node) =>
@@ -2326,6 +2370,7 @@ function InfiniteCanvasPage() {
                 }
                 if (file.type.startsWith("video/")) {
                     const video = await uploadMediaFile(file, "video");
+                    if (!guardProject(capturedProjectId)) return;
                     const nextSize = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                     setNodes((prev) =>
                         prev.map((node) =>
@@ -2348,6 +2393,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 const image = await uploadImage(file);
+                if (!guardProject(capturedProjectId)) return;
                 const size = fitNodeSize(image.width, image.height);
                 setNodes((prev) =>
                     prev.map((node) =>
@@ -2392,7 +2438,7 @@ function InfiniteCanvasPage() {
                         const position = cascadePosition(basePosition, index);
                         const kind = classifyMediaFile(item);
                         try {
-                            await (kind === "audio" ? createAudioFileNode(item, position, activate) : kind === "video" ? createVideoFileNode(item, position, activate) : createImageFileNode(item, position, activate));
+                            await (kind === "audio" ? createAudioFileNode(item, position, activate, capturedProjectId) : kind === "video" ? createVideoFileNode(item, position, activate, capturedProjectId) : createImageFileNode(item, position, activate, capturedProjectId));
                         } catch {
                             message.error(`${item.name} 上传失败`);
                         }
@@ -2400,12 +2446,13 @@ function InfiniteCanvasPage() {
                 })();
             }
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, message, screenToCanvas, size.height, size.width],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, guardProject, message, screenToCanvas, size.height, size.width],
     );
 
     const handleDrop = useCallback(
         (event: ReactDragEvent<HTMLDivElement>) => {
             event.preventDefault();
+            const capturedProjectId = projectIdRef.current;
             const allFiles = Array.from(event.dataTransfer.files);
             const files = pickMediaFiles(allFiles);
             if (files.length < allFiles.length) message.warning(`已忽略 ${allFiles.length - files.length} 个不支持的文件`);
@@ -2419,7 +2466,7 @@ function InfiniteCanvasPage() {
                     const position = cascadePosition(pos, index);
                     const kind = classifyMediaFile(item);
                     try {
-                        await (kind === "audio" ? createAudioFileNode(item, position, activate) : kind === "video" ? createVideoFileNode(item, position, activate) : createImageFileNode(item, position, activate));
+                        await (kind === "audio" ? createAudioFileNode(item, position, activate, capturedProjectId) : kind === "video" ? createVideoFileNode(item, position, activate, capturedProjectId) : createImageFileNode(item, position, activate, capturedProjectId));
                     } catch {
                         message.error(`${item.name} 上传失败`);
                     }
@@ -2448,6 +2495,7 @@ function InfiniteCanvasPage() {
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
@@ -2462,6 +2510,11 @@ function InfiniteCanvasPage() {
             const generationContext = await hydrateNodeGenerationContext(
                 buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
             );
+            if (!guardProject(capturedProjectId)) {
+                finishGenerationRequest(nodeId, runController);
+                setRunningNodeId(null);
+                return;
+            }
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
@@ -2597,6 +2650,7 @@ function InfiniteCanvasPage() {
                                     ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
                                     : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
+                                if (!isProjectActive(capturedProjectId)) return false;
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 setNodes((prev) => {
                                     const root = prev.find((node) => node.id === rootId);
@@ -2627,6 +2681,7 @@ function InfiniteCanvasPage() {
                                 return true;
                             } catch (error) {
                                 if (isGenerationCanceled(error)) return false;
+                                if (!isProjectActive(capturedProjectId)) return false;
                                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                                 hasFailure = true;
                                 setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
@@ -2637,6 +2692,7 @@ function InfiniteCanvasPage() {
                         }),
                     );
                     if (count > 1) finishGenerationRequest(rootId, controller);
+                    if (!guardProject(capturedProjectId)) return;
                     if (controller.signal.aborted) {
                         setNodes((prev) => prev.map((node) => (node.id === nodeId && isConfigNode && node.metadata?.status === NODE_STATUS_LOADING ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
                         return;
@@ -2693,6 +2749,7 @@ function InfiniteCanvasPage() {
                         const video = await storeGeneratedVideo(
                             await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }),
                         );
+                        if (!guardProject(capturedProjectId)) return;
                         const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                         setNodes((prev) =>
                             prev.map((node) =>
@@ -2749,6 +2806,7 @@ function InfiniteCanvasPage() {
                     const controller = startGenerationRequest(audioId, nodeId, nodeId, runController);
                     try {
                         const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, effectivePrompt, { signal: controller.signal }), generationConfig.audioFormat);
+                        if (!guardProject(capturedProjectId)) return;
                         setNodes((prev) => prev.map((node) => (node.id === audioId ? { ...node, metadata: { ...node.metadata, ...audioMetadata(audio), prompt: effectivePrompt, ...buildAudioGenerationMetadata(generationConfig) } } : node)));
                     } finally {
                         finishGenerationRequest(audioId, controller);
@@ -2794,6 +2852,7 @@ function InfiniteCanvasPage() {
                             generationConfig,
                             buildNodeResponseMessages({ ...generationContext, prompt: effectivePrompt }),
                             (text) => {
+                                if (!isProjectActive(capturedProjectId)) return;
                                 localStreamed = text;
                                 streamed = text;
                                 scheduleStreamNodeUpdate(targetNodeId, text);
@@ -2802,7 +2861,7 @@ function InfiniteCanvasPage() {
                         )
                             .then((answer) => {
                                 const content = answer || localStreamed;
-                                flushStreamNodeUpdate(targetNodeId, content);
+                                if (isProjectActive(capturedProjectId)) flushStreamNodeUpdate(targetNodeId, content);
                                 return { nodeId: targetNodeId, content };
                             })
                             .finally(() => {
@@ -2811,6 +2870,7 @@ function InfiniteCanvasPage() {
                             });
                     }),
                 );
+                if (!guardProject(capturedProjectId)) return;
                 if (controller.signal.aborted) return;
                 const answerByNodeId = new Map(answers.map((item) => [item.nodeId, item.content]));
                 setNodes((prev) =>
@@ -2825,6 +2885,7 @@ function InfiniteCanvasPage() {
                     ),
                 );
             } catch (error) {
+                if (!guardProject(capturedProjectId)) return;
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
@@ -2836,7 +2897,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [cancelStreamNodeUpdate, effectiveConfig, finishGenerationRequest, flushStreamNodeUpdate, focusNodes, isAiConfigReady, message, openConfigDialog, scheduleStreamNodeUpdate, startGenerationRequest],
+        [cancelStreamNodeUpdate, effectiveConfig, finishGenerationRequest, flushStreamNodeUpdate, focusNodes, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleStreamNodeUpdate, startGenerationRequest],
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
@@ -2844,6 +2905,7 @@ function InfiniteCanvasPage() {
 
     const runToonflowNodeGeneration = useCallback(
         async (nodeId: string): Promise<{ ok: boolean; error?: string }> => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             if (!sourceNode?.metadata?.toonflow) return { ok: false, error: "未找到 Toonflow 节点" };
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, "text");
@@ -2875,12 +2937,15 @@ function InfiniteCanvasPage() {
                 const upstreamVersions = computeUpstreamVersions(nodesRef.current, connectionsRef.current, nodeId);
                 let resultNode = preparedNode;
                 for (let attempt = 0; attempt < 2; attempt += 1) {
-                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: finalPrompt }], (text) => scheduleToonflowStreamUpdate(nodeId, text), { signal: controller.signal });
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: finalPrompt }], (text) => {
+                        if (isProjectActive(capturedProjectId)) scheduleToonflowStreamUpdate(nodeId, text);
+                    }, { signal: controller.signal });
                     resultNode = applyGenerationSuccess(preparedNode, rawText, washHits, upstreamVersions);
                     const shouldRetryStoryboard = resultNode.metadata?.toonflow?.kind === "storyboard-table" && resultNode.metadata.toonflow.status === "failed" && attempt === 0;
                     if (!shouldRetryStoryboard) break;
                 }
                 const generationFailed = resultNode.metadata?.toonflow?.status === "failed";
+                if (!guardProject(capturedProjectId)) return { ok: false, error: "画布已切换" };
                 // 权威 ref+快照写入:级联串行背靠背调用时,函数式 setNodes 的 updater
                 // 可能尚未被 React 执行,下一节点基于 nodesRef 的准备快照会把本次结果覆盖
                 // (实测:级联中空间合同的"待验收"被分镜表的准备快照冲回"生成中")。
@@ -2892,6 +2957,7 @@ function InfiniteCanvasPage() {
                 if (error) message.error(error);
                 return error ? { ok: false, error } : { ok: true };
             } catch (error) {
+                if (!guardProject(capturedProjectId)) return { ok: false, error: "画布已切换" };
                 if (isGenerationCanceled(error)) return { ok: false, error: "生成已取消" };
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
@@ -2905,11 +2971,12 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
+        [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
     );
 
     const runToonflowModule4Composition = useCallback(
         async (nodeId: string, note?: string) => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             if (sourceNode?.metadata?.toonflow?.kind !== "video-workbench") return;
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, sourceNode, "text"), count: "1" };
@@ -2944,7 +3011,9 @@ function InfiniteCanvasPage() {
                 for (let attempt = 0; attempt < 2; attempt += 1) {
                     if (feedback) generation = buildToonflowModule4Composition(nodesRef.current, connectionsRef.current, nodeId, note, feedback);
                     const attemptNode = { ...preparedNode, metadata: { ...preparedNode.metadata, prompt: generation.finalPrompt, model: generationConfig.model } };
-                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: generation.finalPrompt }], (text) => scheduleToonflowStreamUpdate(nodeId, text), { signal: controller.signal });
+                    const rawText = await requestImageQuestion(generationConfig, [{ role: "user", content: generation.finalPrompt }], (text) => {
+                        if (isProjectActive(capturedProjectId)) scheduleToonflowStreamUpdate(nodeId, text);
+                    }, { signal: controller.signal });
                     const validation = validateModule4(rawText);
                     if (validation.ok) {
                         const module4Text = generation.finalize(rawText);
@@ -2964,6 +3033,7 @@ function InfiniteCanvasPage() {
                 }
 
                 const generationFailed = resultNode.metadata?.toonflow?.status === "failed";
+                if (!guardProject(capturedProjectId)) return;
                 let next = nodesRef.current.map((node) => (node.id === nodeId ? resultNode : node));
                 if (!generationFailed) next = propagateAfterNewVersion(next, connectionsRef.current, nodeId);
                 nodesRef.current = next;
@@ -2978,6 +3048,7 @@ function InfiniteCanvasPage() {
                     void deleteStoredMedia(orphanedKeys.filter((key) => !referencedKeys.has(key)));
                 }
             } catch (error) {
+                if (!guardProject(capturedProjectId)) return;
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "Module4合成失败";
                 message.error(errorDetails);
@@ -2990,11 +3061,12 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
+        [clearToonflowStreamText, effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, scheduleToonflowStreamUpdate, startGenerationRequest],
     );
 
     const runToonflowInstanceGeneration = useCallback(
         async (nodeId: string, note?: string) => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const sourceToonflow = sourceNode?.metadata?.toonflow;
             if (!sourceNode || !sourceToonflow) return;
@@ -3059,6 +3131,7 @@ function InfiniteCanvasPage() {
                         }
                     }),
                 );
+                if (!guardProject(capturedProjectId)) return;
                 const references = resolvedReferences.filter((reference): reference is ReferenceImage => Boolean(reference));
                 // C3: 构图锁等强制参考图任一读取失败必须中止,不得降级为文生图或仅凭资产卡(首帧只上色不改构图)。
                 const resolvedKeys = new Set(references.map((reference) => reference.storageKey));
@@ -3071,6 +3144,7 @@ function InfiniteCanvasPage() {
                 let storageKey: string;
                 if (videoGeneration) {
                     const task = await createVideoGenerationTask(generationConfig, generation.finalPrompt, references, [], [], { signal: controller.signal });
+                    if (!guardProject(capturedProjectId)) return;
                     videoTaskId = task.id;
                     resumedVideoTaskIdsRef.current.add(task.id);
                     const pendingNodes = nodesRef.current.map((node) =>
@@ -3099,6 +3173,12 @@ function InfiniteCanvasPage() {
                         : await requestGeneration(generationConfig, generation.finalPrompt, { signal: controller.signal }).then((items) => items[0]);
                     if (!image?.dataUrl) throw new Error("图像接口没有返回图片");
                     storageKey = (await uploadImage(image.dataUrl)).storageKey;
+                }
+
+                if (!guardProject(capturedProjectId)) {
+                    if (isVideo) void deleteStoredMedia([storageKey]);
+                    else void deleteStoredImages([storageKey]);
+                    return;
                 }
 
                 // C2: 生成期间该实例可能被归档/删除/重排/被新一轮生成接管,晚到结果不能整体覆盖当前节点(否则产生无根僵尸实例、丢失归档标记与新序号)。
@@ -3146,6 +3226,7 @@ function InfiniteCanvasPage() {
             } catch (error) {
                 // 已上传但未被节点引用的视频(setNodes 提交前抛异常)是孤儿,需删除(与 resume 路径对称,防 media_files 泄漏)。
                 if (videoStorageKey) void deleteStoredMedia([videoStorageKey]);
+                if (!guardProject(capturedProjectId)) return;
                 if (isGenerationCanceled(error)) {
                     if (videoTaskId) {
                         const taskId = videoTaskId;
@@ -3171,11 +3252,12 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
 
     const runToonflowAudioMixGeneration = useCallback(
         async (nodeId: string) => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const sourceToonflow = sourceNode?.metadata?.toonflow;
             if (!sourceNode || sourceToonflow?.kind !== "audio-mix" || !sourceToonflow.segmentId) {
@@ -3204,6 +3286,10 @@ function InfiniteCanvasPage() {
                 for (const item of plan) {
                     const blob = await requestAudioGeneration({ ...generationConfig, audioVoice: item.voice }, item.text, { signal: controller.signal });
                     const uploaded = await storeGeneratedAudio(blob, generationConfig.audioFormat);
+                    if (!guardProject(capturedProjectId)) {
+                        await deleteStoredMedia([...createdKeys, uploaded.storageKey]);
+                        return;
+                    }
                     if (!uploaded.storageKey) throw new Error(`镜头 ${item.shotId} 的配音未能保存`);
                     createdKeys.push(uploaded.storageKey);
                     dubbing.push({ ...item, audioKey: uploaded.storageKey, durationMs: uploaded.durationMs });
@@ -3235,6 +3321,7 @@ function InfiniteCanvasPage() {
                 }
             } catch (error) {
                 if (createdKeys.length) await deleteStoredMedia(createdKeys).catch(() => undefined);
+                if (!guardProject(capturedProjectId)) return;
                 const errorDetails = isGenerationCanceled(error) ? "生成已取消" : error instanceof Error ? error.message : "配音生成失败";
                 if (!isGenerationCanceled(error)) message.error(errorDetails);
                 const next = nodesRef.current.map((node) => (node.id === nodeId ? applyGenerationFailure(node, errorDetails) : node));
@@ -3245,11 +3332,12 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
     );
 
     useEffect(() => {
-        if (!projectLoaded) return;
+        if (!projectLoaded || loadedProjectIdRef.current !== projectId) return;
+        const capturedProjectId = projectId;
         const controllers: AbortController[] = [];
         const resumableNodes = nodesRef.current.filter(
             (node) => node.metadata?.toonflow?.kind === "video-workbench" && node.metadata.toonflow.status === "generating" && node.metadata.toonflow.pendingVideoTask,
@@ -3284,6 +3372,10 @@ function InfiniteCanvasPage() {
                     const uploaded = await storeGeneratedVideo(videoResult);
                     if (!uploaded.storageKey) throw new Error("视频结果未能保存到本地存储");
                     storageKey = uploaded.storageKey;
+                    if (!guardProject(capturedProjectId)) {
+                        await deleteStoredMedia([storageKey]);
+                        return;
+                    }
 
                     const latestNode = nodesRef.current.find((node) => node.id === currentNode.id);
                     const latestToonflow = latestNode?.metadata?.toonflow;
@@ -3333,6 +3425,10 @@ function InfiniteCanvasPage() {
                         message.warning("历史媒体清理失败");
                     }
                 } catch (error) {
+                    if (!guardProject(capturedProjectId)) {
+                        if (storageKey) await deleteStoredMedia([storageKey]).catch(() => undefined);
+                        return;
+                    }
                     const canceled = isGenerationCanceled(error);
                     const errorDetails = canceled ? "生成已取消" : error instanceof Error ? error.message : "视频任务恢复失败";
                     const currentNodes = nodesRef.current;
@@ -3362,7 +3458,7 @@ function InfiniteCanvasPage() {
         return () => {
             controllers.forEach((abortController) => abortController.abort());
         };
-    }, [message, projectLoaded, startGenerationRequest, finishGenerationRequest]);
+    }, [finishGenerationRequest, guardProject, message, projectId, projectLoaded, startGenerationRequest]);
 
     const handleToonflowGenerate = useCallback(
         async (nodeId: string) => {
@@ -3560,6 +3656,7 @@ function InfiniteCanvasPage() {
 
     const handleToonflowAssetCardGenerate = useCallback(
         async (nodeId: string, card: AssetCard, allCards: AssetCard[]) => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             if (sourceNode?.metadata?.toonflow?.kind !== "assets") throw new Error("未找到资产库节点");
             // 音频卡是上传的人声参考,不走 AI 图像生成(也收窄类型:下方 buildAssetCardPrompt 仅接受视觉卡类型)。
@@ -3595,9 +3692,14 @@ function InfiniteCanvasPage() {
                   })
                 : await requestGeneration(generationConfig, washed).then((items) => items[0]);
             if (!image?.dataUrl) throw new Error("图像接口没有返回锚点图");
-            return (await uploadImage(image.dataUrl)).storageKey;
+            const uploaded = await uploadImage(image.dataUrl);
+            if (!guardProject(capturedProjectId)) {
+                await deleteStoredImages([uploaded.storageKey]);
+                return undefined;
+            }
+            return uploaded.storageKey;
         },
-        [effectiveConfig, isAiConfigReady, message, openConfigDialog],
+        [effectiveConfig, guardProject, isAiConfigReady, message, openConfigDialog],
     );
 
     // 投影子节点"删除":删对应 cards[] 一张卡,经保存漏斗同步(会连带重建投影)。
@@ -3614,6 +3716,7 @@ function InfiniteCanvasPage() {
     // 投影子节点"重生成":复用单卡生成,写回该卡 storageKey,经保存漏斗同步。
     const handleAssetCardNodeRegenerate = useCallback(
         async (childNode: CanvasNodeData) => {
+            const capturedProjectId = projectIdRef.current;
             const ref = childNode.metadata?.cardProjection;
             if (!ref) return;
             const stage = nodesRef.current.find((node) => node.id === ref.stageNodeId);
@@ -3622,10 +3725,14 @@ function InfiniteCanvasPage() {
             if (!card) return;
             const newKey = await handleToonflowAssetCardGenerate(ref.stageNodeId, card, cards);
             if (!newKey) return;
+            if (!guardProject(capturedProjectId)) {
+                await deleteStoredImages([newKey]);
+                return;
+            }
             const nextCards = cards.map((item) => (item.cardId === ref.cardId ? { ...item, storageKey: newKey } : item));
             await handleToonflowAssetCardsSave(ref.stageNodeId, nextCards);
         },
-        [handleToonflowAssetCardGenerate, handleToonflowAssetCardsSave],
+        [guardProject, handleToonflowAssetCardGenerate, handleToonflowAssetCardsSave],
     );
 
     const handleToonflowRollback = useCallback(
@@ -3757,6 +3864,7 @@ function InfiniteCanvasPage() {
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData) => {
+            const capturedProjectId = projectIdRef.current;
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const batchRoot = node.metadata?.batchRootId ? nodesRef.current.find((item) => item.id === node.metadata?.batchRootId) : null;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? { ...batchRoot?.metadata, ...node.metadata } : undefined;
@@ -3778,6 +3886,7 @@ function InfiniteCanvasPage() {
             }
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+            if (!guardProject(capturedProjectId)) return;
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
             if (!prompt) {
                 message.warning("找不到提示词，无法重试");
@@ -3787,6 +3896,7 @@ function InfiniteCanvasPage() {
             const useReferenceImages = generationType ? generationType === "edit" : Boolean(context?.referenceImages.length);
             const retryReferenceImages =
                 hasSavedImageMetadata && savedImageMetadata ? await resolveMetadataReferences(savedImageMetadata) : useReferenceImages ? (context?.referenceImages.length ? context.referenceImages : sourceNodeReferenceImages(batchRoot || sourceNode)) : [];
+            if (!guardProject(capturedProjectId)) return;
             if (useReferenceImages && !retryReferenceImages) {
                 message.error("参考图片已丢失，无法继续重试");
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: "参考图片已丢失，无法继续重试" } } : item)));
@@ -3806,16 +3916,19 @@ function InfiniteCanvasPage() {
                         generationConfig,
                         buildNodeResponseMessages({ ...context, prompt }),
                         (text) => {
+                            if (!isProjectActive(capturedProjectId)) return;
                             streamed = text;
                             setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Text, metadata: { ...item.metadata, content: text, status: NODE_STATUS_LOADING } } : item)));
                         },
                         { signal: controller.signal },
                     );
+                    if (!guardProject(capturedProjectId)) return;
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Text, metadata: { ...item.metadata, content: answer || streamed, prompt, status: NODE_STATUS_SUCCESS } } : item)));
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
                     const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
+                    if (!guardProject(capturedProjectId)) return;
                     const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                     setNodes((prev) =>
                         prev.map((item) =>
@@ -3844,6 +3957,7 @@ function InfiniteCanvasPage() {
                 }
                 if (node.type === CanvasNodeType.Audio) {
                     const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, prompt, { signal: controller.signal }), generationConfig.audioFormat);
+                    if (!guardProject(capturedProjectId)) return;
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...audioMetadata(audio), prompt, ...buildAudioGenerationMetadata(generationConfig) } } : item)));
                     return;
                 }
@@ -3852,6 +3966,7 @@ function InfiniteCanvasPage() {
                     ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0])
                     : await requestGeneration(generationConfig, prompt, { signal: controller.signal }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl);
+                if (!guardProject(capturedProjectId)) return;
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
                 const generationMetadata = savedImageMetadata?.generationType
@@ -3871,6 +3986,7 @@ function InfiniteCanvasPage() {
                     ),
                 );
             } catch (error) {
+                if (!guardProject(capturedProjectId)) return;
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                 message.error(errorDetails);
@@ -3880,7 +3996,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, guardProject, isAiConfigReady, isProjectActive, message, openConfigDialog, startGenerationRequest],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -3922,8 +4038,10 @@ function InfiniteCanvasPage() {
 
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage) => {
+            const capturedProjectId = projectIdRef.current;
             const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
+            if (!guardProject(capturedProjectId)) return;
             const config = fitNodeSize(meta.width, meta.height);
             const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
             const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -3942,7 +4060,7 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             setDialogNodeId(id);
         },
-        [screenToCanvas, size.height, size.width],
+        [guardProject, screenToCanvas, size.height, size.width],
     );
 
     const insertAssistantText = useCallback(

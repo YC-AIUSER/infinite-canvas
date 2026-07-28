@@ -1,16 +1,16 @@
-import localforage from "localforage";
-
 import { getMediaBlob, resolveMediaUrl, setMediaBlob } from "@/services/file-storage";
 import { getImageBlob, resolveImageUrl, setImageBlob } from "@/services/image-storage";
+import { mergeWithTombstones, readSyncTombstones, writeSyncTombstones, type SyncTombstone, type SyncTombstoneDomain } from "@/services/sync-tombstones";
 import { downloadWebdavFile, uploadWebdavFile, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
+import { imageLogStore, readWorkbenchLogs, videoLogStore, type StoredWorkbenchLog, type WorkbenchLogStore } from "@/services/workbench-log-storage";
 import type { Asset } from "@/stores/use-asset-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { WebdavSyncConfig } from "@/stores/use-config-store";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 
-type StoredLog = Record<string, unknown> & { id?: string };
-export type AppSyncDomainKey = "canvas" | "assets" | "image-workbench" | "video-workbench";
+type StoredLog = StoredWorkbenchLog;
+export type AppSyncDomainKey = SyncTombstoneDomain;
 type DomainKey = AppSyncDomainKey;
 type CanvasDomainData = { projects: CanvasProject[] };
 type AssetDomainData = { assets: Asset[] };
@@ -30,6 +30,7 @@ type DomainManifest<T> = {
     exportedAt: string;
     data: T;
     files: AppSyncFile[];
+    deletions?: SyncTombstone[];
 };
 
 type SyncDomainOptions<T> = {
@@ -37,7 +38,7 @@ type SyncDomainOptions<T> = {
     label: string;
     localData: () => Promise<T>;
     emptyData: T;
-    mergeData: (local: T, remote: T) => T;
+    mergeData: (local: T, remote: T, localDeletions: SyncTombstone[], remoteDeletions?: SyncTombstone[]) => { data: T; deletions: SyncTombstone[] };
     applyData?: (data: T) => Promise<void>;
 };
 
@@ -75,9 +76,6 @@ export type AppSyncProgressEvent = {
 export type AppSyncProgress = (event: AppSyncProgressEvent) => void;
 
 const FILE_CONCURRENCY = 3;
-const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
-type LogStore = typeof imageLogStore;
 const storageKeyPattern = /^(image|video|audio|file|video-reference|audio-reference):/;
 
 export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?: AppSyncProgress): Promise<AppSyncResult> {
@@ -90,7 +88,10 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             label: "画布",
             emptyData: { projects: [] },
             localData: async () => ({ projects: useCanvasStore.getState().projects }),
-            mergeData: (local, remote) => ({ projects: mergeById(local.projects, remote.projects, "updatedAt") }),
+            mergeData: (local, remote, localDeletions, remoteDeletions) => {
+                const merged = mergeWithTombstones(local.projects, remote.projects, localDeletions, remoteDeletions, "updatedAt");
+                return { data: { projects: merged.items }, deletions: merged.deletions };
+            },
             applyData: async (data) => useCanvasStore.getState().replaceProjects(data.projects),
         }),
         syncDomain<AssetDomainData>(config, onProgress, {
@@ -98,23 +99,32 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             label: "我的素材",
             emptyData: { assets: [] },
             localData: async () => ({ assets: useAssetStore.getState().assets }),
-            mergeData: (local, remote) => ({ assets: mergeById(local.assets, remote.assets, "updatedAt") }),
+            mergeData: (local, remote, localDeletions, remoteDeletions) => {
+                const merged = mergeWithTombstones(local.assets, remote.assets, localDeletions, remoteDeletions, "updatedAt");
+                return { data: { assets: merged.items }, deletions: merged.deletions };
+            },
             applyData: async (data) => useAssetStore.getState().replaceAssets(await Promise.all(data.assets.map(hydrateAsset))),
         }),
         syncDomain<LogDomainData>(config, onProgress, {
             key: "image-workbench",
             label: "生图工作台",
             emptyData: { logs: [] },
-            localData: async () => ({ logs: await readStoredLogs(imageLogStore) }),
-            mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
+            localData: async () => ({ logs: await readWorkbenchLogs(imageLogStore) }),
+            mergeData: (local, remote, localDeletions, remoteDeletions) => {
+                const merged = mergeWithTombstones(local.logs, remote.logs, localDeletions, remoteDeletions, "createdAt");
+                return { data: { logs: merged.items }, deletions: merged.deletions };
+            },
             applyData: async (data) => replaceStoredLogs(imageLogStore, data.logs),
         }),
         syncDomain<LogDomainData>(config, onProgress, {
             key: "video-workbench",
             label: "视频创作台",
             emptyData: { logs: [] },
-            localData: async () => ({ logs: await readStoredLogs(videoLogStore) }),
-            mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
+            localData: async () => ({ logs: await readWorkbenchLogs(videoLogStore) }),
+            mergeData: (local, remote, localDeletions, remoteDeletions) => {
+                const merged = mergeWithTombstones(local.logs, remote.logs, localDeletions, remoteDeletions, "createdAt");
+                return { data: { logs: merged.items }, deletions: merged.deletions };
+            },
             applyData: async (data) => replaceStoredLogs(videoLogStore, data.logs),
         }),
     ]);
@@ -140,8 +150,9 @@ async function syncDomain<T>(config: WebdavSyncConfig, onProgress: AppSyncProgre
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: "读取远端清单", status: "active" });
         const remoteManifest = await readDomainManifest(config, options.key, options.emptyData);
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: "读取本地数据", status: "active" });
-        const localData = await options.localData();
-        const mergedData = remoteManifest ? options.mergeData(localData, remoteManifest.data) : localData;
+        const [localData, localDeletions] = await Promise.all([options.localData(), readSyncTombstones(options.key)]);
+        const merged = options.mergeData(localData, remoteManifest?.data || options.emptyData, localDeletions, remoteManifest?.deletions);
+        const mergedData = merged.data;
 
         if (remoteManifest) {
             emitProgress(onProgress, { domain: options.key, label: options.label, stage: "下载缺失媒体", status: "active" });
@@ -149,10 +160,11 @@ async function syncDomain<T>(config: WebdavSyncConfig, onProgress: AppSyncProgre
             emitProgress(onProgress, { domain: options.key, label: options.label, stage: "写入本地合并结果", status: "active" });
             await options.applyData?.(mergedData);
         }
+        await writeSyncTombstones(options.key, merged.deletions);
 
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: "上传新增媒体", status: "active" });
         const uploaded = await uploadChangedFiles(config, options.key, mergedData, remoteManifest?.files || [], onProgress);
-        const manifest: DomainManifest<T> = { app: "infinite-canvas", version: 1, domain: options.key, exportedAt: new Date().toISOString(), data: mergedData, files: uploaded.files };
+        const manifest: DomainManifest<T> = { app: "infinite-canvas", version: 1, domain: options.key, exportedAt: new Date().toISOString(), data: mergedData, files: uploaded.files, deletions: merged.deletions };
         const manifestFile = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" });
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: `上传清单 ${formatBytes(manifestFile.size)}`, status: "active" });
         await uploadWebdavFile(config, domainPath(options.key, WEBDAV_MANIFEST_FILE_NAME), manifestFile, "application/json");
@@ -184,6 +196,7 @@ async function readDomainManifest<T>(config: WebdavSyncConfig, domain: DomainKey
         exportedAt: data.exportedAt || new Date().toISOString(),
         data: data.data || emptyData,
         files: Array.isArray(data.files) ? data.files : [],
+        deletions: Array.isArray(data.deletions) ? data.deletions : [],
     };
 }
 
@@ -275,35 +288,12 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
     return asset;
 }
 
-async function readStoredLogs(store: LogStore) {
-    const logs: StoredLog[] = [];
-    await store.iterate<StoredLog, void>((value) => {
-        if (value && typeof value === "object") logs.push(value);
-    });
-    return logs;
-}
-
-async function replaceStoredLogs(store: LogStore, logs: StoredLog[]) {
+async function replaceStoredLogs(store: WorkbenchLogStore, logs: StoredLog[]) {
     await store.clear();
     await runWithConcurrency(logs, FILE_CONCURRENCY, async (log) => {
         const id = getStringField(log, "id");
         if (id) await store.setItem(id, log);
     });
-}
-
-function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
-    const items = new Map<string, T>();
-    remote.forEach((item) => {
-        const id = item.id || "";
-        if (id) items.set(id, item);
-    });
-    local.forEach((item) => {
-        const id = item.id || "";
-        if (!id) return;
-        const current = items.get(id);
-        if (!current || getTime(item as Record<string, unknown>, timeKey) >= getTime(current as Record<string, unknown>, timeKey)) items.set(id, item);
-    });
-    return Array.from(items.values()).sort((a, b) => getTime(b as Record<string, unknown>, timeKey) - getTime(a as Record<string, unknown>, timeKey));
 }
 
 function collectStorageKeys(value: unknown, keys = new Set<string>()) {
@@ -335,13 +325,6 @@ function emitProgress(onProgress: AppSyncProgress | undefined, event: AppSyncPro
 function getStringField(item: Record<string, unknown>, key: string) {
     const value = item[key];
     return typeof value === "string" ? value : "";
-}
-
-function getTime(item: Record<string, unknown>, key: string) {
-    const value = item[key];
-    if (typeof value === "number") return value;
-    if (typeof value === "string") return Date.parse(value) || 0;
-    return 0;
 }
 
 function safeFileName(value: string) {
