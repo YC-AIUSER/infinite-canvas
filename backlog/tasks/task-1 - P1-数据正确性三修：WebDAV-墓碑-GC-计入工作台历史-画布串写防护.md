@@ -4,7 +4,7 @@ title: P1 数据正确性三修：WebDAV 墓碑 / GC 计入工作台历史 / 画
 status: Done
 assignee: []
 created_date: '2026-07-28 06:05'
-updated_date: '2026-07-28 06:17'
+updated_date: '2026-07-28 06:22'
 labels: []
 dependencies: []
 ordinal: 1000
@@ -30,6 +30,8 @@ Codex 全面审计 P1 批次。三处修复：WebDAV 同步增加删除墓碑（
 追溯建档：本任务在 Backlog 规则生效前已派工（codex-task canvas-sync-gc-guards-p1）
 
 停止审查追加两修（提交见 git log）：运行标逐任务清理防串写；墓碑撤销 1000 条上限改纯龄期保留。typecheck+572 测试全绿。
+
+停止审查第二轮：运行标从按节点 ID 改为按任务实例令牌（begin/end 令牌对），同节点快速重试不再误清。
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
