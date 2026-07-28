@@ -21,6 +21,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       # pro-components beta 声明 antd ^5 peer，项目实际用 antd 6（本地即宽松安装），CI 同样放宽
       - run: npm ci --legacy-peer-deps
+      # npm cli#4828：legacy-peer-deps 下平台可选依赖可能被跳装，显式补 Linux 二进制（--no-save 不动 lock）
+      - run: npm i --no-save --legacy-peer-deps @rollup/rollup-linux-x64-gnu @esbuild/linux-x64
       - run: npm run typecheck
       - run: npm test
 
