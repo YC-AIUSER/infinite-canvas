@@ -70,6 +70,14 @@ describe("视觉闸门提问", () => {
         expect(content).toContainEqual({ type: "image_url", image_url: { url: "data:image/jpeg;base64,board" } });
     });
 
+    it("写死对比板格名豁免，避免闸门把自己画的标签当成画面混入文字", () => {
+        const [, user] = buildVisualGateMessages("data:image/jpeg;base64,board", questions);
+        const [text] = user.content as Array<{ text?: string }>;
+
+        expect(text.text).toContain("版面标识");
+        expect(text.text).toContain("不得因为它们判定命中");
+    });
+
     it("提问要求区分病因并在改分镜时给出具体改法", () => {
         const [, user] = buildVisualGateMessages("data:image/jpeg;base64,board", questions);
         const [text] = user.content as Array<{ text?: string }>;
