@@ -14,7 +14,7 @@
 import { requestImageQuestion, type AiTextMessage } from "@/services/api/image";
 import { modelMatchesCapability, type AiConfig } from "@/stores/use-config-store";
 
-import { queryFailureModes, type FailureModePromptKind, type FailureModeRecord } from "./failure-mode-registry";
+import { getFailureMode, queryFailureModes, type FailureModePromptKind, type FailureModeRecord } from "./failure-mode-registry";
 import type { AssetCard } from "./schema";
 
 export type VisualGateAnswer = "yes" | "no" | "unsure";
@@ -55,7 +55,14 @@ export type VisualGateRunResult = VisualGateEvaluation & {
     boardDataUrl: string;
 };
 
-type VisualGateRequestOptions = { signal?: AbortSignal };
+type VisualGateRequestOptions = {
+    signal?: AbortSignal;
+    /**
+     * 送审对比板里是否带了参考图，默认 true。runSingleCellVisualGate 会按实际参考图数量自动传，
+     * 调用方不需要自己记：依赖参考图的检查项在无参考时会被剔除，而不是问出一堆必然的 unsure。
+     */
+    hasReference?: boolean;
+};
 
 type BoardItem = Required<VisualGateImage>;
 
@@ -171,6 +178,15 @@ export function resolveVisualGateTextModel(config: AiConfig): string {
     return model;
 }
 
+/**
+ * 无参考图时剔除依赖参考图的检查项。挂在真实运行路径上，而不是只作为 buildVisualGateQuestions 的
+ * 参数——否则调用方少传一个 false，这条规则就等于不存在。未登记的问句 id（合成/测试用）一律保留。
+ */
+export function filterQuestionsByReference(questions: VisualGateQuestion[], hasReference: boolean): VisualGateQuestion[] {
+    if (hasReference) return questions;
+    return questions.filter((question) => !getFailureMode(question.id)?.gateRequiresReference);
+}
+
 export async function askSingleCellVisualGate(
     config: AiConfig,
     boardDataUrl: string,
@@ -178,21 +194,23 @@ export async function askSingleCellVisualGate(
     onDelta: (text: string) => void = () => undefined,
     options?: VisualGateRequestOptions,
 ): Promise<VisualGateEvaluation> {
+    const effective = filterQuestionsByReference(questions, options?.hasReference ?? true);
     try {
         const model = resolveVisualGateTextModel(config);
         const rawAnswer = await requestImageQuestion(
             { ...config, model },
-            buildVisualGateMessages(boardDataUrl, questions),
+            buildVisualGateMessages(boardDataUrl, effective),
             onDelta,
-            options,
+            // 只往下传 signal，hasReference 是闸门自己的参数，不该漏进请求层
+            options?.signal ? { signal: options.signal } : undefined,
         );
-        const questionResults = parseVisualGateAnswers(rawAnswer, questions);
+        const questionResults = parseVisualGateAnswers(rawAnswer, effective);
         return { rawAnswer, questionResults, disposition: resolveVisualGateDisposition(questionResults), error: "" };
     } catch (error) {
         // 请求失败不能把好格判死：落在通过侧，但把原因带回去，让人知道这一轮没真判。
         return {
             rawAnswer: "",
-            questionResults: parseVisualGateAnswers("", questions),
+            questionResults: parseVisualGateAnswers("", effective),
             disposition: "pass",
             error: error instanceof Error ? error.message : String(error),
         };
@@ -208,7 +226,9 @@ export async function runSingleCellVisualGate(
     options?: VisualGateRequestOptions,
 ): Promise<VisualGateRunResult> {
     const boardDataUrl = await composeVisualGateComparisonBoard(candidate, references);
-    return { boardDataUrl, ...(await askSingleCellVisualGate(config, boardDataUrl, questions, onDelta, options)) };
+    // 参考图有没有由这里的实参说话，不指望调用方自己传对
+    const runOptions: VisualGateRequestOptions = { ...options, hasReference: references.length > 0 };
+    return { boardDataUrl, ...(await askSingleCellVisualGate(config, boardDataUrl, questions, onDelta, runOptions)) };
 }
 
 export async function composeVisualGateComparisonBoard(candidate: VisualGateImage, references: VisualGateImage[]): Promise<string> {

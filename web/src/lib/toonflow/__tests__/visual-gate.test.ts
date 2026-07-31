@@ -174,6 +174,23 @@ describe("视觉闸门请求", () => {
         expect(result.error).toBe("");
     });
 
+    it("真实请求路径按参考图有无剔除检查项，不靠调用方自己传对", async () => {
+        vi.mocked(requestImageQuestion).mockResolvedValue(JSON.stringify({ answers: [] }));
+        const config = { ...defaultConfig, textModel: "default::gpt-5.5", textModels: ["default::gpt-5.5"] };
+        // 调用方偷懒：问句是按"有参考图"建的（含依赖参考图的刀型核查），但实际没给参考图
+        const lazyQuestions = buildVisualGateQuestions("keyframes");
+        expect(lazyQuestions.map((item) => item.id)).toContain("prop-shape-substitution");
+
+        const result = await askSingleCellVisualGate(config, "data:image/jpeg;base64,board", lazyQuestions, undefined, {
+            hasReference: false,
+        });
+
+        const sentText = String((vi.mocked(requestImageQuestion).mock.calls[0][1][1].content as Array<{ text?: string }>)[0].text);
+        expect(sentText).not.toContain("prop-shape-substitution");
+        expect(sentText).toContain("prompt-text-leakage");
+        expect(result.questionResults.map((item) => item.id)).not.toContain("prop-shape-substitution");
+    });
+
     it("请求失败时判通过但保留错误原因，不静默吞掉也不误杀", async () => {
         vi.mocked(requestImageQuestion).mockRejectedValue(new Error("网关 502"));
         const config = { ...defaultConfig, textModel: "default::gpt-5.5", textModels: ["default::gpt-5.5"] };
