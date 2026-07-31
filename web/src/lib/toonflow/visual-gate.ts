@@ -74,13 +74,17 @@ const BOARD_TILE_WIDTH = 720;
 const BOARD_IMAGE_HEIGHT = 440;
 const BOARD_LABEL_HEIGHT = 48;
 
-/** 判定问句由登记表驱动：只取 gateEnabled 条目，detectionRule 作为检查项原文 */
+/**
+ * 判定问句由登记表驱动：只取 gateEnabled 条目，detectionRule 作为检查项原文。
+ * hasReference 传 false 时会剔除必须看参考图的条目——所以调用方给不给参考图，直接决定问不问那几条。
+ */
 export function buildVisualGateQuestions(
     promptKind: FailureModePromptKind,
     assetCardType?: AssetCard["cardType"],
     registry?: readonly FailureModeRecord[],
+    hasReference = true,
 ): VisualGateQuestion[] {
-    return queryFailureModes({ promptKind, assetCardType, gateOnly: true }, registry).map((mode) => ({
+    return queryFailureModes({ promptKind, assetCardType, gateOnly: true, hasReference }, registry).map((mode) => ({
         id: mode.id,
         label: mode.title,
         question: mode.detectionRule,

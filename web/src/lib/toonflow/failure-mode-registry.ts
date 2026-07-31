@@ -14,11 +14,22 @@ export type FailureModeRecord = {
     detectionRule: string;
     repairTemplate: string;
     /**
-     * 是否允许出图后的视觉闸门自动判定这一条（TASK-18 消费）。
-     * 只对"单看候选图就能判"的条目开启；需要比对参考图或需要知道任务要求主体数才能判的条目一律关闭，
-     * 宁可漏判也不误杀——闸门的误杀会让人开始无视它，漏判只是回到现状。
+     * 是否允许出图后的视觉闸门自动判定这一条（visual-gate.ts 消费）。
+     *
+     * 判定标准是"闸门手上有没有判它所需的证据"，不是"能不能单看候选图判"——闸门送审的是一张
+     * 带参考图的对比板，所以"要比对参考图"根本不是关闭理由（早前按那条错标准写过一版，把最该查的
+     * 刀型被换给关掉了，2026-07-31 后台审查抓出）。
+     *
+     * 关闭的只有一类：判它需要闸门当前拿不到的任务侧上下文（版式与镜头数、任务要求的主体数量）。
+     * 这类条目开着等于每轮白问一遍，模型只会回 unsure，还让人误以为查过了——实测已验证。
+     * 等闸门把这些上下文一起送审时再逐条开启。
      */
     gateEnabled: boolean;
+    /**
+     * 判这条必须看到参考图。对比板里没有参考图时，闸门不会拿它提问（无参考却问"和参考图是否一致"
+     * 只能逼出 unsure 或凭空猜测）。
+     */
+    gateRequiresReference?: boolean;
 };
 
 export type FailureModeQuery = {
@@ -27,6 +38,11 @@ export type FailureModeQuery = {
     category?: FailureModeCategory;
     /** 只取已开启视觉闸门的条目 */
     gateOnly?: boolean;
+    /**
+     * 送审的对比板里是否带了参考图。仅在 gateOnly 时生效：为 false 时剔除 gateRequiresReference 条目，
+     * 免得在没有参考图的情况下问"和参考图是否一致"，只能逼出 unsure。
+     */
+    hasReference?: boolean;
 };
 
 export const FAILURE_MODE_REGISTRY: readonly FailureModeRecord[] = [
@@ -40,7 +56,8 @@ export const FAILURE_MODE_REGISTRY: readonly FailureModeRecord[] = [
         forbiddenSentence: "禁止把指定刀型改成另一种刀剑，禁止擅自增减部件、数量或改变持握方向。",
         detectionRule: "对照锚点与参考图检查关键道具的品类、主轮廓、部件数量和持握方向，任一不一致即命中。",
         repairTemplate: "只把{道具名称}修正为{正确形态与数量}，保持人物、姿态、构图、光线和其余元素不变。",
-        gateEnabled: false,
+        gateEnabled: true,
+        gateRequiresReference: true,
     },
     {
         id: "prompt-text-leakage",
@@ -62,7 +79,7 @@ export const FAILURE_MODE_REGISTRY: readonly FailureModeRecord[] = [
         forbiddenSentence: "禁止在留空格中补人物、场景、装饰、文字、色块或复制相邻画格。",
         detectionRule: "按镜头数与版式逐格核对，任何指定空位出现可见内容即命中。",
         repairTemplate: "清空第{空位编号}格的全部内容并恢复为纯空白，其他画格不变。",
-        gateEnabled: true,
+        gateEnabled: false,
     },
     {
         id: "panel-content-duplication",
@@ -86,6 +103,7 @@ export const FAILURE_MODE_REGISTRY: readonly FailureModeRecord[] = [
         detectionRule: "检查输出是否出现来自参考图的非主体版式元素；发现色卡、图表、边框或界面残留即命中。",
         repairTemplate: "删除来自参考图的{泄漏元素}，用当前画面的自然背景补齐，主体外观与构图不变。",
         gateEnabled: true,
+        gateRequiresReference: true,
     },
     {
         id: "subject-count-invention",
@@ -116,6 +134,7 @@ export function queryFailureModes(
     return registry.filter((mode) => {
         if (!mode.promptKinds.includes(query.promptKind)) return false;
         if (query.gateOnly && !mode.gateEnabled) return false;
+        if (query.gateOnly && mode.gateRequiresReference && query.hasReference === false) return false;
         if (query.category && mode.category !== query.category) return false;
         if (query.promptKind !== "asset-card" || !query.assetCardType || !mode.assetCardTypes) return true;
         return mode.assetCardTypes.includes(query.assetCardType);

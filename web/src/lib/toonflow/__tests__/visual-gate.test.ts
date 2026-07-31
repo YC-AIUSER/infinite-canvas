@@ -24,15 +24,29 @@ const questions: VisualGateQuestion[] = [
 const answersJson = (records: Array<Record<string, unknown>>) => JSON.stringify({ answers: records });
 
 describe("视觉闸门判定问句来源", () => {
-    it("只取登记表中已开闸门的条目，停用条目不进提问", () => {
+    it("只取登记表中已开闸门的条目，需要任务侧上下文的条目不进提问", () => {
         const built = buildVisualGateQuestions("storyboard-page");
         const ids = built.map((item) => item.id);
 
         expect(ids).toContain("prompt-text-leakage");
-        expect(ids).toContain("intentional-blank-cell-filled");
-        expect(ids).not.toContain("prop-shape-substitution");
+        expect(ids).toContain("panel-content-duplication");
+        // 这两条判起来需要闸门当前拿不到的任务侧上下文（版式与镜头数、任务要求主体数），开着只会逼出 unsure
+        expect(ids).not.toContain("intentional-blank-cell-filled");
         expect(ids).not.toContain("subject-count-invention");
         expect(built.every((item) => item.question.trim().length > 0)).toBe(true);
+    });
+
+    it("有参考图才问需要比对参考图的条目——刀型被换这类关键项不能因为无参考被静默丢掉", () => {
+        const withRef = buildVisualGateQuestions("keyframes").map((item) => item.id);
+        const withoutRef = buildVisualGateQuestions("keyframes", undefined, undefined, false).map((item) => item.id);
+
+        // 对比板带参考图时，最该查的道具形态替换必须在问句里（早前按"要比对参考图就关闭"的错标准把它漏掉了）
+        expect(withRef).toContain("prop-shape-substitution");
+        expect(withRef).toContain("reference-layout-leakage");
+        // 没有参考图时才剔除，避免问出必然的 unsure
+        expect(withoutRef).not.toContain("prop-shape-substitution");
+        expect(withoutRef).not.toContain("reference-layout-leakage");
+        expect(withoutRef).toContain("prompt-text-leakage");
     });
 
     it("问句随登记表数据变化，未硬编码进闸门", () => {

@@ -52,15 +52,25 @@ describe("失败模式登记表", () => {
         ]);
     });
 
-    it("闸门开关筛出可自动判定的条目，需比对参考图的条目一律不进闸门", () => {
+    it("闸门开关按'证据是否齐'筛条目：缺任务侧上下文的关闭，要比对参考图的照开", () => {
         const gateIds = queryFailureModes({ promptKind: "keyframes", gateOnly: true }).map((mode) => mode.id);
 
         expect(gateIds).toContain("prompt-text-leakage");
-        expect(gateIds).toContain("intentional-blank-cell-filled");
-        // 这两条必须留在闸门外：单看候选图判不了，开了会误杀好格
-        expect(gateIds).not.toContain("prop-shape-substitution");
+        expect(gateIds).toContain("panel-content-duplication");
+        // 对比板本来就带参考图，"要比对参考图"不是关闭理由——刀型被换是最该查的一条
+        expect(gateIds).toContain("prop-shape-substitution");
+        // 关闭的只有需要闸门拿不到的任务侧上下文这一类（版式与镜头数 / 任务要求主体数）
+        expect(gateIds).not.toContain("intentional-blank-cell-filled");
         expect(gateIds).not.toContain("subject-count-invention");
         expect(queryFailureModes({ promptKind: "keyframes" }).length).toBeGreaterThan(gateIds.length);
+    });
+
+    it("对比板没带参考图时才剔除依赖参考图的条目", () => {
+        const noRef = queryFailureModes({ promptKind: "keyframes", gateOnly: true, hasReference: false }).map((mode) => mode.id);
+
+        expect(noRef).not.toContain("prop-shape-substitution");
+        expect(noRef).not.toContain("reference-layout-leakage");
+        expect(noRef).toContain("prompt-text-leakage");
     });
 
     it("注入结果随登记表数据变化，条目未硬编码进拼装逻辑", () => {
