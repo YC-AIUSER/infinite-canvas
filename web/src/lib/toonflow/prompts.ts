@@ -8,6 +8,7 @@
 import forbiddenTerms from "./seedance-forbidden-terms.json";
 
 import { renderLibraries, type ClosedLibraryCategory } from "./closed-libraries";
+import { composeFailureModePrevention, type FailureModeQuery } from "./failure-mode-registry";
 import type { QualityCheckItem } from "./quality-check";
 import { TOONFLOW_NODE_KINDS } from "./schema";
 import type { ActionContract, AssetCard, DirectingLock, SeamContract, ShotContract, StoryboardRow } from "./schema";
@@ -409,6 +410,11 @@ function withPaletteAnchor(prompt: string) {
     return `${prompt}\n${PALETTE_ANCHOR_SENTENCE}`;
 }
 
+function withFailureModePrevention(prompt: string, query: FailureModeQuery) {
+    const prevention = composeFailureModePrevention(query);
+    return prevention ? `${prompt}\n\n${prevention}` : prompt;
+}
+
 // 资产锚点卡与派生资产，方法论源 manga-drama asset-card / ai-short-drama S4；色板卡源 plus 03-assets.md §六。
 export function buildAssetCardPrompt(
     card: { cardType: "character" | "scene" | "prop" | "action" | "expression" | "outfit" | "form" | "audio" | "palette" | "styleSwatch"; name: string; anchor: string },
@@ -416,59 +422,60 @@ export function buildAssetCardPrompt(
     keyState?: { name: string; description: string },
 ): string {
     const subject = card.name.trim() || "未命名主体";
+    const finalize = (prompt: string) => withFailureModePrevention(prompt, { promptKind: "asset-card", assetCardType: card.cardType });
     // 色板卡是全片色彩锚点（ST## 风格锚定图），P2 资产阶段开头先出、经用户确认才 approved，
     // 之后所有角色板/场景板/故事板都拿它当 img2img 调色参考。
     if (card.cardType === "palette") {
-        return `生成一张全片色板图：film color palette, 13 color swatches, warm-cool dual tone system。13 个色块按冷暖双调分区排列——暖调一组、冷调一组，分区边界清晰；每个色块内或紧邻处标注该色的 HEX 色号与一句中文色彩描述。整体调性必须逐字遵守：${card.anchor}\n色块为纯色平涂，无渐变、无材质、无光影、无投影。画面里只有色块与其 HEX 与中文标注，不画任何人物、场景、道具、示意图形、装饰边框、水印或 logo。单图输出。`;
+        return finalize(`生成一张全片色板图：film color palette, 13 color swatches, warm-cool dual tone system。13 个色块按冷暖双调分区排列——暖调一组、冷调一组，分区边界清晰；每个色块内或紧邻处标注该色的 HEX 色号与一句中文色彩描述。整体调性必须逐字遵守：${card.anchor}\n色块为纯色平涂，无渐变、无材质、无光影、无投影。画面里只有色块与其 HEX 与中文标注，不画任何人物、场景、道具、示意图形、装饰边框、水印或 logo。单图输出。`);
     }
     if (card.cardType === "styleSwatch") {
         const materials = card.anchor.trim()
             ? `六格取材全部替换为以下具体材质描述，并按描述拆分填满六格：${card.anchor}`
             : "六格依次取材：第一格为主服装织物，清楚表现织纹与斜纹走向、浮毛、缝线针脚、边缘发白、附着沙尘；第二格为织带与金属扣具接合处，经纬清晰、边缘起球、金属带细密刮痕与轻微氧化；第三格为旧皮革，表现粒面纹理、折痕、边角磨出浅色底层、细微油光；第四格为橡胶鞋底齿纹，齿缝嵌泥沙、哑光并带细小划伤；第五格为干燥土石，颗粒疏松堆叠、带细小裂纹与浮尘；第六格为粗织帆布褶皱，布纹粗粝、带陈旧污渍与磨损起毛，并且不透光";
-        return `生成一张 16:9 横版的 2×3 六格质感样板，六格全部是在漫射光下拍摄的材质微距，每格只由该材质本身填满，不带环境，不带空间纵深。${materials}。不得出现人物、人脸、人手、人体、剪影人形、动物、武器、贵金属、宝石、二维码、文字、数字、标签、水印；也不得出现天空、地平线、远景、光束、太阳或任何环境空镜。全部六格统一使用中性柔和漫射光，无强方向性、无逆光、无明显投影、无光晕、无体积光；明暗只用来交代材质起伏，不表达任何光位。`;
+        return finalize(`生成一张 16:9 横版的 2×3 六格质感样板，六格全部是在漫射光下拍摄的材质微距，每格只由该材质本身填满，不带环境，不带空间纵深。${materials}。不得出现人物、人脸、人手、人体、剪影人形、动物、武器、贵金属、宝石、二维码、文字、数字、标签、水印；也不得出现天空、地平线、远景、光束、太阳或任何环境空镜。全部六格统一使用中性柔和漫射光，无强方向性、无逆光、无明显投影、无光晕、无体积光；明暗只用来交代材质起伏，不表达任何光位。`);
     }
     if (card.cardType === "character") {
         const keyStateName = keyState?.name.trim() || "代表性动态姿态";
         const keyStateDescription = keyState?.description.trim() || "角色的代表性动态姿态，动作清晰，体现人物性格与识别特征";
         // cano 全能参考模式允许并需要中文标注，帮助模型识别每格用途；文字禁令只适用于会逐像素复刻的 libtv 真首帧。
-        return withPaletteAnchor(
+        return finalize(withPaletteAnchor(
             `生成一张 16:9 横版人物设定页，白色纸面版式、细线分格，所有格子都是“${subject}”这同一个人物。外貌与服装锚点必须逐字遵守：${card.anchor}\n顶部标题栏：居中显示中文标题“人物设定——${subject}”。\n上区占画面高度约 60%，横向四格：第一格标注“正面”，正面全身自然站姿；第二格标注“侧面”，正侧面全身，展示身体与装备侧面轮廓；第三格标注“背面”，背面全身，展示服装与装备背部结构；第四格标注“面部特写”，头肩入画的大图，角色的识别特征需在此格可见。\n下区占约 40%，横向两块：左块为关键状态，左上角标注“${keyStateName}”，内容为${keyStateDescription}，按成片质感渲染，带环境光影与虚化背景；右块标注“装备细节”，横向排开 4-6 个服装或装备局部特写，每格下方带一行准确的中文说明。\n页面底部一行中文总述，概括角色身份、肤色、识别特征与主装备。除关键状态格外，其余各格统一中性白底与柔和三点光，光位、色温、曝光一致，无地面投影。全页人物身份与装备位置、款式逐格一致，不得增删。有参考图时风格跟随参考图。中文标题、格名、装备说明与底部总述必须清晰可读，禁止乱码；画面禁止 logo 或水印。单图输出。`,
-        );
+        ));
     }
     if (card.cardType === "prop") {
-        return `生成一张道具锚点卡，只画“${subject}”这一个主体。白底单道具居中，无手持、无人物，形态与细节清晰，构图简洁。外形锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`;
+        return finalize(`生成一张道具锚点卡，只画“${subject}”这一个主体。白底单道具居中，无手持、无人物，形态与细节清晰，构图简洁。外形锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`);
     }
     // 动作/表情/服装/形态四类衍生卡都是角色板的变体，同样吃 §6.3 的色板锚定。
     if (card.cardType === "action") {
-        return withPaletteAnchor(
+        return finalize(withPaletteAnchor(
             parent
                 ? `以参考图中的角色为唯一主体，让“${parent.name}”执行该动作：${card.anchor}。全身入画、动作姿态清晰、干净纯色浅底；外貌与服装必须与参考图和以下锚点完全一致，逐字遵守：${parent.anchor}；只改动作，不改外观，禁止改变发型、服装、体型；画面禁止任何文字、logo或水印；单图输出。`
                 : `生成一张衍生动作锚点卡，只画“${subject}”这一个主体。动作描述：${card.anchor}。全身入画、动作姿态清晰、干净纯色浅底；外观与参考图一致，只改动作，不改外观，禁止改变发型、服装、体型；画面禁止任何文字、logo或水印；单图输出。`,
-        );
+        ));
     }
     if (card.cardType === "expression") {
-        return withPaletteAnchor(
+        return finalize(withPaletteAnchor(
             parent
                 ? `以参考图中的角色为唯一主体，“${parent.name}”的表情特写（胸像以上）：${card.anchor}。外貌锚点逐字遵守：${parent.anchor}；只改表情不改外观；干净浅底；画面禁止任何文字或水印；单图输出。`
                 : `生成一张衍生表情锚点卡，只画“${subject}”这一个主体。表情特写（胸像以上）：${card.anchor}。外观与参考图一致，只改表情不改外观；干净浅底；画面禁止任何文字或水印；单图输出。`,
-        );
+        ));
     }
     if (card.cardType === "outfit") {
-        return withPaletteAnchor(
+        return finalize(withPaletteAnchor(
             parent
                 ? `以参考图中的角色为唯一主体，为"${parent.name}"更换服装：${card.anchor}。全身入画、服装细节清晰、干净纯色浅底；脸型、发型、体型必须与参考图和以下锚点完全一致，逐字遵守：${parent.anchor}；只换服装，不改容貌；画面禁止任何文字、logo或水印；单图输出。`
                 : `生成一张衍生服装锚点卡，只画"${subject}"这一个主体。服装描述：${card.anchor}。全身入画、服装细节清晰、干净纯色浅底；外观与参考图一致，只换服装，不改容貌，禁止改变脸型、发型、体型；画面禁止任何文字、logo或水印；单图输出。`,
-        );
+        ));
     }
     // 形态卡刻意不继承角色外观锚点——变身形态有独立参考或不露脸，注入原形态特征会造成反向漂移（创始人裁决 2026-07-12）。
     if (card.cardType === "form") {
-        return withPaletteAnchor(
+        return finalize(withPaletteAnchor(
             `生成一张形态锚点卡，只画"${subject}"这一个主体。形态描述：${card.anchor}。构图完整、主体清晰、干净纯色浅底；有参考图时以参考图为唯一形象基准；画面禁止任何文字、logo或水印；单图输出。`,
-        );
+        ));
     }
-    return withPaletteAnchor(
+    return finalize(withPaletteAnchor(
         `生成一张场景锚点图，只画“${subject}”这一个场景。空场景、无人物，固定机位单视角，光线与地标清晰，构图简洁。场景锚点必须逐字遵守：${card.anchor}\n有参考图时风格跟随参考图。画面禁止任何文字、logo或水印。单图输出。`,
-    );
+    ));
 }
 
 // 画格排列（06-video-prompt.md §1.4）：3-5 镜 → 3+2、6 镜 → 3+3、7-8 镜 → 4+4。
@@ -533,7 +540,7 @@ export function buildStoryboardPagePrompt(input: {
     ].filter(Boolean);
     const seamSection = seamLines.length ? `\n\n【缝合同（画进首末格，不是等剪辑去救）】\n${seamLines.join("\n")}` : "";
 
-    return `生成该段 Module3 blockout 粗模故事板。它是三维预演稿、未贴图灰模，不是灰色的成片图，不追求成片质感，也不是草图线稿。
+    return withFailureModePrevention(`生成该段 Module3 blockout 粗模故事板。它是三维预演稿、未贴图灰模，不是灰色的成片图，不追求成片质感，也不是草图线稿。
 全部人物、道具与场景使用同一种哑光中性灰材质，保持均匀反照率；只使用柔和环境光遮蔽、单一主光和轻微补光来读清体块，不出现任何局部颜色或材质纹理。
 blockout 只负责五件事：镜头机位、景别、人物在画面中的站位与体块关系、姿态动作、前中后景的纵深遮挡。除此之外一律不画。
 画布 16:9 横版，画格排列 ${storyboardPanelLayout(rows.length)}。共 ${rows.length} 格，一格 = 一镜 = 一个时点 = 一个景别，按 shotNo 顺序排布；不合并格子、不拆格、不新增镜头、不编造机位。
@@ -568,7 +575,7 @@ ${spaceRules || "同一角色在所有格中保持同一屏幕侧，摄影机不
 本段第 1 格禁止画成外景大远景建立镜头，也禁止场景空镜与角色静态入画。
 基准风格只能是 blockout 三维未贴图灰模，禁止成片摄影、漫画、卡通、动画、插画风、手绘风、水墨、Q版——出现即判风格漂移。
 
-调度信息只是内部构思，不许出现在画面上：因果锚点、主视觉任务标签、空间锚点编号、道具状态链一律不画、不写。画面禁止任何文字、台词、字幕、格号、标签、水印和 logo。同一角色跨格保持体块特征、姿态方向与屏幕侧一致。`;
+调度信息只是内部构思，不许出现在画面上：因果锚点、主视觉任务标签、空间锚点编号、道具状态链一律不画、不写。画面禁止任何文字、台词、字幕、格号、标签、水印和 logo。同一角色跨格保持体块特征、姿态方向与屏幕侧一致。`, { promptKind: "storyboard-page" });
 }
 
 /**
@@ -584,14 +591,14 @@ export function buildKeyframesPrompt(input: { rows: StoryboardRow[]; anchors: st
         ? `\n\n【定点修指令】\n只改以下这一处：${input.note}\n除这一处外，其余内容必须与参考图完全一致。`
         : "";
 
-    return `以输入的该段故事板页线稿为唯一构图锁，只上色不改构图。共 ${rows.length} 格，保持原格数与以下顺序：${shotOrder}。
+    return withFailureModePrevention(`以输入的该段故事板页线稿为唯一构图锁，只上色不改构图。共 ${rows.length} 格，保持原格数与以下顺序：${shotOrder}。
 
 禁止改变机位、景别、裁切和主体位置；禁止增删、合并或重排格子；禁止新增、删除或移动人物、道具与背景元素。
 
 【资产上色锚点（逐字遵守）】
 ${anchors}
 
-角色外观与配色、场景光线、道具形态必须按锚点上色。画面禁止台词文字、字幕、水印和 logo。${correction}`;
+角色外观与配色、场景光线、道具形态必须按锚点上色。画面禁止台词文字、字幕、水印和 logo。${correction}`, { promptKind: "keyframes" });
 }
 
 export const VIDEO_APPEARANCE_BINDING_SENTENCE =
